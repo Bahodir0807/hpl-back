@@ -1,0 +1,30 @@
+import { Brand, ProductCollection, Supplier } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateBrandDto } from './dto/create-brand.dto';
+import { CreateProductCollectionDto } from './dto/create-product-collection.dto';
+import { CreateSupplierDto } from './dto/create-supplier.dto';
+import { UpdateBrandDto } from './dto/update-brand.dto';
+import { UpdateProductCollectionDto } from './dto/update-product-collection.dto';
+import { UpdateSupplierDto } from './dto/update-supplier.dto';
+export declare class ReferencesService {
+    private readonly prisma;
+    constructor(prisma: PrismaService);
+    createSupplier(dto: CreateSupplierDto): Promise<Supplier>;
+    findSuppliers(): Promise<Supplier[]>;
+    findSupplier(id: string): Promise<Supplier>;
+    updateSupplier(id: string, dto: UpdateSupplierDto): Promise<Supplier>;
+    deleteSupplier(id: string): Promise<Supplier>;
+    createBrand(dto: CreateBrandDto): Promise<Brand>;
+    findBrands(): Promise<Brand[]>;
+    findBrand(id: string): Promise<Brand>;
+    updateBrand(id: string, dto: UpdateBrandDto): Promise<Brand>;
+    deleteBrand(id: string): Promise<Brand>;
+    createProductCollection(dto: CreateProductCollectionDto): Promise<ProductCollection>;
+    findProductCollections(brandId?: string): Promise<ProductCollection[]>;
+    findProductCollection(id: string): Promise<ProductCollection>;
+    updateProductCollection(id: string, dto: UpdateProductCollectionDto): Promise<ProductCollection>;
+    deleteProductCollection(id: string): Promise<ProductCollection>;
+    private ensureSupplierCodeIsUnique;
+    private ensureBrandCodeIsUnique;
+    private ensureCollectionNameIsUnique;
+}
