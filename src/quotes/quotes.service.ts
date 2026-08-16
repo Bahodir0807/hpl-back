@@ -1,6 +1,7 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   ActivityType,
+  LeadStatus,
   Prisma,
   TaskPriority,
   TaskType,
@@ -356,6 +357,14 @@ export class QuotesService {
       );
     }
 
+    if (lead.status !== LeadStatus.QUALIFIED) {
+      throw new BusinessException(
+        HttpStatus.BAD_REQUEST,
+        'LEAD_NOT_QUALIFIED',
+        'Сделку можно создать только из лида со статусом QUALIFIED',
+      );
+    }
+
     const serviceProduct = await this.prisma.product.findUnique({
       where: { sku: CALCULATOR_PRODUCT_SKU },
       select: { id: true },
@@ -408,8 +417,12 @@ export class QuotesService {
           id: quote.leadId,
           deletedAt: null,
           dealId: null,
+          status: LeadStatus.QUALIFIED,
         },
-        data: { dealId: deal.id },
+        data: {
+          dealId: deal.id,
+          status: LeadStatus.CONVERTED,
+        },
       });
 
       if (claimedLead.count !== 1) {

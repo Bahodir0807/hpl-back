@@ -7,7 +7,6 @@ import {
 } from '@nestjs/common';
 import {
   ActivityType,
-  DealStage,
   Lead,
   LeadStatus,
   Prisma,
@@ -26,10 +25,28 @@ import { LeadQualificationService } from './lead-qualification.service';
 
 const FIRST_CONTACT_SLA_MS = 2 * 60 * 60 * 1000;
 const READ_ALL_LEADS_PERMISSION = 'leads:read_all';
+const STAGE2_HANDOFF_TASK_PREFIX = 'Stage 2 commercial qualification:';
+const QUALIFIABLE_LEAD_STATUSES: LeadStatus[] = [
+  LeadStatus.NEW,
+  LeadStatus.IN_PROGRESS,
+];
+
+class LeadQualifyClaimLostError extends Error {
+  constructor() {
+    super('Lead Stage-1 qualification claim lost');
+    this.name = 'LeadQualifyClaimLostError';
+  }
+}
 
 const leadRelationsInclude = Prisma.validator<Prisma.LeadInclude>()({
   owner: {
-    select: { id: true, firstName: true, lastName: true, email: true },
+    select: {
+      id: true,
+      firstName: true,
+      lastName: true,
+      email: true,
+      managerId: true,
+    },
   },
   client: { select: { id: true, name: true } },
   projectObject: { select: { id: true, name: true } },
@@ -301,8 +318,19 @@ export class LeadsService {
     const lead = await this.ensureLeadExists(id);
     this.assertLeadAccess(lead, currentUserId, permissions);
 
+    if (lead.status === LeadStatus.UNQUALIFIED) {
+      throw new ConflictException('Unqualified lead cannot be qualified');
+    }
+
     if (lead.status === LeadStatus.CONVERTED || lead.dealId !== null) {
       throw new ConflictException('Lead already converted to deal');
+    }
+
+    if (lead.status === LeadStatus.QUALIFIED) {
+      return this.prisma.lead.findUniqueOrThrow({
+        where: { id },
+        include: leadRelationsInclude,
+      });
     }
 
     const qualificationData: QualificationData = {
@@ -318,85 +346,142 @@ export class LeadsService {
 
     const dueDate = new Date(Date.now() + FIRST_CONTACT_SLA_MS);
 
-    return this.prisma.$transaction(async (tx) => {
-      if (dto.qualification) {
-        await this.leadQualificationService.upsertInTx(
-          tx,
-          id,
-          dto.qualification,
-          currentUserId,
-          'lead_qualification_completed',
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        if (dto.qualification) {
+          await this.leadQualificationService.upsertInTx(
+            tx,
+            id,
+            dto.qualification,
+            currentUserId,
+            'lead_qualification_completed',
+          );
+        }
+
+        const stage1 = await tx.leadQualification.findUnique({
+          where: { leadId: id },
+        });
+        this.leadQualificationService.assertStage1Complete(stage1);
+
+        const owner = await tx.user.findUnique({
+          where: { id: lead.ownerId },
+          select: {
+            manager: { select: { id: true, isActive: true } },
+          },
+        });
+        const stage2AssigneeId = this.resolveStage2SupervisorId(
+          lead.ownerId,
+          owner?.manager,
         );
+
+        // Atomic Stage-1 claim: only NEW / IN_PROGRESS can become QUALIFIED.
+        // Parallel qualify cannot create a Deal; the loser observes QUALIFIED
+        // after this transaction rolls back.
+        const claimed = await tx.lead.updateMany({
+          where: {
+            id,
+            deletedAt: null,
+            dealId: null,
+            status: { in: QUALIFIABLE_LEAD_STATUSES },
+          },
+          data: {
+            clientId: dto.clientId,
+            projectObjectId: dto.projectObjectId,
+            needDescription: dto.needDescription,
+            estimatedAmount: dto.estimatedAmount,
+            targetDate: dto.targetDate,
+            decisionMakerContact: dto.decisionMakerContact,
+            status: LeadStatus.QUALIFIED,
+          },
+        });
+
+        if (claimed.count === 0) {
+          throw new LeadQualifyClaimLostError();
+        }
+
+        await tx.activity.create({
+          data: {
+            type: ActivityType.STATUS_CHANGED,
+            relatedType: 'Lead',
+            relatedId: id,
+            authorId: currentUserId,
+            content: 'Lead qualified (Stage 1 customer need collected)',
+            metadata: {
+              action: 'lead_qualified_stage1',
+            },
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId: currentUserId,
+            action: 'LEAD_QUALIFIED_STAGE1',
+            entityType: 'Lead',
+            entityId: id,
+            oldValue: { status: lead.status },
+            newValue: { status: LeadStatus.QUALIFIED },
+          },
+        });
+
+        await tx.notification.create({
+          data: {
+            userId: lead.ownerId,
+            title: 'Stage 1 qualification complete',
+            message: `Lead "${lead.title}" completed Stage-1 qualification`,
+            type: 'lead_qualified_stage1',
+            relatedType: 'Lead',
+            relatedId: id,
+          },
+        });
+
+        if (stage2AssigneeId) {
+          const handoffTask = await tx.task.create({
+            data: {
+              title: `${STAGE2_HANDOFF_TASK_PREFIX} ${lead.title}`,
+              description:
+                'Lead Stage-1 qualification is complete. Senior Manager commercial qualification is required next.',
+              type: TaskType.OTHER,
+              priority: TaskPriority.HIGH,
+              dueDate,
+              originalDueDate: dueDate,
+              assigneeId: stage2AssigneeId,
+              createdById: currentUserId,
+              relatedType: 'Lead',
+              relatedId: id,
+            },
+          });
+
+          await tx.notification.create({
+            data: {
+              userId: stage2AssigneeId,
+              taskId: handoffTask.id,
+              title: 'Stage 2 commercial qualification required',
+              message: `Lead "${lead.title}" requires Stage-2 commercial qualification`,
+              type: 'lead_qualified_stage1',
+              relatedType: 'Lead',
+              relatedId: id,
+            },
+          });
+        }
+
+        const qualifiedLead = await tx.lead.findUnique({
+          where: { id },
+          include: leadRelationsInclude,
+        });
+
+        if (!qualifiedLead) {
+          throw new NotFoundException('Lead not found');
+        }
+
+        return qualifiedLead;
+      });
+    } catch (error) {
+      if (this.isQualifyClaimLost(error)) {
+        return this.resolveLostQualifyClaim(id);
       }
 
-      const stage1 = await tx.leadQualification.findUnique({
-        where: { leadId: id },
-      });
-      this.leadQualificationService.assertStage1Complete(stage1);
-
-      const deal = await tx.deal.create({
-        data: {
-          title: lead.title,
-          clientId: dto.clientId,
-          projectObjectId: dto.projectObjectId,
-          ownerId: lead.ownerId,
-          stage: DealStage.QUALIFICATION,
-          totalAmount: dto.estimatedAmount,
-          expectedCloseDate: dto.targetDate,
-          nextActionAt: dueDate,
-        },
-      });
-
-      await tx.task.create({
-        data: {
-          title: `First deal action: ${deal.title}`,
-          type: TaskType.FIRST_CONTACT,
-          priority: TaskPriority.HIGH,
-          dueDate,
-          originalDueDate: dueDate,
-          assigneeId: lead.ownerId,
-          createdById: currentUserId,
-          relatedType: 'Deal',
-          relatedId: deal.id,
-        },
-      });
-
-      // Атомарный захват лида: параллельный qualify не создаст вторую
-      // сделку-сироту — проигравшая транзакция получит count = 0 и откатится
-      const claimed = await tx.lead.updateMany({
-        where: {
-          id,
-          deletedAt: null,
-          dealId: null,
-          status: { not: LeadStatus.CONVERTED },
-        },
-        data: {
-          clientId: dto.clientId,
-          projectObjectId: dto.projectObjectId,
-          needDescription: dto.needDescription,
-          estimatedAmount: dto.estimatedAmount,
-          targetDate: dto.targetDate,
-          decisionMakerContact: dto.decisionMakerContact,
-          status: LeadStatus.CONVERTED,
-          dealId: deal.id,
-        },
-      });
-
-      if (claimed.count === 0) {
-        throw new ConflictException('Lead already converted to deal');
-      }
-
-      const convertedLead = await tx.lead.findUnique({
-        where: { id },
-        include: leadRelationsInclude,
-      });
-
-      if (!convertedLead) {
-        throw new NotFoundException('Lead not found');
-      }
-
-      return convertedLead;
-    });
+      throw error;
+    }
   }
 
   async disqualify(
@@ -556,6 +641,51 @@ export class LeadsService {
     }
 
     return requestedOwnerId;
+  }
+
+  private resolveStage2SupervisorId(
+    ownerId: string,
+    manager: { id: string; isActive: boolean } | null | undefined,
+  ): string | null {
+    if (!manager?.id || !manager.isActive || manager.id === ownerId) {
+      return null;
+    }
+
+    return manager.id;
+  }
+
+  private async resolveLostQualifyClaim(
+    id: string,
+  ): Promise<LeadWithRelations> {
+    const currentLead = await this.prisma.lead.findUnique({
+      where: { id },
+      include: leadRelationsInclude,
+    });
+
+    if (
+      currentLead?.status === LeadStatus.QUALIFIED &&
+      currentLead.dealId === null
+    ) {
+      return currentLead;
+    }
+
+    if (currentLead?.status === LeadStatus.CONVERTED || currentLead?.dealId) {
+      throw new ConflictException('Lead already converted to deal');
+    }
+
+    if (currentLead?.status === LeadStatus.UNQUALIFIED) {
+      throw new ConflictException('Unqualified lead cannot be qualified');
+    }
+
+    throw new ConflictException('Lead could not be qualified');
+  }
+
+  private isQualifyClaimLost(error: unknown): boolean {
+    if (error instanceof LeadQualifyClaimLostError) {
+      return true;
+    }
+
+    return error instanceof Error && error.name === 'LeadQualifyClaimLostError';
   }
 
   private assertLeadAccess(

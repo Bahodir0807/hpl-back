@@ -37,6 +37,10 @@ export class LeadVirtualStatusService {
       return 'unqualified';
     }
 
+    if (lead.status === LeadStatus.QUALIFIED) {
+      return 'qualified';
+    }
+
     const activities = await this.prisma.activity.findMany({
       where: { relatedType: 'Lead', relatedId: leadId },
       orderBy: { createdAt: 'desc' },

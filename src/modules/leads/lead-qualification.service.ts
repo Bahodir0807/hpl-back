@@ -90,23 +90,11 @@ export class LeadQualificationService {
     const writeData = mapQualificationWriteData(dto);
     await this.assertCatalogReferences(tx, writeData);
 
-    const existing = await tx.leadQualification.findUnique({
-      where: { leadId },
-    });
-
-    const qualification = existing
-      ? await tx.leadQualification.update({
-          where: { leadId },
-          data: writeData,
-          include: qualificationInclude,
-        })
-      : await tx.leadQualification.create({
-          data: {
-            leadId,
-            ...writeData,
-          },
-          include: qualificationInclude,
-        });
+    const qualification = await this.upsertQualificationRow(
+      tx,
+      leadId,
+      writeData,
+    );
 
     await tx.activity.create({
       data: {
@@ -127,6 +115,37 @@ export class LeadQualificationService {
     });
 
     return serializeLeadQualification(qualification);
+  }
+
+  private async upsertQualificationRow(
+    tx: PrismaTx,
+    leadId: string,
+    writeData: ReturnType<typeof mapQualificationWriteData>,
+  ) {
+    try {
+      return await tx.leadQualification.upsert({
+        where: { leadId },
+        create: {
+          leadId,
+          ...writeData,
+        },
+        update: writeData,
+        include: qualificationInclude,
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        return tx.leadQualification.update({
+          where: { leadId },
+          data: writeData,
+          include: qualificationInclude,
+        });
+      }
+
+      throw error;
+    }
   }
 
   assertStage1Complete(

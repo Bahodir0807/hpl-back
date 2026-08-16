@@ -120,10 +120,20 @@ export class LeadsController {
 
   @Post(':id/qualify')
   @RequirePermissions('leads:qualify')
-  @ApiOperation({ summary: 'Qualify and convert lead to deal' })
-  @ApiResponse({ status: 201, description: 'Lead converted to deal' })
+  @ApiOperation({
+    summary:
+      'Complete Stage-1 qualification: Lead becomes QUALIFIED, no Deal is created',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Lead status is QUALIFIED; dealId remains null',
+  })
   @ApiResponse({ status: 400, description: 'Qualification fields missing' })
   @ApiResponse({ status: 404, description: 'Lead not found' })
+  @ApiResponse({
+    status: 409,
+    description: 'Lead is unqualified or already converted',
+  })
   qualify(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: QualifyLeadDto,

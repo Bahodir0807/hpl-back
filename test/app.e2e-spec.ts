@@ -252,7 +252,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(task.dueDate.getTime()).toBeLessThanOrEqual(expectedMax);
   });
 
-  it('AT-03 enforces lead qualification fields and converts lead to qualification deal', async () => {
+  it('AT-03 enforces Stage-1 qualification and does not create a Deal', async () => {
     const createResponse = await request(server)
       .post('/leads')
       .set(authHeader(context.managerToken))
@@ -305,12 +305,39 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(201);
     const qualifiedLead = bodyAs<LeadResponse>(qualifyResponse);
 
-    expect(qualifiedLead.dealId).toBeDefined();
+    expect(qualifiedLead.status).toBe('QUALIFIED');
+    expect(qualifiedLead.dealId).toBeNull();
 
-    const deal = await prisma.deal.findUniqueOrThrow({
-      where: { id: qualifiedLead.dealId },
+    const persisted = await prisma.lead.findUniqueOrThrow({
+      where: { id: lead.id },
     });
-    expect(deal.stage).toBe(DealStage.QUALIFICATION);
+    expect(persisted.status).toBe('QUALIFIED');
+    expect(persisted.dealId).toBeNull();
+
+    const deals = await prisma.deal.findMany({
+      where: { title: `Qualification lead ${RUN_ID}` },
+    });
+    expect(deals).toHaveLength(0);
+
+    const listed = await request(server)
+      .get('/leads')
+      .query({ status: 'QUALIFIED', search: `Qualification lead ${RUN_ID}` })
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    expect(
+      bodyAs<{ items: LeadResponse[] }>(listed).items.some(
+        (item) => item.id === lead.id,
+      ),
+    ).toBe(true);
+
+    const workspace = await request(server)
+      .get(`/leads/${lead.id}/workspace`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    expect(
+      bodyAs<{ lead: { status: string; dealId: string | null } }>(workspace)
+        .lead.status,
+    ).toBe('QUALIFIED');
   });
 
   it('BP1 allows a new lead without installationRequired', async () => {
@@ -455,6 +482,12 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       where: { leadId: noInstallId },
     });
     expect(noInstall.installationRequired).toBe(false);
+
+    const noInstallLeadRow = await prisma.lead.findUniqueOrThrow({
+      where: { id: noInstallId },
+    });
+    expect(noInstallLeadRow.status).toBe('QUALIFIED');
+    expect(noInstallLeadRow.dealId).toBeNull();
   });
 
   it('BP1 denies foreign manager qualification access and blocks commercial fields', async () => {
@@ -558,6 +591,246 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(qualification?.installationRequired).toBeNull();
     expect(qualification?.stockOnly).toBeNull();
     expect(qualification?.urgent).toBeNull();
+  });
+
+  it('BP2 allows Stage-1 qualify when installation is required and without commercial fields', async () => {
+    const created = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Install yes ${RUN_ID}`,
+        source: 'email',
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(created).id;
+
+    const qualifyResponse = await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send({
+        clientId: context.clientId,
+        projectObjectId: context.projectObjectId,
+        needDescription: 'Facade HPL with installation',
+        estimatedAmount: 125000,
+        targetDate: futureIso(20),
+        decisionMakerContact: 'Chief architect',
+        qualification: await stage1QualificationPayload(prisma, {
+          installationRequired: true,
+        }),
+      })
+      .expect(201);
+
+    const body = bodyAs<LeadResponse>(qualifyResponse);
+    expect(body.status).toBe('QUALIFIED');
+    expect(body.dealId).toBeNull();
+
+    const deals = await prisma.deal.count({
+      where: { title: `Install yes ${RUN_ID}` },
+    });
+    expect(deals).toBe(0);
+  });
+
+  it('BP2 repeated qualify is idempotent and creates no Deal', async () => {
+    const created = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Repeat qualify ${RUN_ID}`,
+        source: 'email',
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(created).id;
+    const payload = {
+      clientId: context.clientId,
+      projectObjectId: context.projectObjectId,
+      needDescription: 'HPL panels for lobby',
+      estimatedAmount: 125000,
+      targetDate: futureIso(20),
+      decisionMakerContact: 'Chief architect',
+      qualification: await stage1QualificationPayload(prisma, {
+        installationRequired: false,
+      }),
+    };
+
+    const first = await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send(payload)
+      .expect(201);
+    const second = await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send(payload)
+      .expect(201);
+
+    expect(bodyAs<LeadResponse>(first).status).toBe('QUALIFIED');
+    expect(bodyAs<LeadResponse>(second).status).toBe('QUALIFIED');
+    expect(bodyAs<LeadResponse>(second).dealId).toBeNull();
+
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    expect(lead.status).toBe('QUALIFIED');
+    expect(lead.dealId).toBeNull();
+    expect(await prisma.deal.count({ where: { title: lead.title } })).toBe(0);
+
+    const stage2Tasks = await prisma.task.findMany({
+      where: {
+        relatedType: 'Lead',
+        relatedId: leadId,
+        title: { startsWith: 'Stage 2 commercial qualification:' },
+      },
+    });
+    expect(stage2Tasks).toHaveLength(1);
+    expect(stage2Tasks[0]?.assigneeId).toBe(context.headId);
+    expect(stage2Tasks[0]?.assigneeId).not.toBe(context.managerId);
+
+    const audits = await prisma.auditLog.findMany({
+      where: { action: 'LEAD_QUALIFIED_STAGE1', entityId: leadId },
+    });
+    expect(audits).toHaveLength(1);
+  });
+
+  it('BP2 does not assign Stage-2 to an ordinary owner without managerId', async () => {
+    const passwordHash = await hash(TEST_PASSWORD, 12);
+    await upsertUser(prisma, {
+      email: `solo-manager-${RUN_ID}@hpl.test`,
+      firstName: 'Solo',
+      lastName: 'Manager',
+      passwordHash,
+      roleName: RoleName.MANAGER,
+    });
+    const soloTokens = await login(server, `solo-manager-${RUN_ID}@hpl.test`);
+    const solo = await prisma.user.findUniqueOrThrow({
+      where: { email: `solo-manager-${RUN_ID}@hpl.test` },
+      select: { id: true, managerId: true },
+    });
+    expect(solo.managerId).toBeNull();
+
+    const created = await request(server)
+      .post('/leads')
+      .set(authHeader(soloTokens.accessToken))
+      .send({
+        title: `Solo qualify ${RUN_ID}`,
+        source: 'email',
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(created).id;
+
+    const qualifyResponse = await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(soloTokens.accessToken))
+      .send({
+        clientId: context.clientId,
+        projectObjectId: context.projectObjectId,
+        needDescription: 'HPL panels for lobby',
+        estimatedAmount: 125000,
+        targetDate: futureIso(20),
+        decisionMakerContact: 'Chief architect',
+        qualification: await stage1QualificationPayload(prisma, {
+          installationRequired: false,
+        }),
+      })
+      .expect(201);
+
+    expect(bodyAs<LeadResponse>(qualifyResponse).status).toBe('QUALIFIED');
+    expect(bodyAs<LeadResponse>(qualifyResponse).dealId).toBeNull();
+
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    expect(lead.status).toBe('QUALIFIED');
+    expect(lead.ownerId).toBe(solo.id);
+
+    const stage2Tasks = await prisma.task.findMany({
+      where: {
+        relatedType: 'Lead',
+        relatedId: leadId,
+        title: { startsWith: 'Stage 2 commercial qualification:' },
+      },
+    });
+    expect(stage2Tasks).toHaveLength(0);
+    expect(
+      stage2Tasks.some((task) => task.assigneeId === solo.id),
+    ).toBe(false);
+
+    const ownerNotifications = await prisma.notification.findMany({
+      where: {
+        userId: solo.id,
+        relatedType: 'Lead',
+        relatedId: leadId,
+      },
+    });
+    expect(
+      ownerNotifications.some(
+        (item) => item.title === 'Stage 1 qualification complete',
+      ),
+    ).toBe(true);
+    expect(
+      ownerNotifications.some((item) =>
+        item.title.includes('Stage 2 commercial qualification'),
+      ),
+    ).toBe(false);
+  });
+
+  it('BP2 parallel qualify cannot create a Deal', async () => {
+    const created = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Parallel qualify ${RUN_ID}`,
+        source: 'email',
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(created).id;
+    const qualification = await stage1QualificationPayload(prisma, {
+      installationRequired: false,
+    });
+
+    await request(server)
+      .patch(`/leads/${leadId}/qualification`)
+      .set(authHeader(context.managerToken))
+      .send(qualification)
+      .expect(200);
+
+    const payload = {
+      clientId: context.clientId,
+      projectObjectId: context.projectObjectId,
+      needDescription: 'HPL panels for lobby',
+      estimatedAmount: 125000,
+      targetDate: futureIso(20),
+      decisionMakerContact: 'Chief architect',
+    };
+
+    const [first, second] = await Promise.all([
+      request(server)
+        .post(`/leads/${leadId}/qualify`)
+        .set(authHeader(context.managerToken))
+        .send(payload),
+      request(server)
+        .post(`/leads/${leadId}/qualify`)
+        .set(authHeader(context.managerToken))
+        .send(payload),
+    ]);
+
+    expect([first.status, second.status].sort()).toEqual([201, 201]);
+
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    expect(lead.status).toBe('QUALIFIED');
+    expect(lead.dealId).toBeNull();
+    expect(await prisma.deal.count({ where: { title: lead.title } })).toBe(0);
+
+    const stage2Tasks = await prisma.task.findMany({
+      where: {
+        relatedType: 'Lead',
+        relatedId: leadId,
+        title: { startsWith: 'Stage 2 commercial qualification:' },
+      },
+    });
+    expect(stage2Tasks).toHaveLength(1);
+    expect(stage2Tasks[0]?.assigneeId).toBe(context.headId);
+    expect(stage2Tasks[0]?.assigneeId).not.toBe(context.managerId);
+
+    const audits = await prisma.auditLog.findMany({
+      where: { action: 'LEAD_QUALIFIED_STAGE1', entityId: leadId },
+    });
+    expect(audits).toHaveLength(1);
   });
 
   it('AT-04 syncs deal nextActionAt with nearest open task', async () => {
@@ -2251,6 +2524,22 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const leadId = bodyAs<EntityResponse>(leadResponse).id;
 
+    await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send({
+        clientId: context.clientId,
+        projectObjectId: context.projectObjectId,
+        needDescription: 'HPL panels for quote conversion',
+        estimatedAmount: 125000,
+        targetDate: futureIso(20),
+        decisionMakerContact: 'Chief architect',
+        qualification: await stage1QualificationPayload(prisma, {
+          installationRequired: false,
+        }),
+      })
+      .expect(201);
+
     const panelType = await prisma.panelType.findFirstOrThrow({
       where: { code: 'exterior' },
     });
@@ -2344,6 +2633,12 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     expect(conversionBody.quote.status).toBe('converted');
     expect(conversionBody.dealId).toBeTruthy();
+
+    const convertedLead = await prisma.lead.findUniqueOrThrow({
+      where: { id: leadId },
+    });
+    expect(convertedLead.status).toBe('CONVERTED');
+    expect(convertedLead.dealId).toBe(conversionBody.dealId);
 
     const deal = await prisma.deal.findUniqueOrThrow({
       where: { id: conversionBody.dealId },
@@ -2555,6 +2850,8 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       select: { leadId: true },
     });
 
+    await qualifyLeadStage1(quote.leadId);
+
     const [first, second] = await Promise.all([
       request(server)
         .post(`/quotes/${quoteId}/convert-to-deal`)
@@ -2591,10 +2888,39 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       where: { id: quoteId },
     });
     expect(lead.dealId).toBe(winnerBody.dealId);
+    expect(lead.status).toBe('CONVERTED');
     expect(convertedQuote.dealId).toBe(winnerBody.dealId);
   });
 
-  it('keeps one Lead → one Deal across qualify and quote convert', async () => {
+  it('rejects quote conversion before Stage-1 qualification', async () => {
+    const quoteId = await createApprovedPanelQuote();
+    const quote = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: quoteId },
+      select: { leadId: true },
+    });
+
+    const convert = await request(server)
+      .post(`/quotes/${quoteId}/convert-to-deal`)
+      .set(authHeader(context.managerToken))
+      .expect(400);
+
+    expect(bodyAs<{ errorCode?: string }>(convert).errorCode).toBe(
+      'LEAD_NOT_QUALIFIED',
+    );
+
+    const lead = await prisma.lead.findUniqueOrThrow({
+      where: { id: quote.leadId },
+    });
+    expect(lead.status).not.toBe('CONVERTED');
+    expect(lead.dealId).toBeNull();
+    expect(
+      await prisma.deal.count({
+        where: { title: `КП #${quoteId.slice(0, 8)}` },
+      }),
+    ).toBe(0);
+  });
+
+  it('qualify never creates a Deal when raced with quote convert', async () => {
     const quoteId = await createApprovedPanelQuote();
     const quote = await prisma.panelQuote.findUniqueOrThrow({
       where: { id: quoteId },
@@ -2621,26 +2947,35 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         .set(authHeader(context.managerToken)),
     ]);
 
-    const successStatuses = [qualify.status, convert.status].filter(
-      (status) => status === 201,
-    );
-    expect(successStatuses).toHaveLength(1);
-    expect([qualify.status, convert.status]).toContain(409);
+    expect(qualify.status).toBe(201);
+    expect(bodyAs<LeadResponse>(qualify).dealId).toBeNull();
 
     const lead = await prisma.lead.findUniqueOrThrow({
       where: { id: quote.leadId },
     });
-    expect(lead.dealId).toBeTruthy();
-
     const quoteDeals = await prisma.deal.findMany({
       where: { title: `КП #${quoteId.slice(0, 8)}` },
     });
-    const relatedDealIds = new Set(
-      [lead.dealId, ...quoteDeals.map((deal) => deal.id)].filter(
-        (id): id is string => Boolean(id),
-      ),
-    );
-    expect(relatedDealIds.size).toBe(1);
+    const qualifyDeals = await prisma.deal.findMany({
+      where: { title: lead.title },
+    });
+
+    expect(qualifyDeals).toHaveLength(0);
+    expect(quoteDeals.length).toBeLessThanOrEqual(1);
+
+    if (convert.status === 201) {
+      expect(lead.status).toBe('CONVERTED');
+      expect(lead.dealId).toBe(bodyAs<{ dealId: string }>(convert).dealId);
+      expect(quoteDeals).toHaveLength(1);
+    } else {
+      expect(convert.status).toBe(400);
+      expect(bodyAs<{ errorCode?: string }>(convert).errorCode).toBe(
+        'LEAD_NOT_QUALIFIED',
+      );
+      expect(lead.status).toBe('QUALIFIED');
+      expect(lead.dealId).toBeNull();
+      expect(quoteDeals).toHaveLength(0);
+    }
   });
 
   it('locks commercial item mutations after WON', async () => {
@@ -2724,6 +3059,24 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       })
       .expect(403);
   });
+
+  async function qualifyLeadStage1(leadId: string): Promise<void> {
+    await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send({
+        clientId: context.clientId,
+        projectObjectId: context.projectObjectId,
+        needDescription: 'HPL panels for lobby',
+        estimatedAmount: 125000,
+        targetDate: futureIso(20),
+        decisionMakerContact: 'Chief architect',
+        qualification: await stage1QualificationPayload(prisma, {
+          installationRequired: false,
+        }),
+      })
+      .expect(201);
+  }
 
   async function createApprovedPanelQuote(): Promise<string> {
     const quoteId = await createSentPanelQuote();

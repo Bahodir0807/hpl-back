@@ -50,4 +50,19 @@ describe('LeadVirtualStatusService', () => {
 
     await expect(service.getStatus('lead-id')).resolves.toBe('calculator_used');
   });
+
+  it('returns qualified for Stage-1 qualified leads', async () => {
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'lead-id',
+      status: LeadStatus.QUALIFIED,
+      source: 'manual',
+      ownerId: 'manager-id',
+    });
+    prisma.activity.findMany.mockResolvedValue([
+      { type: ActivityType.CALL, metadata: {} },
+    ]);
+    prisma.telegramLeadMetadata.findUnique.mockResolvedValue(null);
+
+    await expect(service.getStatus('lead-id')).resolves.toBe('qualified');
+  });
 });

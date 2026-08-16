@@ -332,6 +332,34 @@ describe('QuotesService', () => {
     expect(dealFactory.createFromQuote).not.toHaveBeenCalled();
   });
 
+  it('does not convert an approved quote when the lead is not QUALIFIED', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.APPROVED,
+      dealId: null,
+      items: [{ supplierCode: 'wuya' }],
+    });
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'lead-id',
+      clientId: 'client-id',
+      projectObjectId: null,
+      dealId: null,
+      status: 'NEW',
+    });
+
+    await expect(
+      service.convertToDeal('quote-id', manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'LEAD_NOT_QUALIFIED',
+        statusCode: HttpStatus.BAD_REQUEST,
+      }),
+    });
+    expect(dealFactory.createFromQuote).not.toHaveBeenCalled();
+  });
+
   it('converts approved quote to deal', async () => {
     prisma.panelQuote.findUnique.mockResolvedValue({
       id: 'quote-id',
@@ -359,6 +387,7 @@ describe('QuotesService', () => {
       clientId: 'client-id',
       projectObjectId: null,
       dealId: null,
+      status: 'QUALIFIED',
     });
     prisma.product.findUnique.mockResolvedValue({ id: 'product-id' });
     prisma.supplier.findUnique.mockResolvedValue({ id: 'supplier-id' });
@@ -392,8 +421,9 @@ describe('QuotesService', () => {
         id: 'lead-id',
         deletedAt: null,
         dealId: null,
+        status: 'QUALIFIED',
       },
-      data: { dealId: 'deal-id' },
+      data: { dealId: 'deal-id', status: 'CONVERTED' },
     });
     expect(prisma.panelQuote.updateMany).toHaveBeenCalledWith({
       where: {
@@ -443,6 +473,7 @@ describe('QuotesService', () => {
       clientId: 'client-id',
       projectObjectId: null,
       dealId: null,
+      status: 'QUALIFIED',
     });
     prisma.product.findUnique.mockResolvedValue({ id: 'product-id' });
     prisma.supplier.findUnique.mockResolvedValue({ id: 'supplier-id' });
@@ -489,6 +520,7 @@ describe('QuotesService', () => {
       clientId: 'client-id',
       projectObjectId: null,
       dealId: null,
+      status: 'QUALIFIED',
     });
     prisma.product.findUnique.mockResolvedValue({ id: 'product-id' });
     prisma.supplier.findUnique.mockResolvedValue({ id: 'supplier-id' });
