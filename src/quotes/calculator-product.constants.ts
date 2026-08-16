@@ -1,0 +1,1 @@
+export const CALCULATOR_PRODUCT_SKU = 'HPL-CALC-PANEL';

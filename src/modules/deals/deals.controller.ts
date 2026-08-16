@@ -45,7 +45,7 @@ export class DealsController {
   @ApiOperation({ summary: 'Create deal with initial items and first task' })
   @ApiResponse({ status: 201, description: 'Deal created' })
   create(@Body() dto: CreateDealDto, @CurrentUser() user: CurrentUserType) {
-    return this.dealsService.create(dto, user.id);
+    return this.dealsService.create(dto, user);
   }
 
   @Get()
@@ -63,7 +63,19 @@ export class DealsController {
     @Query() filterDto: FilterDealDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.dealsService.findAll(filterDto, user.id, user.permissions);
+    return this.dealsService.findAll(filterDto, user);
+  }
+
+  @Get(':id/delivery-status')
+  @RequirePermissions('deals:read')
+  @ApiOperation({ summary: 'Get deal delivery status from supplier order' })
+  @ApiResponse({ status: 200, description: 'Delivery status returned' })
+  @ApiResponse({ status: 404, description: 'Deal not found' })
+  getDeliveryStatus(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.dealsService.getDeliveryStatus(id, user);
   }
 
   @Get(':id')
@@ -71,8 +83,11 @@ export class DealsController {
   @ApiOperation({ summary: 'Get deal card with all details' })
   @ApiResponse({ status: 200, description: 'Deal card returned' })
   @ApiResponse({ status: 404, description: 'Deal not found' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dealsService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.dealsService.findOne(id, user);
   }
 
   @Patch(':id')
@@ -80,8 +95,12 @@ export class DealsController {
   @ApiOperation({ summary: 'Update deal fields' })
   @ApiResponse({ status: 200, description: 'Deal updated' })
   @ApiResponse({ status: 404, description: 'Deal not found' })
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateDealDto) {
-    return this.dealsService.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateDealDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.dealsService.update(id, dto, user);
   }
 
   @Post(':id/stage')
@@ -95,7 +114,7 @@ export class DealsController {
     @Body() dto: ChangeStageDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.dealsService.changeStage(id, dto, user.id, user.permissions);
+    return this.dealsService.changeStage(id, dto, user);
   }
 
   @Post(':id/items')
@@ -106,8 +125,9 @@ export class DealsController {
   setItems(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SetDealItemsDto,
+    @CurrentUser() user: CurrentUserType,
   ) {
-    return this.dealsService.setItems(id, dto);
+    return this.dealsService.setItems(id, dto, user);
   }
 
   @Post(':id/offers')
@@ -118,8 +138,9 @@ export class DealsController {
   addOffer(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CreateOfferDto,
+    @CurrentUser() user: CurrentUserType,
   ) {
-    return this.dealsService.addOffer(id, dto);
+    return this.dealsService.addOffer(id, dto, user);
   }
 
   @Patch(':id/offers/:offerId/approve')
@@ -130,8 +151,9 @@ export class DealsController {
   approveOffer(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('offerId', ParseUUIDPipe) offerId: string,
+    @CurrentUser() user: CurrentUserType,
   ) {
-    return this.dealsService.approveOffer(id, offerId);
+    return this.dealsService.approveOffer(id, offerId, user);
   }
 
   @Delete(':id')
@@ -139,7 +161,10 @@ export class DealsController {
   @ApiOperation({ summary: 'Soft delete deal' })
   @ApiResponse({ status: 200, description: 'Deal soft deleted' })
   @ApiResponse({ status: 404, description: 'Deal not found' })
-  softDelete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.dealsService.softDelete(id);
+  softDelete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.dealsService.softDelete(id, user);
   }
 }

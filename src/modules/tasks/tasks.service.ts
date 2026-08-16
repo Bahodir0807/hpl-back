@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -10,6 +11,7 @@ import {
   TaskComputedStatus,
   TaskStatus,
 } from '@prisma/client';
+import { NotificationService } from '../notifications/notification.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompleteTaskDto } from './dto/complete-task.dto';
 import { CreateTaskDto } from './dto/create-task.dto';
@@ -20,7 +22,21 @@ import { calculateComputedStatus } from './utils/task-status-calculator';
 const READ_ALL_TASKS_PERMISSION = 'tasks:read_all';
 const CRITICAL_OVERDUE_NOTIFICATION_TYPE = 'TASK_CRITICAL_OVERDUE';
 
-type TaskWithRuntimeStatus = Task & {
+const taskListInclude = Prisma.validator<Prisma.TaskInclude>()({
+  assignee: {
+    select: { id: true, firstName: true, lastName: true, email: true },
+  },
+});
+
+type TaskListItem = Prisma.TaskGetPayload<{
+  include: typeof taskListInclude;
+}>;
+
+type TaskWithRuntimeStatus = TaskListItem & {
+  computedStatus: TaskComputedStatus;
+};
+
+type MyDayTask = Task & {
   computedStatus: TaskComputedStatus;
 };
 
@@ -32,9 +48,9 @@ type TaskListResult = {
 };
 
 type MyDayResult = {
-  today: TaskWithRuntimeStatus[];
-  overdue: TaskWithRuntimeStatus[];
-  critical: TaskWithRuntimeStatus[];
+  today: MyDayTask[];
+  overdue: MyDayTask[];
+  critical: MyDayTask[];
 };
 
 type TaskWithAssigneeManager = Task & {
@@ -43,9 +59,18 @@ type TaskWithAssigneeManager = Task & {
   };
 };
 
+type EscalatedTask = {
+  managerId: string;
+  taskTitle: string;
+  dueDate: Date;
+};
+
 @Injectable()
 export class TasksService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly notificationService: NotificationService,
+  ) {}
 
   async create(dto: CreateTaskDto, createdById: string): Promise<Task> {
     const computedStatus = calculateComputedStatus(
@@ -79,45 +104,44 @@ export class TasksService {
     const limit = filterDto.limit ?? 20;
     const where = this.buildTaskWhere(filterDto, currentUserId, permissions);
 
-    const tasks = await this.prisma.task.findMany({
-      where,
-      include: {
-        assignee: {
-          select: { managerId: true },
-        },
-      },
-      orderBy: { dueDate: 'asc' },
-      skip: (page - 1) * limit,
-      take: limit,
-    });
+    // computedStatus зависит от "сейчас", поэтому колонку надо освежить
+    // батчем ДО запроса — иначе фильтр по computedStatus в БД даст устаревшие строки
+    await this.syncOpenTaskStatuses(where.assigneeId);
 
-    const enrichedTasks = await Promise.all(
-      tasks.map((task) => this.syncComputedStatusAndNotifications(task)),
-    );
-    const filteredItems = filterDto.computedStatus
-      ? enrichedTasks.filter(
-          (task) => task.computedStatus === filterDto.computedStatus,
-        )
-      : enrichedTasks;
+    const whereWithComputedStatus: Prisma.TaskWhereInput = {
+      ...where,
+      computedStatus: filterDto.computedStatus,
+    };
+
+    const [tasks, total] = await this.prisma.$transaction([
+      this.prisma.task.findMany({
+        where: whereWithComputedStatus,
+        include: taskListInclude,
+        orderBy: { dueDate: 'asc' },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+      this.prisma.task.count({ where: whereWithComputedStatus }),
+    ]);
 
     return {
-      items: filteredItems,
-      total: filteredItems.length,
+      items: tasks,
+      total,
       page,
       limit,
     };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, currentUserId: string, permissions: string[]) {
     const task = await this.prisma.task.findUnique({
       where: { id },
       include: {
         assignee: {
           select: {
             id: true,
-            email: true,
             firstName: true,
             lastName: true,
+            email: true,
             managerId: true,
           },
         },
@@ -151,6 +175,8 @@ export class TasksService {
     if (!task) {
       throw new NotFoundException('Task not found');
     }
+
+    this.assertTaskAccess(task, currentUserId, permissions);
 
     const computedStatus = calculateComputedStatus(task.dueDate, task.status);
 
@@ -218,9 +244,19 @@ export class TasksService {
       orderBy: { dueDate: 'asc' },
     });
 
-    const enrichedTasks = await Promise.all(
-      tasks.map((task) => this.syncComputedStatusAndNotifications(task)),
-    );
+    const { freshStatuses } = await this.persistComputedStatuses(tasks);
+
+    const enrichedTasks = tasks.map((task) => {
+      const { assignee: _assignee, ...taskWithoutAssignee } = task;
+      void _assignee;
+
+      return {
+        ...taskWithoutAssignee,
+        computedStatus:
+          freshStatuses.get(task.id) ??
+          calculateComputedStatus(task.dueDate, task.status),
+      };
+    });
 
     return {
       today: enrichedTasks.filter(
@@ -351,32 +387,44 @@ export class TasksService {
       },
     });
 
-    let createdCount = 0;
+    const { createdNotifications, escalated } =
+      await this.persistComputedStatuses(tasks);
 
-    for (const task of tasks) {
-      if (task.computedStatus !== TaskComputedStatus.CRITICAL_OVERDUE) {
-        await this.prisma.task.update({
-          where: { id: task.id },
-          data: { computedStatus: TaskComputedStatus.CRITICAL_OVERDUE },
-        });
-      }
+    await this.sendEscalationEmails(escalated);
 
-      const notification = await this.createCriticalOverdueNotificationIfNeeded(
-        {
-          taskId: task.id,
-          managerId: task.assignee.managerId,
-          title: task.title,
-          relatedType: task.relatedType,
-          relatedId: task.relatedId,
-        },
-      );
+    return createdNotifications;
+  }
 
-      if (notification) {
-        createdCount += 1;
-      }
+  // Fire-and-forget: SMTP-ошибки не должны влиять на эскалацию
+  private async sendEscalationEmails(
+    escalated: EscalatedTask[],
+  ): Promise<void> {
+    if (escalated.length === 0) {
+      return;
     }
 
-    return createdCount;
+    const managerIds = [...new Set(escalated.map((entry) => entry.managerId))];
+    const managers = await this.prisma.user.findMany({
+      where: { id: { in: managerIds }, isActive: true },
+      select: { id: true, email: true, firstName: true, lastName: true },
+    });
+    const emailByManagerId = new Map(
+      managers.map((manager) => [manager.id, manager.email]),
+    );
+
+    for (const entry of escalated) {
+      const email = emailByManagerId.get(entry.managerId);
+
+      if (!email) {
+        continue;
+      }
+
+      this.notificationService.sendEmail({
+        to: email,
+        subject: 'Критическая просрочка задачи',
+        text: `Задача "${entry.taskTitle}" просрочена более чем на 24 часа (дедлайн: ${entry.dueDate.toISOString()}). Требуется вмешательство руководителя.`,
+      });
+    }
   }
 
   private buildTaskWhere(
@@ -387,9 +435,7 @@ export class TasksService {
     const canReadAllTasks = permissions.includes(READ_ALL_TASKS_PERMISSION);
 
     return {
-      assigneeId: canReadAllTasks
-        ? filterDto.assigneeId
-        : (filterDto.assigneeId ?? currentUserId),
+      assigneeId: canReadAllTasks ? filterDto.assigneeId : currentUserId,
       createdById: filterDto.createdById,
       relatedType: filterDto.relatedType,
       relatedId: filterDto.relatedId,
@@ -402,35 +448,121 @@ export class TasksService {
     };
   }
 
-  private async syncComputedStatusAndNotifications(
-    task: TaskWithAssigneeManager,
-  ): Promise<TaskWithRuntimeStatus> {
-    const computedStatus = calculateComputedStatus(task.dueDate, task.status);
+  // Освежает computedStatus всех открытых задач в скоупе и батчем создаёт
+  // нотификации о критическом просроче — O(1) запросов вместо O(3 × N задач)
+  private async syncOpenTaskStatuses(
+    assigneeScope: Prisma.TaskWhereInput['assigneeId'],
+  ): Promise<void> {
+    const openTasks = await this.prisma.task.findMany({
+      where: {
+        assigneeId: assigneeScope,
+        status: {
+          notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED],
+        },
+      },
+      include: {
+        assignee: {
+          select: { managerId: true },
+        },
+      },
+    });
 
-    if (computedStatus !== task.computedStatus) {
-      await this.prisma.task.update({
-        where: { id: task.id },
-        data: { computedStatus },
-      });
+    await this.persistComputedStatuses(openTasks);
+  }
+
+  private async persistComputedStatuses(
+    tasks: TaskWithAssigneeManager[],
+  ): Promise<{
+    createdNotifications: number;
+    freshStatuses: Map<string, TaskComputedStatus>;
+    escalated: EscalatedTask[];
+  }> {
+    const freshStatuses = new Map<string, TaskComputedStatus>();
+    const statusBuckets = new Map<TaskComputedStatus, string[]>();
+    const criticalTasks: TaskWithAssigneeManager[] = [];
+
+    for (const task of tasks) {
+      const computedStatus = calculateComputedStatus(task.dueDate, task.status);
+      freshStatuses.set(task.id, computedStatus);
+
+      if (computedStatus !== task.computedStatus) {
+        const bucket = statusBuckets.get(computedStatus) ?? [];
+        bucket.push(task.id);
+        statusBuckets.set(computedStatus, bucket);
+      }
+
+      if (
+        computedStatus === TaskComputedStatus.CRITICAL_OVERDUE &&
+        task.assignee.managerId
+      ) {
+        criticalTasks.push(task);
+      }
     }
 
-    if (computedStatus === TaskComputedStatus.CRITICAL_OVERDUE) {
-      await this.createCriticalOverdueNotificationIfNeeded({
-        taskId: task.id,
-        managerId: task.assignee.managerId,
-        title: task.title,
-        relatedType: task.relatedType,
-        relatedId: task.relatedId,
+    const writes: Prisma.PrismaPromise<unknown>[] = Array.from(
+      statusBuckets,
+      ([computedStatus, ids]) =>
+        this.prisma.task.updateMany({
+          where: { id: { in: ids } },
+          data: { computedStatus },
+        }),
+    );
+
+    let createdNotifications = 0;
+    const escalated: EscalatedTask[] = [];
+
+    if (criticalTasks.length > 0) {
+      // Уникального констрейнта (taskId, userId, type) нет,
+      // поэтому дедупликация — через предварительный findMany
+      const existing = await this.prisma.notification.findMany({
+        where: {
+          type: CRITICAL_OVERDUE_NOTIFICATION_TYPE,
+          taskId: { in: criticalTasks.map((task) => task.id) },
+        },
+        select: { taskId: true, userId: true },
       });
+      const existingKeys = new Set(
+        existing.map((entry) => `${entry.taskId}:${entry.userId}`),
+      );
+      const notifications = criticalTasks
+        .filter(
+          (task) => !existingKeys.has(`${task.id}:${task.assignee.managerId}`),
+        )
+        .map((task) => ({
+          userId: task.assignee.managerId as string,
+          taskId: task.id,
+          type: CRITICAL_OVERDUE_NOTIFICATION_TYPE,
+          title: 'Critical task overdue',
+          message: `Task is critically overdue: ${task.title}`,
+          relatedType: task.relatedType,
+          relatedId: task.relatedId,
+        }));
+
+      if (notifications.length > 0) {
+        writes.push(
+          this.prisma.notification.createMany({ data: notifications }),
+        );
+        createdNotifications = notifications.length;
+
+        for (const task of criticalTasks) {
+          const managerId = task.assignee.managerId;
+
+          if (managerId && !existingKeys.has(`${task.id}:${managerId}`)) {
+            escalated.push({
+              managerId,
+              taskTitle: task.title,
+              dueDate: task.dueDate,
+            });
+          }
+        }
+      }
     }
 
-    const { assignee: _assignee, ...taskWithoutAssignee } = task;
-    void _assignee;
+    if (writes.length > 0) {
+      await this.prisma.$transaction(writes);
+    }
 
-    return {
-      ...taskWithoutAssignee,
-      computedStatus,
-    };
+    return { createdNotifications, freshStatuses, escalated };
   }
 
   private async createCriticalOverdueNotificationIfNeeded(input: {
@@ -468,6 +600,25 @@ export class TasksService {
         relatedId: input.relatedId,
       },
     });
+  }
+
+  private assertTaskAccess(
+    task: Pick<Task, 'assigneeId' | 'createdById'>,
+    currentUserId: string,
+    permissions: string[],
+  ): void {
+    if (permissions.includes(READ_ALL_TASKS_PERMISSION)) {
+      return;
+    }
+
+    if (
+      task.assigneeId === currentUserId ||
+      task.createdById === currentUserId
+    ) {
+      return;
+    }
+
+    throw new ForbiddenException('Access to this task is forbidden');
   }
 
   private async ensureTaskExists(id: string): Promise<Task> {

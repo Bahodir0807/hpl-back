@@ -7,6 +7,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -15,6 +16,7 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import type { CurrentUser as CurrentUserType } from '../../common/interfaces/current-user.interface';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { FilterUserDto } from './dto/filter-user.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
 import { UpdateUserStatusDto } from './dto/update-user-status.dto';
@@ -30,21 +32,30 @@ export class UsersController {
   @Post()
   @RequirePermissions('users:create')
   @ApiOperation({ summary: 'Create employee user' })
-  create(@Body() dto: RegisterUserDto) {
+  create(@Body() dto: RegisterUserDto, @CurrentUser() user: CurrentUserType) {
+    this.usersService.assertUserModuleAccess(user);
     return this.usersService.create(dto);
   }
 
   @Get()
   @RequirePermissions('users:read')
   @ApiOperation({ summary: 'List employee users' })
-  findAll() {
-    return this.usersService.findAll();
+  findAll(
+    @Query() filterDto: FilterUserDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    this.usersService.assertUserModuleAccess(user);
+    return this.usersService.findAll(filterDto);
   }
 
   @Get(':id')
   @RequirePermissions('users:read')
   @ApiOperation({ summary: 'Get employee user card' })
-  async findById(@Param('id', ParseUUIDPipe) id: string) {
+  async findById(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() currentUser: CurrentUserType,
+  ) {
+    this.usersService.assertUserModuleAccess(currentUser);
     const user = await this.usersService.findById(id);
 
     if (!user) {
@@ -60,7 +71,9 @@ export class UsersController {
   updateStatus(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateUserStatusDto,
+    @CurrentUser() user: CurrentUserType,
   ) {
+    this.usersService.assertUserModuleAccess(user);
     return this.usersService.updateStatus(id, dto.isActive);
   }
 
@@ -72,6 +85,7 @@ export class UsersController {
     @Body() dto: ResetPasswordDto,
     @CurrentUser() user: CurrentUserType,
   ) {
+    this.usersService.assertUserModuleAccess(user);
     return this.usersService.resetPassword(id, dto.newPassword, user.id);
   }
 }

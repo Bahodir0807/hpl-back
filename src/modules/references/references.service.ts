@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Brand, ProductCollection, Supplier } from '@prisma/client';
+import { Brand, Prisma, ProductCollection, Supplier } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBrandDto } from './dto/create-brand.dto';
 import { CreateProductCollectionDto } from './dto/create-product-collection.dto';
@@ -64,13 +64,22 @@ export class ReferencesService {
   async deleteSupplier(id: string): Promise<Supplier> {
     await this.findSupplier(id);
 
-    return this.prisma.supplier.delete({ where: { id } });
+    try {
+      return await this.prisma.supplier.delete({ where: { id } });
+    } catch (error) {
+      this.rethrowIfInUse(error, 'Supplier is in use');
+    }
   }
 
   async createBrand(dto: CreateBrandDto): Promise<Brand> {
     await this.ensureBrandCodeIsUnique(dto.code);
 
-    return this.prisma.brand.create({ data: dto });
+    return this.prisma.brand.create({
+      data: {
+        name: dto.name,
+        code: dto.code,
+      },
+    });
   }
 
   async findBrands(): Promise<Brand[]> {
@@ -98,14 +107,21 @@ export class ReferencesService {
 
     return this.prisma.brand.update({
       where: { id },
-      data: dto,
+      data: {
+        name: dto.name,
+        code: dto.code,
+      },
     });
   }
 
   async deleteBrand(id: string): Promise<Brand> {
     await this.findBrand(id);
 
-    return this.prisma.brand.delete({ where: { id } });
+    try {
+      return await this.prisma.brand.delete({ where: { id } });
+    } catch (error) {
+      this.rethrowIfInUse(error, 'Brand is in use');
+    }
   }
 
   async createProductCollection(
@@ -114,7 +130,12 @@ export class ReferencesService {
     await this.findBrand(dto.brandId);
     await this.ensureCollectionNameIsUnique(dto.brandId, dto.name);
 
-    return this.prisma.productCollection.create({ data: dto });
+    return this.prisma.productCollection.create({
+      data: {
+        name: dto.name,
+        brandId: dto.brandId,
+      },
+    });
   }
 
   async findProductCollections(brandId?: string): Promise<ProductCollection[]> {
@@ -154,14 +175,32 @@ export class ReferencesService {
 
     return this.prisma.productCollection.update({
       where: { id },
-      data: dto,
+      data: {
+        name: dto.name,
+        brandId: dto.brandId,
+      },
     });
   }
 
   async deleteProductCollection(id: string): Promise<ProductCollection> {
     await this.findProductCollection(id);
 
-    return this.prisma.productCollection.delete({ where: { id } });
+    try {
+      return await this.prisma.productCollection.delete({ where: { id } });
+    } catch (error) {
+      this.rethrowIfInUse(error, 'Product collection is in use');
+    }
+  }
+
+  private rethrowIfInUse(error: unknown, message: string): never {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      error.code === 'P2003'
+    ) {
+      throw new ConflictException(message);
+    }
+
+    throw error;
   }
 
   private async ensureSupplierCodeIsUnique(

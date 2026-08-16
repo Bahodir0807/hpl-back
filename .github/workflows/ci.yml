@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: crm
+          POSTGRES_PASSWORD: crm
+          POSTGRES_DB: crm_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crm -d crm_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://crm:crm@localhost:5432/crm_test
+      JWT_ACCESS_SECRET: ci-access-secret-key-min-32-chars-long
+      JWT_REFRESH_SECRET: ci-refresh-secret-key-min-32-chars-long
+      REDIS_HOST: localhost
+      REDIS_PORT: 6379
+      SERVICE_ACCOUNT_TOKEN_PEPPER: ci-service-account-pepper-min-32-chars
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Prisma migrate deploy
+        run: npx prisma migrate deploy
+
+      - name: Prisma migrate status
+        run: |
+          npx prisma migrate status
+          npx prisma migrate status | grep -q "Database schema is up to date"
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Build
+        run: npm run build
+
+      - name: E2E tests
+        run: npm run test:e2e

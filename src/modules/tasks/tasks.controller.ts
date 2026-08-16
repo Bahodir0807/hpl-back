@@ -66,8 +66,11 @@ export class TasksController {
   @ApiOperation({ summary: 'Get task card with reschedule history' })
   @ApiResponse({ status: 200, description: 'Task card returned' })
   @ApiResponse({ status: 404, description: 'Task not found' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.tasksService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.tasksService.findOne(id, user.id, user.permissions);
   }
 
   @Post(':id/complete')

@@ -2,12 +2,14 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -19,6 +21,7 @@ import {
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { PurchasePriceInterceptor } from '../../common/interceptors/purchase-price.interceptor';
 import type { CurrentUser as CurrentUserType } from '../../common/interfaces/current-user.interface';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
@@ -31,6 +34,7 @@ import { OrdersService } from './orders.service';
 @ApiTags('Orders')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseInterceptors(PurchasePriceInterceptor)
 @Controller('orders')
 export class OrdersController {
   constructor(private readonly ordersService: OrdersService) {}
@@ -45,7 +49,7 @@ export class OrdersController {
     @Body() dto: CreateOrderFromDealDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.ordersService.createFromDeal(dto, user.id);
+    return this.ordersService.createFromDeal(dto, user);
   }
 
   @Get()
@@ -57,8 +61,11 @@ export class OrdersController {
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiResponse({ status: 200, description: 'Order list returned' })
-  findAll(@Query() filterDto: FilterOrderDto) {
-    return this.ordersService.findAll(filterDto);
+  findAll(
+    @Query() filterDto: FilterOrderDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.ordersService.findAll(filterDto, user);
   }
 
   @Get(':id')
@@ -68,8 +75,11 @@ export class OrdersController {
   })
   @ApiResponse({ status: 200, description: 'Order card returned' })
   @ApiResponse({ status: 404, description: 'Order not found' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.ordersService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.ordersService.findOne(id, user);
   }
 
   @Post(':id/payments')
@@ -79,10 +89,15 @@ export class OrdersController {
   @ApiResponse({ status: 404, description: 'Order not found' })
   addPayment(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: CreatePaymentDto,
+    @Body() body: CreatePaymentDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.ordersService.addPayment({ ...dto, orderId: id }, user.id);
+    const payload = {
+      ...body,
+      orderId: id,
+    };
+
+    return this.ordersService.addPayment(payload, user);
   }
 
   @Patch('payments/:paymentId/confirm')
@@ -98,7 +113,24 @@ export class OrdersController {
     @Body() dto: ConfirmPaymentDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.ordersService.confirmPayment(paymentId, dto, user.id);
+    return this.ordersService.confirmPayment(paymentId, dto, user);
+  }
+
+  @Post(':id/cancel')
+  @HttpCode(200)
+  @RequirePermissions('orders:cancel')
+  @ApiOperation({ summary: 'Cancel order and release stock reservations' })
+  @ApiResponse({ status: 200, description: 'Order cancelled' })
+  @ApiResponse({
+    status: 409,
+    description: 'Order is in terminal status or modified concurrently',
+  })
+  @ApiResponse({ status: 404, description: 'Order not found' })
+  cancelOrder(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.ordersService.cancelOrder(id, user);
   }
 
   @Post(':id/deliveries')
@@ -116,7 +148,8 @@ export class OrdersController {
   createDelivery(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CreateDeliveryDto,
+    @CurrentUser() user: CurrentUserType,
   ) {
-    return this.ordersService.createDelivery({ ...dto, orderId: id });
+    return this.ordersService.createDelivery({ ...dto, orderId: id }, user);
   }
 }

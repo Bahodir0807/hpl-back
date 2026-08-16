@@ -4,16 +4,19 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
+import type { Env } from '../../config/env.schema';
 import { RoleName } from '@prisma/client';
-import { compare } from 'bcryptjs';
-import { randomUUID } from 'node:crypto';
+import { compare, hash } from 'bcryptjs';
+import { createHash, randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { UsersService } from '../users/users.service';
 import { LoginDto } from './dto/login.dto';
 
 const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 const REFRESH_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
+const REFRESH_TOKEN_HASH_ROUNDS = 10;
 
 type AccessTokenPayload = {
   userId: string;
@@ -25,6 +28,9 @@ type AccessTokenPayload = {
 
 type RefreshTokenPayload = {
   sub: string;
+  // sid — id сессии (стабилен при ротации), jti — уникален на каждый выпуск,
+  // иначе два refresh в одну секунду дадут идентичный токен
+  sid: string;
   jti: string;
   type: 'refresh';
 };
@@ -34,12 +40,17 @@ type AuthTokens = {
   refreshToken: string;
 };
 
+type IssuedTokens = AuthTokens & {
+  sessionId: string;
+};
+
 @Injectable()
 export class AuthService {
   constructor(
     private readonly jwtService: JwtService,
     private readonly prisma: PrismaService,
     private readonly usersService: UsersService,
+    private readonly configService: ConfigService<Env, true>,
   ) {}
 
   async login(
@@ -53,13 +64,13 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password');
     }
 
-    if (!user.isActive) {
-      throw new ForbiddenException('User is inactive');
-    }
-
     const passwordMatches = await compare(dto.password, user.passwordHash);
 
     if (!passwordMatches) {
+      throw new UnauthorizedException('Invalid email or password');
+    }
+
+    if (!user.isActive) {
       throw new UnauthorizedException('Invalid email or password');
     }
 
@@ -75,8 +86,9 @@ export class AuthService {
     await this.prisma.$transaction([
       this.prisma.session.create({
         data: {
+          id: tokens.sessionId,
           userId: user.id,
-          token: tokens.refreshToken,
+          tokenHash: await this.hashRefreshToken(tokens.refreshToken),
           ipAddress: ip,
           userAgent,
           expiresAt: this.getRefreshTokenExpiresAt(),
@@ -103,8 +115,9 @@ export class AuthService {
 
   async refreshTokens(refreshToken: string): Promise<AuthTokens> {
     const payload = await this.verifyRefreshToken(refreshToken);
+    // sid — это id сессии: хеш токена нельзя найти запросом, только сравнением
     const session = await this.prisma.session.findUnique({
-      where: { token: refreshToken },
+      where: { id: payload.sid },
       include: {
         user: {
           include: {
@@ -119,6 +132,15 @@ export class AuthService {
     });
 
     if (!session || session.userId !== payload.sub) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const tokenMatches = await this.compareRefreshToken(
+      refreshToken,
+      session.tokenHash,
+    );
+
+    if (!tokenMatches) {
       throw new UnauthorizedException('Invalid refresh token');
     }
 
@@ -140,12 +162,13 @@ export class AuthService {
       session.user.email,
       roles,
       permissions,
+      session.id,
     );
 
     await this.prisma.session.update({
       where: { id: session.id },
       data: {
-        token: tokens.refreshToken,
+        tokenHash: await this.hashRefreshToken(tokens.refreshToken),
         expiresAt: this.getRefreshTokenExpiresAt(),
       },
     });
@@ -154,15 +177,21 @@ export class AuthService {
   }
 
   async logout(userId: string, token: string): Promise<void> {
-    const session = await this.prisma.session.findFirst({
-      where: {
-        userId,
-        token,
-      },
-      select: { id: true },
-    });
+    const payload = this.jwtService.decode<Partial<RefreshTokenPayload>>(token);
+    const session = payload?.sid
+      ? await this.prisma.session.findFirst({
+          where: {
+            id: payload.sid,
+            userId,
+          },
+          select: { id: true, tokenHash: true },
+        })
+      : null;
 
-    if (!session) {
+    if (
+      !session ||
+      !(await this.compareRefreshToken(token, session.tokenHash))
+    ) {
       throw new BadRequestException('Session not found');
     }
 
@@ -185,7 +214,8 @@ export class AuthService {
     email: string,
     roles: RoleName[],
     permissions: string[],
-  ): Promise<AuthTokens> {
+    sessionId?: string,
+  ): Promise<IssuedTokens> {
     const accessPayload: AccessTokenPayload = {
       userId,
       sub: userId,
@@ -195,6 +225,7 @@ export class AuthService {
     };
     const refreshPayload: RefreshTokenPayload = {
       sub: userId,
+      sid: sessionId ?? randomUUID(),
       jti: randomUUID(),
       type: 'refresh',
     };
@@ -210,7 +241,7 @@ export class AuthService {
       }),
     ]);
 
-    return { accessToken, refreshToken };
+    return { accessToken, refreshToken, sessionId: refreshPayload.sid };
   }
 
   private async verifyRefreshToken(
@@ -238,6 +269,23 @@ export class AuthService {
     }
   }
 
+  // bcrypt обрезает вход до 72 байт, а JWT ~250 символов с общим префиксом —
+  // поэтому сначала SHA-256 (64 hex-символа), потом bcrypt
+  private hashRefreshToken(token: string): Promise<string> {
+    return hash(this.sha256(token), REFRESH_TOKEN_HASH_ROUNDS);
+  }
+
+  private compareRefreshToken(
+    token: string,
+    tokenHash: string,
+  ): Promise<boolean> {
+    return compare(this.sha256(token), tokenHash);
+  }
+
+  private sha256(value: string): string {
+    return createHash('sha256').update(value).digest('hex');
+  }
+
   private getRefreshTokenExpiresAt(): Date {
     return new Date(Date.now() + REFRESH_TOKEN_TTL_SECONDS * 1000);
   }
@@ -245,12 +293,6 @@ export class AuthService {
   private getJwtSecret(
     envName: 'JWT_ACCESS_SECRET' | 'JWT_REFRESH_SECRET',
   ): string {
-    const secret = process.env[envName];
-
-    if (!secret) {
-      throw new BadRequestException(`${envName} is not configured`);
-    }
-
-    return secret;
+    return this.configService.getOrThrow(envName, { infer: true });
   }
 }

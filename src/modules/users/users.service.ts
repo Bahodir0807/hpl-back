@@ -1,12 +1,14 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Permission, RoleName, User } from '@prisma/client';
+import { Permission, Prisma, RoleName, User } from '@prisma/client';
 import { hash } from 'bcryptjs';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import { PrismaService } from '../prisma/prisma.service';
+import { FilterUserDto } from './dto/filter-user.dto';
 import { RegisterUserDto } from './dto/register-user.dto';
 
 const PASSWORD_HASH_ROUNDS = 12;
@@ -38,6 +40,37 @@ type AuthUserRecord = {
       name: RoleName;
     };
   }[];
+};
+
+const userListSelect = Prisma.validator<Prisma.UserSelect>()({
+  id: true,
+  email: true,
+  firstName: true,
+  lastName: true,
+  phone: true,
+  isActive: true,
+  teamId: true,
+  managerId: true,
+  lastLoginAt: true,
+  createdAt: true,
+  roles: {
+    select: {
+      role: {
+        select: { name: true },
+      },
+    },
+  },
+});
+
+type UserListItem = Prisma.UserGetPayload<{
+  select: typeof userListSelect;
+}>;
+
+type UserListResult = {
+  items: UserListItem[];
+  total: number;
+  page: number;
+  limit: number;
 };
 
 @Injectable()
@@ -130,12 +163,34 @@ export class UsersService {
     return this.excludePasswordHash(user);
   }
 
-  async findAll(): Promise<SafeUser[]> {
-    const users = await this.prisma.user.findMany({
-      orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
-    });
+  async findAll(filterDto: FilterUserDto = {}): Promise<UserListResult> {
+    const page = filterDto.page ?? 1;
+    const limit = filterDto.limit ?? 20;
+    const where: Prisma.UserWhereInput = {
+      ...(filterDto.role && {
+        roles: { some: { role: { name: filterDto.role } } },
+      }),
+      ...(filterDto.search && {
+        OR: [
+          { firstName: { contains: filterDto.search } },
+          { lastName: { contains: filterDto.search } },
+          { email: { contains: filterDto.search } },
+        ],
+      }),
+    };
 
-    return users.map((user) => this.excludePasswordHash(user));
+    const [users, total] = await this.prisma.$transaction([
+      this.prisma.user.findMany({
+        where,
+        orderBy: [{ isActive: 'desc' }, { createdAt: 'desc' }],
+        skip: (page - 1) * limit,
+        take: limit,
+        select: userListSelect,
+      }),
+      this.prisma.user.count({ where }),
+    ]);
+
+    return { items: users, total, page, limit };
   }
 
   async updateStatus(id: string, isActive: boolean): Promise<SafeUser> {
@@ -178,6 +233,11 @@ export class UsersService {
         data: { passwordHash },
       });
 
+      // Все refresh-сессии умирают вместе со сменой пароля
+      await tx.session.deleteMany({
+        where: { userId: id },
+      });
+
       await tx.auditLog.create({
         data: {
           userId: currentUserId,
@@ -195,6 +255,17 @@ export class UsersService {
     });
 
     return this.excludePasswordHash(user);
+  }
+
+  assertUserModuleAccess(currentUser: Pick<CurrentUser, 'roles'>): void {
+    const blockedRoles = new Set<RoleName>([
+      RoleName.MANAGER,
+      RoleName.STOREKEEPER,
+    ]);
+
+    if (currentUser.roles.some((role) => blockedRoles.has(role))) {
+      throw new ForbiddenException('Access denied');
+    }
   }
 
   async getAuthContext(userId: string): Promise<CurrentUser | null> {

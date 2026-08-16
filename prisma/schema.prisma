@@ -103,6 +103,10 @@ enum DealStage {
   LOST
 }
 
+// ТЗ 5.10 (ORD-03): 9 статусов — DRAFT, CONFIRMED, WAITING_PAYMENT,
+// PARTIALLY_PAID, PAID, WAITING_STOCK, READY_FOR_SHIPMENT, SHIPPED, CANCELLED.
+// PARTIALLY_SHIPPED и COMPLETED — сверх ТЗ, но активно используются
+// в delivery-FSM (orders.service) и guard'ах терминальных статусов.
 enum OrderStatus {
   DRAFT
   CONFIRMED
@@ -110,10 +114,21 @@ enum OrderStatus {
   PARTIALLY_PAID
   PAID
   WAITING_STOCK
+  PENDING_SUPPLIER
   READY_FOR_SHIPMENT
   PARTIALLY_SHIPPED
   SHIPPED
   COMPLETED
+  CANCELLED
+}
+
+enum SupplierOrderStatus {
+  DRAFT
+  SENT_TO_PRODUCTION
+  IN_PRODUCTION
+  READY_FOR_SHIPMENT
+  SHIPPED
+  DELIVERED
   CANCELLED
 }
 
@@ -148,6 +163,11 @@ enum StockReservationStatus {
   FULFILLED
 }
 
+enum OrderItemSource {
+  SKU
+  PANEL_CALCULATOR
+}
+
 enum ExpectedReceiptStatus {
   PENDING
   PARTIALLY_RECEIVED
@@ -168,18 +188,20 @@ enum ActivityType {
   STAGE_CHANGED
   OWNER_CHANGED
   STATUS_CHANGED
+  CALCULATION
+  SUPPLIER_ORDER_STATUS_CHANGED
 }
 
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
+  id           String    @id @default(uuid()) 
   email        String    @unique
   passwordHash String
   firstName    String
   lastName     String
   phone        String?
   isActive     Boolean   @default(true)
-  teamId       String?   @db.Uuid
-  managerId    String?   @db.Uuid
+  teamId       String?   
+  managerId    String?   
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -211,6 +233,8 @@ model User {
   leadPlans               LeadPlan[]
   dealStageHistories      DealStageHistory[]
   stageExceptionApprovals DealStageHistory[]      @relation("StageExceptionApprover")
+  createdCalculations     CalculationSession[]    @relation("CalculationCreator")
+  panelQuotes             PanelQuote[]            @relation("QuoteManager")
 
   @@index([teamId])
   @@index([managerId])
@@ -219,9 +243,9 @@ model User {
 }
 
 model Team {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid()) 
   name      String   @unique
-  leaderId  String?  @db.Uuid
+  leaderId  String?  
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -232,7 +256,7 @@ model Team {
 }
 
 model Role {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid()) 
   name        RoleName @unique
   description String?
   createdAt   DateTime @default(now())
@@ -243,7 +267,7 @@ model Role {
 }
 
 model Permission {
-  id          String   @id @default(uuid()) @db.Uuid
+  id          String   @id @default(uuid()) 
   slug        String   @unique
   description String?
   createdAt   DateTime @default(now())
@@ -254,8 +278,8 @@ model Permission {
 }
 
 model UserRole {
-  userId String @db.Uuid
-  roleId String @db.Uuid
+  userId String 
+  roleId String 
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -265,8 +289,8 @@ model UserRole {
 }
 
 model RolePermission {
-  roleId       String @db.Uuid
-  permissionId String @db.Uuid
+  roleId       String 
+  permissionId String 
 
   role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -276,8 +300,8 @@ model RolePermission {
 }
 
 model UserPermission {
-  userId       String @db.Uuid
-  permissionId String @db.Uuid
+  userId       String 
+  permissionId String 
 
   user       User       @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -287,9 +311,9 @@ model UserPermission {
 }
 
 model Session {
-  id        String   @id @default(uuid()) @db.Uuid
-  userId    String   @db.Uuid
-  token     String   @unique
+  id        String   @id @default(uuid()) 
+  userId    String   
+  tokenHash String
   ipAddress String?
   userAgent String?
   expiresAt DateTime
@@ -303,8 +327,8 @@ model Session {
 }
 
 model UserActivityLog {
-  id        String   @id @default(uuid()) @db.Uuid
-  userId    String   @db.Uuid
+  id        String   @id @default(uuid()) 
+  userId    String   
   action    String
   metadata  Json?
   createdAt DateTime @default(now())
@@ -317,21 +341,32 @@ model UserActivityLog {
 }
 
 model Supplier {
-  id        String   @id @default(uuid()) @db.Uuid
-  name      String
-  code      String   @unique
-  contacts  Json?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                String   @id @default(uuid()) 
+  name              String
+  code              String   @unique
+  contacts          Json?
+  deliveryDays      Int?
+  moqM2             Decimal? @db.Decimal(10, 2)
+  deliveryTerms     String?  // pickup | carrier | supplier_delivery
+  isDirectDelivery  Boolean  @default(true)
+  marginPercent     Decimal? @db.Decimal(5, 2)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  products         Product[]
-  expectedReceipts ExpectedReceipt[]
+  products             Product[]
+  expectedReceipts     ExpectedReceipt[]
+  qualityMappings      SupplierQualityMapping[]
+  calculationLineItems CalculationLineItem[]
+  panelColors          PanelColor[]
+  thicknessPricings    PanelThicknessPricing[]
+  supplierOrders       SupplierOrder[]
+  deals                Deal[]
 
   @@index([name])
 }
 
 model Brand {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid()) 
   name      String
   code      String   @unique
   createdAt DateTime @default(now())
@@ -344,9 +379,9 @@ model Brand {
 }
 
 model ProductCollection {
-  id        String   @id @default(uuid()) @db.Uuid
+  id        String   @id @default(uuid()) 
   name      String
-  brandId   String   @db.Uuid
+  brandId   String   
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -358,12 +393,12 @@ model ProductCollection {
 }
 
 model Product {
-  id           String        @id @default(uuid()) @db.Uuid
+  id           String        @id @default(uuid()) 
   sku          String        @unique
   name         String
-  brandId      String        @db.Uuid
-  collectionId String?       @db.Uuid
-  supplierId   String?       @db.Uuid
+  brandId      String        
+  collectionId String?       
+  supplierId   String?       
   decorCode    String?
   colorName    String?
   surface      String?
@@ -387,9 +422,11 @@ model Product {
   expectedReceiptItems ExpectedReceiptItem[]
   dealItems            DealItem[]
   orderItems           OrderItem[]
+  projectObjects       ProjectObject[]
 
   @@index([brandId])
   @@index([collectionId])
+  @@index([collectionId, thickness, status])
   @@index([supplierId])
   @@index([status])
   @@index([decorCode])
@@ -400,10 +437,10 @@ model Product {
 }
 
 model ProductPrice {
-  id        String           @id @default(uuid()) @db.Uuid
-  productId String           @db.Uuid
+  id        String           @id @default(uuid()) 
+  productId String           
   type      ProductPriceType
-  amount    Decimal          @db.Decimal(14, 2)
+  amount    Decimal          
   currency  String           @default("RUB")
   validFrom DateTime
   validTo   DateTime?
@@ -420,12 +457,12 @@ model ProductPrice {
 }
 
 model File {
-  id           String   @id @default(uuid()) @db.Uuid
+  id           String   @id @default(uuid()) 
   originalName String
   mimeType     String
   size         Int
   storageKey   String   @unique
-  uploadedById String   @db.Uuid
+  uploadedById String   
   relatedType  String
   relatedId    String
   comment      String?
@@ -444,7 +481,7 @@ model File {
 }
 
 model Client {
-  id        String         @id @default(uuid()) @db.Uuid
+  id        String         @id @default(uuid()) 
   type      ClientType
   name      String
   inn       String?
@@ -455,8 +492,8 @@ model Client {
   region    String?
   address   String?
   source    String?
-  comment   String?        @db.Text
-  ownerId   String         @db.Uuid
+  comment   String?        
+  ownerId   String         
   deletedAt DateTime?
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
@@ -468,6 +505,7 @@ model Client {
   deals          Deal[]
 
   @@index([ownerId])
+  @@index([ownerId, createdAt])
   @@index([status])
   @@index([inn])
   @@index([phone])
@@ -475,11 +513,12 @@ model Client {
   @@index([name])
   @@index([region])
   @@index([deletedAt])
+  @@index([createdAt])
 }
 
 model Contact {
-  id               String   @id @default(uuid()) @db.Uuid
-  clientId         String   @db.Uuid
+  id               String   @id @default(uuid()) 
+  clientId         String   
   firstName        String
   lastName         String?
   position         String?
@@ -502,16 +541,16 @@ model Contact {
 }
 
 model ProjectObject {
-  id                     String    @id @default(uuid()) @db.Uuid
-  clientId               String    @db.Uuid
+  id                     String    @id @default(uuid()) 
+  clientId               String    
   name                   String
   address                String?
   type                   String?
   stage                  String?
   approximateArea        Float?
   expectedDate           DateTime?
-  description            String?   @db.Text
-  decisionMakerContactId String?   @db.Uuid
+  description            String?   
+  decisionMakerContactId String?   
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
@@ -519,6 +558,7 @@ model ProjectObject {
   decisionMakerContact Contact? @relation("DecisionMakerContact", fields: [decisionMakerContactId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   leads                Lead[]
   deals                Deal[]
+  products             Product[]
 
   @@index([clientId])
   @@index([decisionMakerContactId])
@@ -527,18 +567,18 @@ model ProjectObject {
 }
 
 model Lead {
-  id                    String     @id @default(uuid()) @db.Uuid
+  id                    String     @id @default(uuid()) 
   title                 String
   status                LeadStatus @default(NEW)
   source                String
-  ownerId               String     @db.Uuid
-  clientId              String?    @db.Uuid
-  contactId             String?    @db.Uuid
-  dealId                String?    @unique @db.Uuid
-  needDescription       String?    @db.Text
-  estimatedAmount       Decimal?   @db.Decimal(14, 2)
+  ownerId               String     
+  clientId              String?    
+  contactId             String?    
+  dealId                String?    @unique 
+  needDescription       String?    
+  estimatedAmount       Decimal?   
   targetDate            DateTime?
-  projectObjectId       String?    @db.Uuid
+  projectObjectId       String?    
   decisionMakerContact  String?
   unqualificationReason String?
   deletedAt             DateTime?
@@ -551,8 +591,12 @@ model Lead {
   deal              Deal?                   @relation("LeadConvertedDeal", fields: [dealId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   projectObject     ProjectObject?          @relation(fields: [projectObjectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   assignmentHistory LeadAssignmentHistory[]
+  calculationSessions CalculationSession[]
+  panelQuotes           PanelQuote[]
+  telegramLeadMetadata  TelegramLeadMetadata?
 
   @@index([ownerId])
+  @@index([ownerId, status, createdAt])
   @@index([clientId])
   @@index([contactId])
   @@index([status])
@@ -560,14 +604,15 @@ model Lead {
   @@index([targetDate])
   @@index([projectObjectId])
   @@index([deletedAt])
+  @@index([createdAt])
 }
 
 model LeadAssignmentHistory {
-  id              String   @id @default(uuid()) @db.Uuid
-  leadId          String   @db.Uuid
-  previousOwnerId String?  @db.Uuid
-  newOwnerId      String   @db.Uuid
-  assignedById    String   @db.Uuid
+  id              String   @id @default(uuid()) 
+  leadId          String   
+  previousOwnerId String?  
+  newOwnerId      String   
+  assignedById    String   
   createdAt       DateTime @default(now())
 
   lead          Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -583,22 +628,22 @@ model LeadAssignmentHistory {
 }
 
 model Task {
-  id              String             @id @default(uuid()) @db.Uuid
+  id              String             @id @default(uuid()) 
   title           String
-  description     String?            @db.Text
+  description     String?            
   type            TaskType
   status          TaskStatus         @default(PENDING)
   priority        TaskPriority       @default(MEDIUM)
   computedStatus  TaskComputedStatus @default(ON_TIME)
   dueDate         DateTime
   originalDueDate DateTime
-  result          String?            @db.Text
+  result          String?            
   completedAt     DateTime?
   rescheduleCount Int                @default(0)
-  assigneeId      String             @db.Uuid
-  createdById     String             @db.Uuid
+  assigneeId      String             
+  createdById     String             
   relatedType     String
-  relatedId       String             @db.Uuid
+  relatedId       String             
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
@@ -609,19 +654,21 @@ model Task {
 
   @@index([relatedType, relatedId])
   @@index([assigneeId, dueDate])
+  @@index([assigneeId, computedStatus, dueDate])
   @@index([createdById])
   @@index([status])
   @@index([computedStatus])
   @@index([dueDate])
+  @@index([completedAt])
 }
 
 model TaskRescheduleHistory {
-  id         String   @id @default(uuid()) @db.Uuid
-  taskId     String   @db.Uuid
+  id         String   @id @default(uuid()) 
+  taskId     String   
   oldDueDate DateTime
   newDueDate DateTime
-  reason     String   @db.Text
-  authorId   String   @db.Uuid
+  reason     String   
+  authorId   String   
   createdAt  DateTime @default(now())
 
   task   Task @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -633,14 +680,14 @@ model TaskRescheduleHistory {
 }
 
 model Notification {
-  id          String    @id @default(uuid()) @db.Uuid
-  userId      String    @db.Uuid
-  taskId      String?   @db.Uuid
+  id          String    @id @default(uuid()) 
+  userId      String    
+  taskId      String?   
   title       String
-  message     String?   @db.Text
+  message     String?   
   type        String
   relatedType String?
-  relatedId   String?   @db.Uuid
+  relatedId   String?   
   isRead      Boolean   @default(false)
   readAt      DateTime?
   createdAt   DateTime  @default(now())
@@ -657,55 +704,63 @@ model Notification {
 }
 
 model Deal {
-  id                String    @id @default(uuid()) @db.Uuid
+  id                String    @id @default(uuid()) 
   title             String
   stage             DealStage @default(QUALIFICATION)
-  clientId          String    @db.Uuid
-  projectObjectId   String?   @db.Uuid
-  ownerId           String    @db.Uuid
-  totalAmount       Decimal   @default(0) @db.Decimal(14, 2)
+  clientId          String    
+  projectObjectId   String?   
+  ownerId           String    
+  totalAmount       Decimal   @default(0) 
   currency          String    @default("RUB")
-  discountAmount    Decimal   @default(0) @db.Decimal(14, 2)
+  discountAmount    Decimal   @default(0) 
   probability       Int       @default(0)
   expectedCloseDate DateTime?
   nextActionAt      DateTime?
-  margin            Decimal   @default(0) @db.Decimal(14, 2)
+  margin            Decimal   @default(0) 
   lossReason        String?
   competitorName    String?
-  comment           String?   @db.Text
+  comment           String?   
   result            String?
   deletedAt         DateTime?
+  supplierId        String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
   client            Client             @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   projectObject     ProjectObject?     @relation(fields: [projectObjectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   owner             User               @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  supplier          Supplier?          @relation(fields: [supplierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   convertedFromLead Lead?              @relation("LeadConvertedDeal")
   items             DealItem[]
   offers            DealOffer[]
   order             Order?
   stageHistory      DealStageHistory[]
+  panelQuotes       PanelQuote[]
+  supplierOrder     SupplierOrder?
 
   @@index([clientId])
   @@index([projectObjectId])
   @@index([ownerId])
+  @@index([ownerId, stage, createdAt])
   @@index([stage])
   @@index([expectedCloseDate])
   @@index([nextActionAt])
   @@index([deletedAt])
+  @@index([createdAt])
+  @@index([supplierId])
 }
 
 model DealItem {
-  id                    String   @id @default(uuid()) @db.Uuid
-  dealId                String   @db.Uuid
-  productId             String   @db.Uuid
+  id                    String   @id @default(uuid()) 
+  dealId                String   
+  productId             String   
   quantitySheets        Float
   quantityM2            Float
-  unitPrice             Decimal  @db.Decimal(14, 2)
-  discount              Decimal  @default(0) @db.Decimal(14, 2)
-  totalPrice            Decimal  @db.Decimal(14, 2)
-  purchasePriceSnapshot Decimal? @db.Decimal(14, 2)
+  unitPrice             Decimal  
+  discount              Decimal  @default(0) 
+  totalPrice            Decimal  
+  purchasePriceSnapshot Decimal? 
+  source                OrderItemSource @default(SKU)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
@@ -717,14 +772,14 @@ model DealItem {
 }
 
 model DealOffer {
-  id         String    @id @default(uuid()) @db.Uuid
-  dealId     String    @db.Uuid
+  id         String    @id @default(uuid()) 
+  dealId     String    
   version    Int       @default(1)
   number     String?
-  amount     Decimal?  @db.Decimal(14, 2)
-  pdfFileId  String?   @db.Uuid
+  amount     Decimal?  
+  pdfFileId  String?   
   validUntil DateTime?
-  feedback   String?   @db.Text
+  feedback   String?   
   isApproved Boolean   @default(false)
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
@@ -739,14 +794,14 @@ model DealOffer {
 }
 
 model DealStageHistory {
-  id           String     @id @default(uuid()) @db.Uuid
-  dealId       String     @db.Uuid
+  id           String     @id @default(uuid()) 
+  dealId       String     
   oldStage     DealStage?
   newStage     DealStage
-  changedById  String     @db.Uuid
+  changedById  String     
   isException  Boolean    @default(false)
-  approvedById String?    @db.Uuid
-  reason       String?    @db.Text
+  approvedById String?    
+  reason       String?    
   createdAt    DateTime   @default(now())
 
   deal       Deal  @relation(fields: [dealId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -761,12 +816,13 @@ model DealStageHistory {
 }
 
 model StockBalance {
-  id        String   @id @default(uuid()) @db.Uuid
-  productId String   @unique @db.Uuid
+  id        String   @id @default(uuid()) 
+  productId String   @unique 
   onHand    Float    @default(0)
   reserved  Float    @default(0)
   available Float    @default(0)
-  updatedBy String?  @db.Uuid
+  updatedBy String?  
+  version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -776,12 +832,12 @@ model StockBalance {
 }
 
 model StockAdjustment {
-  id          String              @id @default(uuid()) @db.Uuid
-  productId   String              @db.Uuid
+  id          String              @id @default(uuid()) 
+  productId   String              
   quantity    Float
   type        StockAdjustmentType
   reason      String
-  createdById String              @db.Uuid
+  createdById String              
   createdAt   DateTime            @default(now())
 
   product   Product @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
@@ -794,9 +850,9 @@ model StockAdjustment {
 }
 
 model StockReservation {
-  id        String                 @id @default(uuid()) @db.Uuid
-  productId String                 @db.Uuid
-  orderId   String                 @db.Uuid
+  id        String                 @id @default(uuid()) 
+  productId String                 
+  orderId   String                 
   quantity  Float
   status    StockReservationStatus @default(ACTIVE)
   expiresAt DateTime?
@@ -808,16 +864,18 @@ model StockReservation {
 
   @@index([productId])
   @@index([orderId])
+  @@index([orderId, status])
   @@index([status])
+  @@index([status, expiresAt])
   @@index([expiresAt])
 }
 
 model ExpectedReceipt {
-  id           String                @id @default(uuid()) @db.Uuid
-  supplierId   String?               @db.Uuid
+  id           String                @id @default(uuid()) 
+  supplierId   String?               
   expectedDate DateTime
   status       ExpectedReceiptStatus @default(PENDING)
-  comment      String?               @db.Text
+  comment      String?               
   createdAt    DateTime              @default(now())
   updatedAt    DateTime              @updatedAt
 
@@ -830,9 +888,9 @@ model ExpectedReceipt {
 }
 
 model ExpectedReceiptItem {
-  id                String   @id @default(uuid()) @db.Uuid
-  expectedReceiptId String   @db.Uuid
-  productId         String   @db.Uuid
+  id                String   @id @default(uuid()) 
+  expectedReceiptId String   
+  productId         String   
   quantity          Float
   receivedQuantity  Float    @default(0)
   createdAt         DateTime @default(now())
@@ -846,18 +904,19 @@ model ExpectedReceiptItem {
 }
 
 model Order {
-  id              String        @id @default(uuid()) @db.Uuid
+  id              String        @id @default(uuid()) 
   orderNumber     String        @unique
-  dealId          String        @unique @db.Uuid
+  dealId          String        @unique 
   status          OrderStatus   @default(DRAFT)
   paymentStatus   PaymentStatus @default(UNPAID)
-  totalAmount     Decimal       @db.Decimal(14, 2)
-  paidAmount      Decimal       @default(0) @db.Decimal(14, 2)
-  remainingAmount Decimal       @db.Decimal(14, 2)
-  paymentTerms    String?       @db.Text
+  totalAmount     Decimal       
+  paidAmount      Decimal       @default(0) 
+  remainingAmount Decimal       
+  paymentTerms    String?       
   promisedDate    DateTime?
   deliveryAddress String?
   deletedAt       DateTime?
+  version         Int           @default(0)
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
 
@@ -869,20 +928,22 @@ model Order {
 
   @@index([dealId])
   @@index([status])
+  @@index([status, createdAt])
   @@index([paymentStatus])
   @@index([promisedDate])
   @@index([deletedAt])
 }
 
 model OrderItem {
-  id                String   @id @default(uuid()) @db.Uuid
-  orderId           String   @db.Uuid
-  productId         String   @db.Uuid
+  id                String   @id @default(uuid()) 
+  orderId           String   
+  productId         String   
   quantity          Float
   reservedQuantity  Float    @default(0)
   deliveredQuantity Float    @default(0)
-  unitPrice         Decimal  @db.Decimal(14, 2)
-  totalPrice        Decimal  @db.Decimal(14, 2)
+  unitPrice         Decimal  
+  totalPrice        Decimal  
+  source            OrderItemSource @default(SKU)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -895,16 +956,16 @@ model OrderItem {
 }
 
 model Payment {
-  id          String              @id @default(uuid()) @db.Uuid
-  orderId     String              @db.Uuid
-  amount      Decimal             @db.Decimal(14, 2)
+  id          String              @id @default(uuid()) 
+  orderId     String              
+  amount      Decimal             
   currency    String              @default("RUB")
   plannedDate DateTime?
   paymentDate DateTime?
   status      PaymentRecordStatus @default(PENDING)
-  comment     String?             @db.Text
-  fileId      String?             @db.Uuid
-  createdById String              @db.Uuid
+  comment     String?             
+  fileId      String?             
+  createdById String              
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
@@ -921,14 +982,14 @@ model Payment {
 }
 
 model Delivery {
-  id             String         @id @default(uuid()) @db.Uuid
-  orderId        String         @db.Uuid
+  id             String         @id @default(uuid()) 
+  orderId        String         
   deliveryDate   DateTime
   recipient      String?
   status         DeliveryStatus @default(PLANNED)
   trackingNumber String?
-  comment        String?        @db.Text
-  fileId         String?        @db.Uuid
+  comment        String?        
+  fileId         String?        
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -943,9 +1004,9 @@ model Delivery {
 }
 
 model DeliveryItem {
-  id          String   @id @default(uuid()) @db.Uuid
-  deliveryId  String   @db.Uuid
-  orderItemId String   @db.Uuid
+  id          String   @id @default(uuid()) 
+  deliveryId  String   
+  orderItemId String   
   quantity    Float
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -958,12 +1019,12 @@ model DeliveryItem {
 }
 
 model Activity {
-  id          String       @id @default(uuid()) @db.Uuid
-  authorId    String       @db.Uuid
+  id          String       @id @default(uuid()) 
+  authorId    String       
   relatedType String
-  relatedId   String       @db.Uuid
+  relatedId   String       
   type        ActivityType
-  content     String?      @db.Text
+  content     String?      
   metadata    Json?
   createdAt   DateTime     @default(now())
 
@@ -976,11 +1037,11 @@ model Activity {
 }
 
 model AuditLog {
-  id         String   @id @default(uuid()) @db.Uuid
-  userId     String?  @db.Uuid
+  id         String   @id @default(uuid()) 
+  userId     String?  
   action     String
   entityType String
-  entityId   String   @db.Uuid
+  entityId   String   
   oldValue   Json?
   newValue   Json?
   ipAddress  String?
@@ -996,11 +1057,11 @@ model AuditLog {
 }
 
 model SalesPlan {
-  id           String   @id @default(uuid()) @db.Uuid
-  userId       String   @db.Uuid
+  id           String   @id @default(uuid()) 
+  userId       String   
   period       DateTime
-  targetAmount Decimal  @db.Decimal(14, 2)
-  actualAmount Decimal  @default(0) @db.Decimal(14, 2)
+  targetAmount Decimal  
+  actualAmount Decimal  @default(0) 
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -1011,8 +1072,8 @@ model SalesPlan {
 }
 
 model LeadPlan {
-  id          String   @id @default(uuid()) @db.Uuid
-  userId      String   @db.Uuid
+  id          String   @id @default(uuid()) 
+  userId      String   
   period      DateTime
   targetCount Int
   actualCount Int      @default(0)
@@ -1026,7 +1087,7 @@ model LeadPlan {
 }
 
 model KpiSetting {
-  id                   String   @id @default(uuid()) @db.Uuid
+  id                   String   @id @default(uuid()) 
   period               DateTime
   salesPlanWeight      Int      @default(40)
   qualifiedLeadsWeight Int      @default(15)
@@ -1038,4 +1099,279 @@ model KpiSetting {
   updatedAt            DateTime @updatedAt
 
   @@unique([period])
+}
+
+// === P0 Infrastructure ===
+
+model ServiceAccount {
+  id          String    @id @default(uuid())
+  name        String    @unique
+  tokenHash   String    @unique
+  permissions Json
+  isActive    Boolean   @default(true)
+  lastUsedAt  DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([tokenHash])
+  @@index([isActive])
+}
+
+model InboundWebhookEvent {
+  id            String    @id @default(uuid())
+  source        String
+  externalId    String
+  payloadHash   String
+  payload       Json?
+  attempts      Int       @default(0)
+  lastAttemptAt DateTime?
+  processedAt   DateTime?
+  error         String?
+  createdAt     DateTime  @default(now())
+
+  @@unique([source, externalId])
+  @@index([processedAt])
+  @@index([processedAt, createdAt])
+}
+
+model TelegramLeadMetadata {
+  id                  String    @id @default(uuid())
+  leadId              String    @unique
+  telegramUserId      String
+  telegramUsername    String?
+  rawPayload          Json
+  isPendingAssignment Boolean   @default(true)
+  assignedAt          DateTime?
+  escalatedAt         DateTime?
+  adminMessageId      String?
+  adminChatId         String?
+  createdAt           DateTime  @default(now())
+
+  lead Lead @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([telegramUserId])
+  @@index([isPendingAssignment])
+}
+
+// === Panel Domain ===
+
+model PanelType {
+  id            String   @id @default(uuid())
+  code          String   @unique
+  displayNameRu String
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  qualityMappings SupplierQualityMapping[]
+  calculationLineItems CalculationLineItem[]
+}
+
+model PanelSize {
+  id          String  @id @default(uuid())
+  widthMm     Int
+  heightMm    Int
+  areaM2      Decimal @db.Decimal(10, 4)
+  displayName String
+  sortOrder   Int     @default(0)
+  isActive    Boolean @default(true)
+
+  calculationLineItems CalculationLineItem[]
+
+  @@unique([widthMm, heightMm])
+}
+
+model PanelThicknessPricing {
+  id             String    @id @default(uuid())
+  supplierId     String
+  qualityClassId String
+  thicknessMm    Int
+  basePricePerM2 Decimal   @db.Decimal(12, 2)
+  currencyCode   String    @default("UZS")
+  validFrom      DateTime  @default(now())
+  validTo        DateTime?
+  isActive       Boolean   @default(true)
+
+  supplier     Supplier     @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  qualityClass QualityClass @relation(fields: [qualityClassId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([supplierId, qualityClassId, thicknessMm, isActive, validFrom])
+  @@index([supplierId, qualityClassId])
+}
+
+model QualityClass {
+  id     String @id @default(uuid())
+  code   String @unique
+  nameRu String
+
+  supplierMappings  SupplierQualityMapping[]
+  calculationLineItems CalculationLineItem[]
+  thicknessPricings PanelThicknessPricing[]
+}
+
+model SupplierQualityMapping {
+  id             String  @id @default(uuid())
+  supplierId     String
+  panelTypeId    String
+  qualityClassId String
+  isDefault      Boolean @default(false)
+
+  supplier     Supplier     @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  panelType    PanelType    @relation(fields: [panelTypeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  qualityClass QualityClass @relation(fields: [qualityClassId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([supplierId, panelTypeId, qualityClassId])
+  @@index([supplierId])
+  @@index([panelTypeId])
+  @@index([qualityClassId])
+}
+
+model PanelColor {
+  id                 String   @id @default(uuid())
+  supplierId         String
+  colorCode          String
+  colorName          String
+  createdByManagerId String
+  createdAt          DateTime @default(now())
+
+  supplier             Supplier              @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  calculationLineItems CalculationLineItem[]
+
+  @@unique([supplierId, colorCode])
+  @@index([supplierId])
+}
+
+model SupplierOrder {
+  id              String              @id @default(uuid())
+  dealId          String              @unique
+  supplierId      String
+  status          SupplierOrderStatus @default(DRAFT)
+  estimatedDate   DateTime?
+  deliveryAddress String?
+  deliveryCost    Decimal?            @db.Decimal(10, 2)
+  trackingNumber  String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  deal     Deal     @relation(fields: [dealId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([supplierId])
+  @@index([status])
+}
+
+// === Calculation Domain (P1) ===
+
+model CalculationSession {
+  id              String    @id @default(uuid())
+  leadId          String
+  dealId          String?
+  clientId        String?
+  projectObjectId String?
+  createdById     String
+  status          String    @default("draft")
+  totalAmount     Decimal?  @db.Decimal(12, 2)
+  displayCurrency String    @default("UZS")
+  notes           String?
+  deletedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  lead      Lead                  @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdBy User                  @relation("CalculationCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  items     CalculationLineItem[]
+  panelQuote PanelQuote?
+
+  @@index([leadId, status])
+  @@index([createdById])
+  @@index([status, createdAt])
+  @@index([deletedAt])
+}
+
+model CalculationLineItem {
+  id             String   @id @default(uuid())
+  calculationId  String
+  sortOrder      Int      @default(0)
+  panelTypeId    String
+  panelSizeId    String
+  thicknessMm    Int
+  supplierId     String
+  qualityClassId String
+  colorId        String?
+  requiredAreaM2     Decimal  @db.Decimal(10, 4)
+  sheetsCount        Int
+  supplierPricePerM2 Decimal  @db.Decimal(12, 2)
+  clientPricePerM2   Decimal  @db.Decimal(12, 2)
+  pricePerM2         Decimal  @db.Decimal(12, 2)
+  pricePerSheet      Decimal  @db.Decimal(12, 2)
+  totalPrice         Decimal  @db.Decimal(12, 2)
+  wastePercent   Decimal  @db.Decimal(5, 2)
+  createdAt      DateTime @default(now())
+
+  calculation  CalculationSession @relation(fields: [calculationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  panelType    PanelType          @relation(fields: [panelTypeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  panelSize    PanelSize          @relation(fields: [panelSizeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  supplier     Supplier           @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  qualityClass QualityClass       @relation(fields: [qualityClassId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  color        PanelColor?        @relation(fields: [colorId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([calculationId, sortOrder])
+}
+
+// === Panel Quote Domain (P2) ===
+
+model PanelQuote {
+  id              String   @id @default(uuid())
+  calculationId   String   @unique
+  leadId          String
+  managerId       String
+  dealId          String?
+  status          String   @default("draft")
+  totalAmount     Decimal  @db.Decimal(12, 2)
+  displayCurrency String   @default("UZS")
+  deliveryCost    Decimal? @db.Decimal(10, 2)
+  clientComment   String?
+  rejectionReason String?
+  validUntil      DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  calculation CalculationSession @relation(fields: [calculationId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  lead        Lead               @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  manager     User               @relation("QuoteManager", fields: [managerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  deal        Deal?              @relation(fields: [dealId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  items       PanelQuoteItem[]
+
+  @@index([leadId, status])
+  @@index([managerId])
+  @@index([status, createdAt])
+}
+
+model PanelQuoteItem {
+  id               String   @id @default(uuid())
+  quoteId          String
+  panelTypeCode    String
+  panelTypeName    String
+  panelSizeName    String
+  areaM2           Decimal  @db.Decimal(10, 4)
+  thicknessMm      Int
+  supplierCode     String
+  supplierName     String
+  qualityClassCode String
+  qualityClassName String
+  colorCode        String?
+  colorName        String?
+  requiredAreaM2   Decimal  @db.Decimal(10, 4)
+  sheetsCount        Int
+  supplierPricePerM2 Decimal  @db.Decimal(12, 2)
+  pricePerM2         Decimal  @db.Decimal(12, 2)
+  pricePerSheet      Decimal  @db.Decimal(12, 2)
+  totalPrice       Decimal  @db.Decimal(12, 2)
+  wastePercent     Decimal  @db.Decimal(5, 2)
+  sortOrder        Int      @default(0)
+  createdAt        DateTime @default(now())
+
+  quote PanelQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([quoteId, sortOrder])
 }

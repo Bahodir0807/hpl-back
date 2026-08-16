@@ -1,9 +1,12 @@
 import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
+  ActivityType,
   DealStage,
   Lead,
   LeadStatus,
@@ -14,6 +17,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { AssignLeadDto } from './dto/assign-lead.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
+import { CreateLeadNoteDto } from './dto/create-lead-note.dto';
 import { DisqualifyLeadDto } from './dto/disqualify-lead.dto';
 import { FilterLeadDto } from './dto/filter-lead.dto';
 import { QualifyLeadDto } from './dto/qualify-lead.dto';
@@ -22,8 +26,22 @@ import { UpdateLeadDto } from './dto/update-lead.dto';
 const FIRST_CONTACT_SLA_MS = 2 * 60 * 60 * 1000;
 const READ_ALL_LEADS_PERMISSION = 'leads:read_all';
 
+const leadRelationsInclude = Prisma.validator<Prisma.LeadInclude>()({
+  owner: {
+    select: { id: true, firstName: true, lastName: true, email: true },
+  },
+  client: { select: { id: true, name: true } },
+  projectObject: { select: { id: true, name: true } },
+  contact: { select: { id: true, firstName: true, lastName: true } },
+  deal: { select: { id: true, title: true } },
+});
+
+type LeadWithRelations = Prisma.LeadGetPayload<{
+  include: typeof leadRelationsInclude;
+}>;
+
 type LeadListResult = {
-  items: Lead[];
+  items: LeadWithRelations[];
   total: number;
   page: number;
   limit: number;
@@ -42,7 +60,7 @@ type QualificationData = {
 export class LeadsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateLeadDto, currentUserId: string): Promise<Lead> {
+  async create(dto: CreateLeadDto, currentUserId: string): Promise<LeadWithRelations> {
     const ownerId = dto.ownerId ?? currentUserId;
     const now = new Date();
     const dueDate = new Date(now.getTime() + FIRST_CONTACT_SLA_MS);
@@ -61,6 +79,7 @@ export class LeadsService {
           projectObjectId: dto.projectObjectId,
           decisionMakerContact: dto.decisionMakerContact,
         },
+        include: leadRelationsInclude,
       });
 
       await tx.task.create({
@@ -93,6 +112,7 @@ export class LeadsService {
     const [items, total] = await this.prisma.$transaction([
       this.prisma.lead.findMany({
         where,
+        include: leadRelationsInclude,
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
@@ -103,15 +123,11 @@ export class LeadsService {
     return { items, total, page, limit };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, currentUserId: string, permissions: string[]) {
     const lead = await this.prisma.lead.findFirst({
       where: { id, deletedAt: null },
       include: {
-        owner: true,
-        client: true,
-        projectObject: true,
-        contact: true,
-        deal: true,
+        ...leadRelationsInclude,
         assignmentHistory: {
           include: {
             previousOwner: true,
@@ -127,18 +143,110 @@ export class LeadsService {
       throw new NotFoundException('Lead not found');
     }
 
+    this.assertLeadAccess(lead, currentUserId, permissions);
+
     return lead;
   }
 
-  async update(id: string, dto: UpdateLeadDto): Promise<Lead> {
-    await this.ensureLeadExists(id);
+  async createCall(
+    id: string,
+    currentUserId: string,
+    permissions: string[],
+  ): Promise<{ dialUri: string; activityId: string }> {
+    const lead = await this.prisma.lead.findFirst({
+      where: { id, deletedAt: null },
+      include: {
+        contact: { select: { phone: true } },
+        client: {
+          include: {
+            contacts: {
+              orderBy: [{ isPrimary: 'desc' }, { createdAt: 'asc' }],
+              take: 1,
+            },
+          },
+        },
+      },
+    });
+
+    if (!lead) {
+      throw new NotFoundException('Lead not found');
+    }
+
+    this.assertLeadAccess(lead, currentUserId, permissions);
+
+    const phone =
+      lead.client?.contacts[0]?.phone ??
+      lead.contact?.phone ??
+      lead.client?.phone;
+
+    if (!phone) {
+      throw new BadRequestException('Lead has no phone number');
+    }
+
+    const dialUri = `tel:${phone}`;
+    const activity = await this.prisma.activity.create({
+      data: {
+        type: ActivityType.CALL,
+        relatedType: 'Lead',
+        relatedId: lead.id,
+        authorId: currentUserId,
+        content: `Исходящий звонок: ${phone}`,
+        metadata: {
+          action: 'outbound_call',
+          phone,
+          dialUri,
+        },
+      },
+    });
+
+    return { dialUri, activityId: activity.id };
+  }
+
+  async createNote(
+    id: string,
+    dto: CreateLeadNoteDto,
+    currentUserId: string,
+    permissions: string[],
+  ) {
+    const lead = await this.ensureLeadExists(id);
+    this.assertLeadAccess(lead, currentUserId, permissions);
+
+    return this.prisma.activity.create({
+      data: {
+        type: ActivityType.NOTE,
+        relatedType: 'Lead',
+        relatedId: lead.id,
+        authorId: currentUserId,
+        content: dto.note,
+        metadata: { action: 'manual_note' },
+      },
+    });
+  }
+
+  async update(
+    id: string,
+    dto: UpdateLeadDto,
+    currentUserId: string,
+    permissions: string[],
+  ): Promise<LeadWithRelations> {
+    const existingLead = await this.ensureLeadExists(id);
+    this.assertLeadAccess(existingLead, currentUserId, permissions);
+
+    if (dto.ownerId && dto.ownerId !== existingLead.ownerId) {
+      if (!permissions.includes('leads:assign')) {
+        throw new ForbiddenException(
+          'leads:assign is required to change lead owner',
+        );
+      }
+
+      await this.assign(id, { newOwnerId: dto.ownerId }, currentUserId);
+    }
 
     return this.prisma.lead.update({
       where: { id },
       data: {
         title: dto.title,
         source: dto.source,
-        ownerId: dto.ownerId,
         clientId: dto.clientId,
         contactId: dto.contactId,
         needDescription: dto.needDescription,
@@ -147,6 +255,7 @@ export class LeadsService {
         projectObjectId: dto.projectObjectId,
         decisionMakerContact: dto.decisionMakerContact,
       },
+      include: leadRelationsInclude,
     });
   }
 
@@ -154,8 +263,15 @@ export class LeadsService {
     id: string,
     dto: QualifyLeadDto,
     currentUserId: string,
-  ): Promise<Lead> {
+    permissions: string[],
+  ): Promise<LeadWithRelations> {
     const lead = await this.ensureLeadExists(id);
+    this.assertLeadAccess(lead, currentUserId, permissions);
+
+    if (lead.status === LeadStatus.CONVERTED || lead.dealId !== null) {
+      throw new ConflictException('Lead already converted to deal');
+    }
+
     const qualificationData: QualificationData = {
       clientId: dto.clientId,
       projectObjectId: dto.projectObjectId,
@@ -197,8 +313,15 @@ export class LeadsService {
         },
       });
 
-      return tx.lead.update({
-        where: { id },
+      // Атомарный захват лида: параллельный qualify не создаст вторую
+      // сделку-сироту — проигравшая транзакция получит count = 0 и откатится
+      const claimed = await tx.lead.updateMany({
+        where: {
+          id,
+          deletedAt: null,
+          dealId: null,
+          status: { not: LeadStatus.CONVERTED },
+        },
         data: {
           clientId: dto.clientId,
           projectObjectId: dto.projectObjectId,
@@ -210,17 +333,38 @@ export class LeadsService {
           dealId: deal.id,
         },
       });
+
+      if (claimed.count === 0) {
+        throw new ConflictException('Lead already converted to deal');
+      }
+
+      const convertedLead = await tx.lead.findUnique({
+        where: { id },
+        include: leadRelationsInclude,
+      });
+
+      if (!convertedLead) {
+        throw new NotFoundException('Lead not found');
+      }
+
+      return convertedLead;
     });
   }
 
-  async disqualify(id: string, dto: DisqualifyLeadDto): Promise<Lead> {
+  async disqualify(
+    id: string,
+    dto: DisqualifyLeadDto,
+    currentUserId: string,
+    permissions: string[],
+  ): Promise<LeadWithRelations> {
     const reason = dto.reason.trim();
 
     if (!reason) {
       throw new BadRequestException('unqualificationReason is required');
     }
 
-    await this.ensureLeadExists(id);
+    const existingLead = await this.ensureLeadExists(id);
+    this.assertLeadAccess(existingLead, currentUserId, permissions);
 
     return this.prisma.lead.update({
       where: { id },
@@ -228,6 +372,7 @@ export class LeadsService {
         status: LeadStatus.UNQUALIFIED,
         unqualificationReason: reason,
       },
+      include: leadRelationsInclude,
     });
   }
 
@@ -235,17 +380,21 @@ export class LeadsService {
     id: string,
     dto: AssignLeadDto,
     currentUserId: string,
-  ): Promise<Lead> {
+  ): Promise<LeadWithRelations> {
     const lead = await this.ensureLeadExists(id);
 
     if (lead.ownerId === dto.newOwnerId) {
-      return lead;
+      return this.prisma.lead.findUniqueOrThrow({
+        where: { id },
+        include: leadRelationsInclude,
+      });
     }
 
     return this.prisma.$transaction(async (tx) => {
       const updatedLead = await tx.lead.update({
         where: { id },
         data: { ownerId: dto.newOwnerId },
+        include: leadRelationsInclude,
       });
 
       await tx.leadAssignmentHistory.create({
@@ -261,8 +410,13 @@ export class LeadsService {
     });
   }
 
-  async softDelete(id: string): Promise<Lead> {
-    await this.ensureLeadExists(id);
+  async softDelete(
+    id: string,
+    currentUserId: string,
+    permissions: string[],
+  ): Promise<Lead> {
+    const existingLead = await this.ensureLeadExists(id);
+    this.assertLeadAccess(existingLead, currentUserId, permissions);
 
     return this.prisma.lead.update({
       where: { id },
@@ -281,22 +435,19 @@ export class LeadsService {
       deletedAt: null,
       status: filterDto.status,
       source: filterDto.source,
-      ownerId: canReadAllLeads
-        ? filterDto.ownerId
-        : (filterDto.ownerId ?? currentUserId),
+      ownerId: canReadAllLeads ? filterDto.ownerId : currentUserId,
       OR: filterDto.search
         ? [
-            { title: { contains: filterDto.search, mode: 'insensitive' } },
-            { source: { contains: filterDto.search, mode: 'insensitive' } },
+            { title: { contains: filterDto.search } },
+            { source: { contains: filterDto.search } },
             {
               needDescription: {
                 contains: filterDto.search,
-                mode: 'insensitive',
               },
             },
             {
               client: {
-                name: { contains: filterDto.search, mode: 'insensitive' },
+                name: { contains: filterDto.search },
               },
             },
           ]
@@ -337,6 +488,22 @@ export class LeadsService {
         missingFields,
       });
     }
+  }
+
+  private assertLeadAccess(
+    lead: Pick<Lead, 'ownerId'>,
+    currentUserId: string,
+    permissions: string[],
+  ): void {
+    if (permissions.includes(READ_ALL_LEADS_PERMISSION)) {
+      return;
+    }
+
+    if (lead.ownerId === currentUserId) {
+      return;
+    }
+
+    throw new ForbiddenException('Access to this lead is forbidden');
   }
 
   private async ensureLeadExists(id: string): Promise<Lead> {

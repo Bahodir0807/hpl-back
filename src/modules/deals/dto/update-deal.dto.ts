@@ -1,4 +1,7 @@
-import { PartialType } from '@nestjs/swagger';
+import { OmitType, PartialType } from '@nestjs/swagger';
 import { CreateDealDto } from './create-deal.dto';
 
-export class UpdateDealDto extends PartialType(CreateDealDto) {}
+// ownerId исключён: переназначение владельца сделки через update запрещено
+export class UpdateDealDto extends PartialType(
+  OmitType(CreateDealDto, ['ownerId'] as const),
+) {}

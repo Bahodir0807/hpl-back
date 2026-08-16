@@ -1,22 +1,21 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { AppController } from './app.controller';
-import { AppService } from './app.service';
 
 describe('AppController', () => {
-  let appController: AppController;
+  it('delegates health check to HealthCheckService with prisma ping', async () => {
+    const expected = {
+      status: 'ok',
+      details: { prisma: { status: 'up' } },
+    };
+    const health = { check: jest.fn().mockResolvedValue(expected) };
+    const prismaHealth = { pingCheck: jest.fn() };
+    const prisma = {};
+    const controller = new AppController(
+      health as never,
+      prismaHealth as never,
+      prisma as never,
+    );
 
-  beforeEach(async () => {
-    const app: TestingModule = await Test.createTestingModule({
-      controllers: [AppController],
-      providers: [AppService],
-    }).compile();
-
-    appController = app.get<AppController>(AppController);
-  });
-
-  describe('root', () => {
-    it('should return "Hello World!"', () => {
-      expect(appController.getHello()).toBe('Hello World!');
-    });
+    await expect(controller.check()).resolves.toEqual(expected);
+    expect(health.check).toHaveBeenCalledTimes(1);
   });
 });

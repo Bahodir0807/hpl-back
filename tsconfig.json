@@ -22,5 +22,8 @@
     "strictBindCallApply": false,
     "noFallthroughCasesInSwitch": false
   },
+  "ts-node": {
+    "files": true
+  },
   "exclude": ["node_modules", "dist"]
 }

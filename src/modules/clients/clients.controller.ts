@@ -69,8 +69,11 @@ export class ClientsController {
   @ApiOperation({ summary: 'Get client card with related records' })
   @ApiResponse({ status: 200, description: 'Client card returned' })
   @ApiResponse({ status: 404, description: 'Client not found' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.clientsService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.clientsService.findOne(id, user.id, user.permissions);
   }
 
   @Patch(':id')
@@ -78,8 +81,12 @@ export class ClientsController {
   @ApiOperation({ summary: 'Update client' })
   @ApiResponse({ status: 200, description: 'Client updated' })
   @ApiResponse({ status: 404, description: 'Client not found' })
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateClientDto) {
-    return this.clientsService.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateClientDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.clientsService.update(id, dto, user.id, user.permissions);
   }
 
   @Post(':id/contacts')
@@ -90,8 +97,9 @@ export class ClientsController {
   addContact(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CreateContactDto,
+    @CurrentUser() user: CurrentUserType,
   ) {
-    return this.clientsService.addContact(id, dto);
+    return this.clientsService.addContact(id, dto, user.id, user.permissions);
   }
 
   @Post(':id/objects')
@@ -102,8 +110,9 @@ export class ClientsController {
   addObject(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: CreateProjectObjectDto,
+    @CurrentUser() user: CurrentUserType,
   ) {
-    return this.clientsService.addObject(id, dto);
+    return this.clientsService.addObject(id, dto, user.id, user.permissions);
   }
 
   @Delete(':id')
@@ -111,7 +120,10 @@ export class ClientsController {
   @ApiOperation({ summary: 'Soft delete client' })
   @ApiResponse({ status: 200, description: 'Client soft deleted' })
   @ApiResponse({ status: 404, description: 'Client not found' })
-  softDelete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.clientsService.softDelete(id);
+  softDelete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.clientsService.softDelete(id, user.id, user.permissions);
   }
 }

@@ -4,11 +4,21 @@ import {
   Injectable,
   NestInterceptor,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { Observable, map } from 'rxjs';
 import { CurrentUser } from '../interfaces/current-user.interface';
 
 const PURCHASE_PRICE_PERMISSION = 'products:read_purchase_price';
+
+const COST_FIELDS = new Set([
+  'purchasePrice',
+  'purchasePriceSnapshot',
+  'margin',
+  'marginPercent',
+  'supplierPricePerM2',
+  'basePricePerM2',
+]);
 
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
@@ -36,10 +46,21 @@ export class PurchasePriceInterceptor implements NestInterceptor {
   }
 
   private sanitizeUnknown(value: unknown): unknown {
+    // P0-FIX: preserve Decimal/Date serialization
+    if (value instanceof Prisma.Decimal) {
+      return value;
+    }
+
+    if (value instanceof Date) {
+      return value;
+    }
+
+    if (Buffer.isBuffer(value)) {
+      return value;
+    }
+
     if (Array.isArray(value)) {
-      return value
-        .filter((item) => !this.isPurchasePriceObject(item))
-        .map((item) => this.sanitizeUnknown(item));
+      return value.map((item) => this.sanitizeUnknown(item));
     }
 
     if (!this.isJsonObject(value)) {
@@ -49,7 +70,7 @@ export class PurchasePriceInterceptor implements NestInterceptor {
     const sanitized: JsonObject = {};
 
     for (const [key, nestedValue] of Object.entries(value)) {
-      if (key === 'purchasePriceSnapshot' || key === 'margin') {
+      if (COST_FIELDS.has(key)) {
         continue;
       }
 
@@ -57,10 +78,6 @@ export class PurchasePriceInterceptor implements NestInterceptor {
     }
 
     return sanitized;
-  }
-
-  private isPurchasePriceObject(value: unknown): boolean {
-    return this.isJsonObject(value) && value.type === 'PURCHASE';
   }
 
   private isJsonObject(value: unknown): value is JsonObject {

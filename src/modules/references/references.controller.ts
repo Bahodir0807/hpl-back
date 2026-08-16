@@ -9,6 +9,7 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -18,6 +19,7 @@ import {
 } from '@nestjs/swagger';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { PurchasePriceInterceptor } from '../../common/interceptors/purchase-price.interceptor';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CreateBrandDto } from './dto/create-brand.dto';
 import { CreateProductCollectionDto } from './dto/create-product-collection.dto';
@@ -30,6 +32,7 @@ import { ReferencesService } from './references.service';
 @ApiTags('References')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseInterceptors(PurchasePriceInterceptor)
 @Controller('references')
 export class ReferencesController {
   constructor(private readonly referencesService: ReferencesService) {}

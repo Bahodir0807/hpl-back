@@ -67,6 +67,13 @@ export class ProductsController {
     return this.productsService.findAll(filterDto, user.permissions);
   }
 
+  @Get('facets')
+  @RequirePermissions('products:read')
+  @ApiOperation({ summary: 'Aggregated catalog facets for dynamic filters' })
+  getFacets() {
+    return this.productsService.getFacets();
+  }
+
   @Get(':id')
   @RequirePermissions('products:read')
   @ApiOperation({ summary: 'Get HPL product card' })

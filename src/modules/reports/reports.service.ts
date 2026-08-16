@@ -1,11 +1,15 @@
-import { Injectable } from '@nestjs/common';
+import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { Inject, Injectable } from '@nestjs/common';
 import {
   DealStage,
+  LeadPlan,
   LeadStatus,
   Prisma,
   RoleName,
+  SalesPlan,
   TaskStatus,
 } from '@prisma/client';
+import type { Cache } from 'cache-manager';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReportFilterDto } from './dto/report-filter.dto';
 
@@ -87,39 +91,58 @@ type ReportUser = {
   lastName: string;
 };
 
+type ManagerKpiInput = {
+  salesPlan: SalesPlan | undefined;
+  leadPlan: LeadPlan | undefined;
+  actualSales: number;
+  totalLeads: number;
+  qualifiedLeads: number;
+  convertedLeads: number;
+  completedTasks: number;
+  completedOnTimeTasks: number;
+  activityCount: number;
+};
+
 @Injectable()
 export class ReportsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(CACHE_MANAGER) private readonly cacheManager: Cache,
+  ) {}
 
   async getFunnel(filterDto: ReportFilterDto): Promise<FunnelReport> {
-    const range = this.buildDateRange(filterDto);
-    const baseWhere: Prisma.DealWhereInput = {
-      deletedAt: null,
-      ownerId: filterDto.managerId,
-      createdAt: range,
-    };
-
-    const stages = await Promise.all(
-      DEAL_STAGES.map(async (stage) => {
-        const where: Prisma.DealWhereInput = {
-          ...baseWhere,
-          stage,
-        };
-        const [count, aggregate] = await this.prisma.$transaction([
-          this.prisma.deal.count({ where }),
-          this.prisma.deal.aggregate({
-            where,
-            _sum: { totalAmount: true },
-          }),
-        ]);
-
-        return {
-          stage,
-          count,
-          amount: this.toNumber(aggregate._sum.totalAmount),
-        };
-      }),
+    return this.cached('funnel', filterDto, () =>
+      this.calculateFunnel(filterDto),
     );
+  }
+
+  // Один groupBy по stage вместо 2 запросов на каждую из 9 стадий
+  private async calculateFunnel(
+    filterDto: ReportFilterDto,
+  ): Promise<FunnelReport> {
+    const range = this.buildDateRange(filterDto);
+    const grouped = await this.prisma.deal.groupBy({
+      by: ['stage'],
+      where: {
+        deletedAt: null,
+        ownerId: filterDto.managerId,
+        createdAt: range,
+      },
+      orderBy: { stage: 'asc' },
+      _count: { id: true },
+      _sum: { totalAmount: true },
+    });
+
+    const byStage = new Map(grouped.map((row) => [row.stage, row]));
+    const stages = DEAL_STAGES.map((stage) => {
+      const row = byStage.get(stage);
+
+      return {
+        stage,
+        count: row?._count.id ?? 0,
+        amount: this.toNumber(row?._sum.totalAmount),
+      };
+    });
     const totalDeals = stages.reduce((sum, stage) => sum + stage.count, 0);
     const wonDeals =
       stages.find((stage) => stage.stage === DealStage.WON)?.count ?? 0;
@@ -143,6 +166,14 @@ export class ReportsService {
   }
 
   async getOverdues(filterDto: ReportFilterDto): Promise<OverduesReport> {
+    return this.cached('overdues', filterDto, () =>
+      this.calculateOverdues(filterDto),
+    );
+  }
+
+  private async calculateOverdues(
+    filterDto: ReportFilterDto,
+  ): Promise<OverduesReport> {
     const now = new Date();
     const criticalBefore = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const tasks = await this.prisma.task.findMany({
@@ -219,6 +250,11 @@ export class ReportsService {
   }
 
   async getKpi(filterDto: ReportFilterDto): Promise<KpiReport> {
+    return this.cached('kpi', filterDto, () => this.calculateKpi(filterDto));
+  }
+
+  // 9 запросов на всех менеджеров вместо 9 запросов на каждого
+  private async calculateKpi(filterDto: ReportFilterDto): Promise<KpiReport> {
     const range = this.buildDateRange(filterDto);
     const period = this.startOfMonth(range.gte);
     const users = await this.prisma.user.findMany({
@@ -240,8 +276,144 @@ export class ReportsService {
       },
       orderBy: [{ firstName: 'asc' }, { lastName: 'asc' }],
     });
-    const managers = await Promise.all(
-      users.map((user) => this.buildManagerKpi(user, range, period)),
+    const userIds = users.map((user) => user.id);
+
+    if (userIds.length === 0) {
+      return {
+        weights: {
+          salesPlan: 40,
+          qualifiedLeads: 15,
+          conversion: 15,
+          deadlineCompliance: 15,
+          crmDiscipline: 15,
+        },
+        managers: [],
+      };
+    }
+
+    const [
+      salesPlans,
+      leadPlans,
+      wonByOwner,
+      leadsTotalByOwner,
+      leadsQualifiedByOwner,
+      leadsConvertedByOwner,
+      completedTasks,
+      activityByAuthor,
+    ] = await Promise.all([
+      this.prisma.salesPlan.findMany({
+        where: { userId: { in: userIds }, period },
+      }),
+      this.prisma.leadPlan.findMany({
+        where: { userId: { in: userIds }, period },
+      }),
+      // Won-суммы — по факту перехода в WON внутри периода (DealStageHistory),
+      // а не по updatedAt, который триггерится любым редактированием сделки
+      this.prisma.deal.groupBy({
+        by: ['ownerId'],
+        where: {
+          deletedAt: null,
+          stageHistory: {
+            some: { newStage: DealStage.WON, createdAt: range },
+          },
+        },
+        orderBy: { ownerId: 'asc' },
+        _sum: { totalAmount: true },
+      }),
+      this.prisma.lead.groupBy({
+        by: ['ownerId'],
+        where: { deletedAt: null, createdAt: range },
+        orderBy: { ownerId: 'asc' },
+        _count: { id: true },
+      }),
+      this.prisma.lead.groupBy({
+        by: ['ownerId'],
+        where: {
+          deletedAt: null,
+          status: { in: [LeadStatus.QUALIFIED, LeadStatus.CONVERTED] },
+          updatedAt: range,
+        },
+        orderBy: { ownerId: 'asc' },
+        _count: { id: true },
+      }),
+      this.prisma.lead.groupBy({
+        by: ['ownerId'],
+        where: {
+          deletedAt: null,
+          status: LeadStatus.CONVERTED,
+          updatedAt: range,
+        },
+        orderBy: { ownerId: 'asc' },
+        _count: { id: true },
+      }),
+      // Prisma не умеет сравнивать колонки между собой (completedAt <= dueDate),
+      // поэтому on-time считаем в памяти по одной выборке
+      this.prisma.task.findMany({
+        where: {
+          assigneeId: { in: userIds },
+          status: TaskStatus.COMPLETED,
+          completedAt: range,
+        },
+        select: { assigneeId: true, completedAt: true, dueDate: true },
+      }),
+      this.prisma.activity.groupBy({
+        by: ['authorId'],
+        where: { authorId: { in: userIds }, createdAt: range },
+        orderBy: { authorId: 'asc' },
+        _count: { id: true },
+      }),
+    ]);
+
+    const salesPlanMap = new Map(salesPlans.map((plan) => [plan.userId, plan]));
+    const leadPlanMap = new Map(leadPlans.map((plan) => [plan.userId, plan]));
+    const wonMap = new Map(
+      wonByOwner.map((row) => [
+        row.ownerId,
+        this.toNumber(row._sum.totalAmount),
+      ]),
+    );
+    const totalLeadsMap = new Map(
+      leadsTotalByOwner.map((row) => [row.ownerId, row._count.id]),
+    );
+    const qualifiedMap = new Map(
+      leadsQualifiedByOwner.map((row) => [row.ownerId, row._count.id]),
+    );
+    const convertedMap = new Map(
+      leadsConvertedByOwner.map((row) => [row.ownerId, row._count.id]),
+    );
+    const activityMap = new Map(
+      activityByAuthor.map((row) => [row.authorId, row._count.id]),
+    );
+
+    const completedMap = new Map<string, number>();
+    const onTimeMap = new Map<string, number>();
+
+    for (const task of completedTasks) {
+      completedMap.set(
+        task.assigneeId,
+        (completedMap.get(task.assigneeId) ?? 0) + 1,
+      );
+
+      if (task.completedAt && task.completedAt <= task.dueDate) {
+        onTimeMap.set(
+          task.assigneeId,
+          (onTimeMap.get(task.assigneeId) ?? 0) + 1,
+        );
+      }
+    }
+
+    const managers = users.map((user) =>
+      this.buildManagerKpi(user, {
+        salesPlan: salesPlanMap.get(user.id),
+        leadPlan: leadPlanMap.get(user.id),
+        actualSales: wonMap.get(user.id) ?? 0,
+        totalLeads: totalLeadsMap.get(user.id) ?? 0,
+        qualifiedLeads: qualifiedMap.get(user.id) ?? 0,
+        convertedLeads: convertedMap.get(user.id) ?? 0,
+        completedTasks: completedMap.get(user.id) ?? 0,
+        completedOnTimeTasks: onTimeMap.get(user.id) ?? 0,
+        activityCount: activityMap.get(user.id) ?? 0,
+      }),
     );
 
     return {
@@ -256,95 +428,31 @@ export class ReportsService {
     };
   }
 
-  private async buildManagerKpi(
+  private buildManagerKpi(
     user: ReportUser,
-    range: DateRange,
-    period: Date,
-  ): Promise<KpiManagerMetric> {
-    const [
-      salesPlan,
-      leadPlan,
-      wonSales,
-      totalLeads,
-      qualifiedLeads,
-      convertedLeads,
-      completedTasks,
-      completedOnTimeTasks,
-      activityCount,
-    ] = await this.prisma.$transaction([
-      this.prisma.salesPlan.findUnique({
-        where: { userId_period: { userId: user.id, period } },
-      }),
-      this.prisma.leadPlan.findUnique({
-        where: { userId_period: { userId: user.id, period } },
-      }),
-      this.prisma.deal.aggregate({
-        where: {
-          ownerId: user.id,
-          stage: DealStage.WON,
-          deletedAt: null,
-          updatedAt: range,
-        },
-        _sum: { totalAmount: true },
-      }),
-      this.prisma.lead.count({
-        where: {
-          ownerId: user.id,
-          deletedAt: null,
-          createdAt: range,
-        },
-      }),
-      this.prisma.lead.count({
-        where: {
-          ownerId: user.id,
-          deletedAt: null,
-          status: { in: [LeadStatus.QUALIFIED, LeadStatus.CONVERTED] },
-          updatedAt: range,
-        },
-      }),
-      this.prisma.lead.count({
-        where: {
-          ownerId: user.id,
-          deletedAt: null,
-          status: LeadStatus.CONVERTED,
-          updatedAt: range,
-        },
-      }),
-      this.prisma.task.count({
-        where: {
-          assigneeId: user.id,
-          status: TaskStatus.COMPLETED,
-          completedAt: range,
-        },
-      }),
-      this.prisma.task.count({
-        where: {
-          assigneeId: user.id,
-          status: TaskStatus.COMPLETED,
-          completedAt: range,
-          dueDate: { gte: range.gte },
-        },
-      }),
-      this.prisma.activity.count({
-        where: {
-          authorId: user.id,
-          createdAt: range,
-        },
-      }),
-    ]);
-    const actualSales = this.toNumber(wonSales._sum.totalAmount);
-    const salesPlanPercent = salesPlan
-      ? this.percent(actualSales, this.toNumber(salesPlan.targetAmount))
+    metrics: ManagerKpiInput,
+  ): KpiManagerMetric {
+    const salesPlanPercent = metrics.salesPlan
+      ? this.percent(
+          metrics.actualSales,
+          this.toNumber(metrics.salesPlan.targetAmount),
+        )
       : 0;
-    const qualifiedLeadsPercent = leadPlan
-      ? this.percent(qualifiedLeads, leadPlan.targetCount)
+    const qualifiedLeadsPercent = metrics.leadPlan
+      ? this.percent(metrics.qualifiedLeads, metrics.leadPlan.targetCount)
       : 0;
-    const conversionPercent = this.percent(convertedLeads, totalLeads);
-    const deadlineCompliancePercent = this.percent(
-      completedOnTimeTasks,
-      completedTasks,
+    const conversionPercent = this.percent(
+      metrics.convertedLeads,
+      metrics.totalLeads,
     );
-    const crmDisciplinePercent = Math.min(100, this.percent(activityCount, 20));
+    const deadlineCompliancePercent = this.percent(
+      metrics.completedOnTimeTasks,
+      metrics.completedTasks,
+    );
+    const crmDisciplinePercent = Math.min(
+      100,
+      this.percent(metrics.activityCount, 20),
+    );
     const totalScore =
       salesPlanPercent * 0.4 +
       qualifiedLeadsPercent * 0.15 +
@@ -362,6 +470,26 @@ export class ReportsService {
       crmDisciplinePercent: this.round(crmDisciplinePercent),
       totalScore: this.round(totalScore),
     };
+  }
+
+  private async cached<T>(
+    reportName: string,
+    filterDto: ReportFilterDto,
+    compute: () => Promise<T>,
+  ): Promise<T> {
+    const cacheKey = `reports:${reportName}:${filterDto.managerId ?? 'all'}:${
+      filterDto.dateFrom?.toISOString() ?? ''
+    }:${filterDto.dateTo?.toISOString() ?? ''}`;
+    const cached = await this.cacheManager.get<T>(cacheKey);
+
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const result = await compute();
+    await this.cacheManager.set(cacheKey, result);
+
+    return result;
   }
 
   private buildDateRange(filterDto: ReportFilterDto): DateRange {

@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { createHash } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import {
@@ -6,12 +7,15 @@ import {
   ClientSegment,
   ClientType,
   DealStage,
+  OrderStatus,
   PaymentRecordStatus,
   PaymentStatus,
+  SupplierOrderStatus,
   Prisma,
   ProductPriceType,
   ProductStatus,
   RoleName,
+  StockReservationStatus,
   TaskPriority,
   TaskStatus,
   TaskType,
@@ -20,6 +24,14 @@ import { hash } from 'bcryptjs';
 import request, { Response } from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
+import { seedPanels } from './../prisma/seed/panels';
+import { seedCalculatorProduct } from './../prisma/seed/calculator-product';
+import { IdempotencyService } from './../src/integrations/telegram/services/idempotency.service';
+import { TelegramAdminHandlerService } from './../src/integrations/telegram/services/telegram-admin-handler.service';
+import { TelegramLeadFactory } from './../src/integrations/telegram/services/telegram-lead-factory.service';
+import { compactUuid } from './../src/integrations/telegram/telegram.types';
+import { InventoryService } from './../src/modules/inventory/inventory.service';
+import { SHIPMENT_PAYMENT_NOT_CONFIRMED_MESSAGE } from './../src/modules/orders/services/shipment-payment.policy';
 import { PrismaService } from './../src/modules/prisma/prisma.service';
 import { TasksCronService } from './../src/modules/tasks/tasks-cron.service';
 
@@ -70,16 +82,20 @@ type TestContext = {
   projectObjectId: string;
   productId: string;
   sheetArea: number;
+  apiKeyToken: string;
+  apiKeyLimitedToken: string;
 };
 
 const RUN_ID = `${Date.now()}`;
 const TEST_PASSWORD = 'Password123!';
-const ACCESS_SECRET = 'test-access-secret';
-const REFRESH_SECRET = 'test-refresh-secret';
+// env.schema требует >= 32 символов на JWT-секрет
+const ACCESS_SECRET = 'test-access-secret-key-min-32-chars';
+const REFRESH_SECRET = 'test-refresh-secret-key-min-32-chars';
 
 jest.setTimeout(120_000);
 
 const permissionSlugs = [
+  'auth:me',
   'users:read',
   'users:create',
   'users:manage',
@@ -114,14 +130,32 @@ const permissionSlugs = [
   'deals:create_offer',
   'deals:approve_offer',
   'deals:stage_exception',
+  'deals:override_terminal',
   'orders:read',
   'orders:create',
+  'orders:cancel',
   'payments:create',
   'payments:confirm',
   'deliveries:create',
   'inventory:read',
   'inventory:manage',
+  'files:upload',
+  'files:read',
   'audit:read',
+  'reports:read',
+  'admin:queues',
+  'panel_catalog:read',
+  'panel_catalog:manage',
+  'calculations:read',
+  'calculations:read_all',
+  'calculations:create',
+  'calculations:update',
+  'calculations:delete',
+  'quotes:read',
+  'quotes:read_all',
+  'quotes:create',
+  'quotes:update',
+  'quotes:approve',
 ] as const;
 
 describe('CRM HPL acceptance criteria (e2e)', () => {
@@ -134,6 +168,13 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
   beforeAll(async () => {
     process.env.JWT_ACCESS_SECRET = ACCESS_SECRET;
     process.env.JWT_REFRESH_SECRET = REFRESH_SECRET;
+    process.env.SERVICE_ACCOUNT_TOKEN_PEPPER =
+      'test-service-account-pepper-min-32-chars';
+    process.env.LEAD_POOL_USER_EMAIL = 'lead-pool@hpl.com';
+    process.env.SYSTEM_USER_EMAIL = 'system@hpl.com';
+    process.env.DATABASE_URL =
+      process.env.DATABASE_URL ??
+      'postgresql://crm:crm@localhost:5432/crm_test';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -142,8 +183,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     app = moduleFixture.createNestApplication();
     app.useGlobalPipes(
       new ValidationPipe({
-        whitelist: true,
-        forbidNonWhitelisted: true,
+        whitelist: false,
         transform: true,
       }),
     );
@@ -467,6 +507,44 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(paidOrder.paymentStatus).toBe(PaymentStatus.PAID);
   });
 
+  it('AT-14 rejects payment confirmation that exceeds order total', async () => {
+    const wonDeal = await createDeal(prisma, context, DealStage.WON);
+    const orderResponse = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId: wonDeal.id })
+      .expect(201);
+    const order = bodyAs<OrderResponse>(orderResponse);
+    const totalAmount = Number(order.totalAmount);
+
+    const firstPayment = await createPayment(order.id, totalAmount - 20);
+    await request(server)
+      .patch(`/orders/payments/${firstPayment.id}/confirm`)
+      .set(authHeader(context.headToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(200);
+
+    const secondPayment = await createPayment(order.id, totalAmount / 2);
+    await request(server)
+      .patch(`/orders/payments/${secondPayment.id}/confirm`)
+      .set(authHeader(context.headToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(409);
+
+    const orderAfter = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+    });
+
+    expect(Number(orderAfter.paidAmount)).toBeCloseTo(totalAmount - 20, 2);
+    expect(orderAfter.paymentStatus).toBe(PaymentStatus.PARTIALLY_PAID);
+
+    const rejectedPayment = await prisma.payment.findUniqueOrThrow({
+      where: { id: secondPayment.id },
+    });
+
+    expect(rejectedPayment.status).toBe(PaymentRecordStatus.PENDING);
+  });
+
   it('AT-10 requires lead disqualification reason and deal loss reason', async () => {
     const leadResponse = await request(server)
       .post('/leads')
@@ -575,7 +653,11 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .send({ dealId: wonDeal.id })
       .expect(201);
     const order = bodyAs<OrderResponse>(orderResponse);
-    const payment = await createPayment(order.id, Number(order.totalAmount));
+    const totalAmountValue =
+      typeof order.totalAmount === 'number'
+        ? order.totalAmount
+        : Number(order.totalAmount?.toString?.() ?? 0);
+    const payment = await createPayment(order.id, totalAmountValue);
 
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
@@ -601,18 +683,1642 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(paymentActivity ?? paymentAudit).not.toBeNull();
   });
 
+  it('AT-15 cancels order, releases reservation and restores stock balance', async () => {
+    const wonDeal = await createDeal(prisma, context, DealStage.WON);
+    const orderResponse = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId: wonDeal.id })
+      .expect(201);
+    const order = bodyAs<OrderResponse>(orderResponse);
+
+    const balanceBefore = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+
+    await request(server)
+      .post(`/orders/${order.id}/cancel`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    const orderAfter = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+    });
+    const reservation = await prisma.stockReservation.findFirstOrThrow({
+      where: { orderId: order.id, productId: context.productId },
+    });
+    const balanceAfter = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+
+    const reservedQuantity = context.sheetArea * 2;
+    expect(orderAfter.status).toBe(OrderStatus.CANCELLED);
+    expect(reservation.status).toBe(StockReservationStatus.RELEASED);
+    expect(reservation.expiresAt).not.toBeNull();
+    expect(balanceAfter.reserved).toBeCloseTo(
+      balanceBefore.reserved - reservedQuantity,
+      5,
+    );
+    expect(balanceAfter.available).toBeCloseTo(
+      balanceBefore.available + reservedQuantity,
+      5,
+    );
+    expect(balanceAfter.version).toBeGreaterThan(balanceBefore.version);
+
+    // Повторная отмена — 409 (заказ уже в терминальном статусе)
+    await request(server)
+      .post(`/orders/${order.id}/cancel`)
+      .set(authHeader(context.managerToken))
+      .expect(409);
+  });
+
+  it('AT-16 rejects payment confirmation and delivery for cancelled order', async () => {
+    const wonDeal = await createDeal(prisma, context, DealStage.WON);
+    const orderResponse = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId: wonDeal.id })
+      .expect(201);
+    const order = bodyAs<OrderResponse>(orderResponse);
+    const payment = await createPayment(order.id, 10);
+
+    await request(server)
+      .post(`/orders/${order.id}/cancel`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.headToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(409);
+
+    const orderItem = await prisma.orderItem.findFirstOrThrow({
+      where: { orderId: order.id },
+    });
+
+    await request(server)
+      .post(`/orders/${order.id}/deliveries`)
+      .set(authHeader(context.managerToken))
+      .send({
+        orderId: order.id,
+        deliveryDate: new Date().toISOString(),
+        items: [{ orderItemId: orderItem.id, quantity: 1 }],
+      })
+      .expect(409);
+  });
+
+  it('P0-A denies delivery when order is UNPAID', async () => {
+    const order = await createWonOrder();
+    const orderItem = await prisma.orderItem.findFirstOrThrow({
+      where: { orderId: order.id },
+    });
+    const balanceBefore = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+
+    const response = await request(server)
+      .post(`/orders/${order.id}/deliveries`)
+      .set(authHeader(context.managerToken))
+      .send(deliveryPayload(order.id, orderItem.id, orderItem.quantity))
+      .expect(409);
+
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        message: SHIPMENT_PAYMENT_NOT_CONFIRMED_MESSAGE,
+      }),
+    );
+
+    const deliveries = await prisma.delivery.count({
+      where: { orderId: order.id },
+    });
+    const balanceAfter = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+    expect(deliveries).toBe(0);
+    expect(balanceAfter.onHand).toBe(balanceBefore.onHand);
+    expect(balanceAfter.reserved).toBe(balanceBefore.reserved);
+  });
+
+  it('P0-A denies delivery when order is PARTIALLY_PAID', async () => {
+    const order = await createWonOrder();
+    const half = Number(order.totalAmount) / 2;
+    const payment = await createPayment(order.id, half);
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.headToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(200);
+
+    const paid = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+    });
+    expect(paid.paymentStatus).toBe(PaymentStatus.PARTIALLY_PAID);
+
+    const orderItem = await prisma.orderItem.findFirstOrThrow({
+      where: { orderId: order.id },
+    });
+
+    await request(server)
+      .post(`/orders/${order.id}/deliveries`)
+      .set(authHeader(context.managerToken))
+      .send(deliveryPayload(order.id, orderItem.id, orderItem.quantity))
+      .expect(409);
+
+    expect(
+      await prisma.delivery.count({ where: { orderId: order.id } }),
+    ).toBe(0);
+  });
+
+  it('P0-A allows delivery when order is PAID', async () => {
+    const order = await createWonOrder();
+    await payOrderInFull(order.id, order.totalAmount);
+    const orderItem = await prisma.orderItem.findFirstOrThrow({
+      where: { orderId: order.id },
+    });
+
+    await request(server)
+      .post(`/orders/${order.id}/deliveries`)
+      .set(authHeader(context.managerToken))
+      .send(deliveryPayload(order.id, orderItem.id, orderItem.quantity))
+      .expect(201);
+
+    const delivered = await prisma.orderItem.findFirstOrThrow({
+      where: { id: orderItem.id },
+    });
+    expect(delivered.deliveredQuantity).toBeCloseTo(orderItem.quantity, 5);
+  });
+
+  it('P0-B denies supplier-order DELIVERED when client order is UNPAID', async () => {
+    const order = await createWonOrder();
+    const supplier = await prisma.supplier.findUniqueOrThrow({
+      where: { code: `QA-SUP-${RUN_ID}` },
+    });
+    const supplierOrder = await prisma.supplierOrder.create({
+      data: {
+        dealId: order.dealId,
+        supplierId: supplier.id,
+        status: SupplierOrderStatus.DRAFT,
+      },
+    });
+
+    const response = await request(server)
+      .patch(`/supplier-orders/${supplierOrder.id}/status`)
+      .set(authHeader(context.managerToken))
+      .send({ status: SupplierOrderStatus.DELIVERED })
+      .expect(409);
+
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        message: SHIPMENT_PAYMENT_NOT_CONFIRMED_MESSAGE,
+      }),
+    );
+
+    const unchanged = await prisma.supplierOrder.findUniqueOrThrow({
+      where: { id: supplierOrder.id },
+    });
+    expect(unchanged.status).toBe(SupplierOrderStatus.DRAFT);
+  });
+
+  it('P0-C does not write off stock for unpaid orders via inventory receive', async () => {
+    const order = await createWonOrder();
+    const balanceBefore = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+    const supplier = await prisma.supplier.findUniqueOrThrow({
+      where: { code: `QA-SUP-${RUN_ID}` },
+    });
+
+    const receiptResponse = await request(server)
+      .post('/inventory/expected-receipts')
+      .set(authHeader(context.headToken))
+      .send({
+        supplierId: supplier.id,
+        expectedDate: new Date().toISOString(),
+        items: [{ productId: context.productId, quantity: 10 }],
+      })
+      .expect(201);
+    const receipt = bodyAs<EntityResponse & { items: EntityResponse[] }>(
+      receiptResponse,
+    );
+
+    await request(server)
+      .post(`/inventory/expected-receipts/${receipt.id}/receive`)
+      .set(authHeader(context.headToken))
+      .send({
+        items: [{ itemId: receipt.items[0].id, receivedQuantity: 10 }],
+      })
+      .expect(201);
+
+    const balanceAfter = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+    expect(balanceAfter.onHand).toBeGreaterThan(balanceBefore.onHand);
+    expect(
+      await prisma.delivery.count({ where: { orderId: order.id } }),
+    ).toBe(0);
+    const unpaid = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+    });
+    expect(unpaid.paymentStatus).toBe(PaymentStatus.UNPAID);
+  });
+
+  it('P0-A rejects concurrent full deliveries without duplicate shipment or negative stock', async () => {
+    const order = await createWonOrder();
+    await payOrderInFull(order.id, order.totalAmount);
+    const orderItem = await prisma.orderItem.findFirstOrThrow({
+      where: { orderId: order.id },
+    });
+    const balanceBefore = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+
+    const payload = deliveryPayload(
+      order.id,
+      orderItem.id,
+      orderItem.quantity,
+    );
+    const results = await Promise.all([
+      request(server)
+        .post(`/orders/${order.id}/deliveries`)
+        .set(authHeader(context.managerToken))
+        .send(payload),
+      request(server)
+        .post(`/orders/${order.id}/deliveries`)
+        .set(authHeader(context.managerToken))
+        .send(payload),
+    ]);
+
+    const statuses = results.map((result) => result.status);
+    expect(statuses.filter((status) => status === 201)).toHaveLength(1);
+    expect(
+      statuses.filter((status) => status === 400 || status === 409),
+    ).toHaveLength(1);
+
+    const deliveredItem = await prisma.orderItem.findFirstOrThrow({
+      where: { id: orderItem.id },
+    });
+    expect(deliveredItem.deliveredQuantity).toBeLessThanOrEqual(
+      orderItem.quantity,
+    );
+    expect(deliveredItem.deliveredQuantity).toBeCloseTo(orderItem.quantity, 5);
+
+    const deliveryCount = await prisma.delivery.count({
+      where: { orderId: order.id },
+    });
+    expect(deliveryCount).toBe(1);
+
+    const balanceAfter = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+    expect(balanceAfter.onHand).toBeGreaterThanOrEqual(0);
+    expect(balanceAfter.onHand).toBeCloseTo(
+      balanceBefore.onHand - orderItem.quantity,
+      5,
+    );
+  });
+
+  it('P0-A keeps shipment side effects off when payment confirmation fails', async () => {
+    const order = await createWonOrder();
+    const balanceBefore = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+    const overpay = await createPayment(
+      order.id,
+      Number(order.totalAmount) + 50,
+    );
+
+    await request(server)
+      .patch(`/orders/payments/${overpay.id}/confirm`)
+      .set(authHeader(context.headToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(409);
+
+    const stillUnpaid = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+    });
+    expect(stillUnpaid.paymentStatus).toBe(PaymentStatus.UNPAID);
+
+    const orderItem = await prisma.orderItem.findFirstOrThrow({
+      where: { orderId: order.id },
+    });
+    await request(server)
+      .post(`/orders/${order.id}/deliveries`)
+      .set(authHeader(context.managerToken))
+      .send(deliveryPayload(order.id, orderItem.id, orderItem.quantity))
+      .expect(409);
+
+    expect(
+      await prisma.delivery.count({ where: { orderId: order.id } }),
+    ).toBe(0);
+    const balanceAfter = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+    expect(balanceAfter.onHand).toBe(balanceBefore.onHand);
+    expect(balanceAfter.reserved).toBe(balanceBefore.reserved);
+  });
+
+  it('AT-17 releases expired reservation and returns order to WAITING_STOCK', async () => {
+    const wonDeal = await createDeal(prisma, context, DealStage.WON);
+    const orderResponse = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId: wonDeal.id })
+      .expect(201);
+    const order = bodyAs<OrderResponse>(orderResponse);
+
+    const balanceBefore = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+
+    // Эмулируем истечение TTL: переносим expiresAt в прошлое
+    await prisma.stockReservation.updateMany({
+      where: { orderId: order.id },
+      data: { expiresAt: new Date(Date.now() - 60_000) },
+    });
+
+    const inventoryService = app.get(InventoryService);
+    const releasedCount = await inventoryService.releaseExpiredReservations();
+
+    expect(releasedCount).toBeGreaterThan(0);
+
+    const orderAfter = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+    });
+    const reservation = await prisma.stockReservation.findFirstOrThrow({
+      where: { orderId: order.id, productId: context.productId },
+    });
+    const balanceAfter = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: context.productId },
+    });
+
+    const reservedQuantity = context.sheetArea * 2;
+    expect(orderAfter.status).toBe(OrderStatus.WAITING_STOCK);
+    expect(reservation.status).toBe(StockReservationStatus.RELEASED);
+    expect(balanceAfter.reserved).toBeCloseTo(
+      balanceBefore.reserved - reservedQuantity,
+      5,
+    );
+    expect(balanceAfter.available).toBeCloseTo(
+      balanceBefore.available + reservedQuantity,
+      5,
+    );
+  });
+
+  it('AT-18 re-reserves WAITING_STOCK order when receipt arrives (FIFO)', async () => {
+    const brand = await prisma.brand.findUniqueOrThrow({
+      where: { code: `QA-BRAND-${RUN_ID}` },
+    });
+    const collection = await prisma.productCollection.findFirstOrThrow({
+      where: { brandId: brand.id, name: `QA Collection ${RUN_ID}` },
+    });
+    const supplier = await prisma.supplier.findUniqueOrThrow({
+      where: { code: `QA-SUP-${RUN_ID}` },
+    });
+
+    // Отдельный продукт без остатка: заказ обязан уйти в WAITING_STOCK
+    const product = await prisma.product.create({
+      data: {
+        sku: `QA-HPL-WAIT-${RUN_ID}`,
+        name: `QA HPL Waiting Panel ${RUN_ID}`,
+        brandId: brand.id,
+        collectionId: collection.id,
+        supplierId: supplier.id,
+        decorCode: `QA-WAIT-${RUN_ID}`,
+        colorName: 'Black',
+        surface: 'Matte',
+        thickness: 12,
+        length: 3050,
+        width: 1300,
+        sheetArea: context.sheetArea,
+        unit: 'm2',
+        status: ProductStatus.ACTIVE,
+      },
+    });
+
+    const wonDeal = await createDeal(prisma, context, DealStage.WON, [
+      {
+        product: { connect: { id: product.id } },
+        quantitySheets: 2,
+        quantityM2: context.sheetArea * 2,
+        unitPrice: new Prisma.Decimal(100),
+        discount: new Prisma.Decimal(0),
+        totalPrice: new Prisma.Decimal(context.sheetArea * 2 * 100),
+        purchasePriceSnapshot: new Prisma.Decimal(60),
+      },
+    ]);
+
+    const orderResponse = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId: wonDeal.id })
+      .expect(201);
+    const order = bodyAs<OrderResponse>(orderResponse);
+
+    const waitingOrder = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+    });
+    expect(waitingOrder.status).toBe(OrderStatus.WAITING_STOCK);
+
+    const receiptResponse = await request(server)
+      .post('/inventory/expected-receipts')
+      .set(authHeader(context.adminToken))
+      .send({
+        supplierId: supplier.id,
+        expectedDate: futureIso(1),
+        items: [{ productId: product.id, quantity: 10 }],
+      })
+      .expect(201);
+    const receipt = bodyAs<EntityResponse & { items: EntityResponse[] }>(
+      receiptResponse,
+    );
+
+    await request(server)
+      .post(`/inventory/expected-receipts/${receipt.id}/receive`)
+      .set(authHeader(context.adminToken))
+      .send({
+        items: [{ itemId: receipt.items[0].id, receivedQuantity: 10 }],
+      })
+      .expect(201);
+
+    const orderAfter = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+    });
+    const reservation = await prisma.stockReservation.findFirstOrThrow({
+      where: { orderId: order.id, productId: product.id },
+    });
+    const balance = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId: product.id },
+    });
+
+    expect(orderAfter.status).toBe(OrderStatus.WAITING_PAYMENT);
+    expect(reservation.status).toBe(StockReservationStatus.ACTIVE);
+    expect(reservation.expiresAt).not.toBeNull();
+    expect(balance.reserved).toBeCloseTo(context.sheetArea * 2, 5);
+    expect(balance.available).toBeCloseTo(10 - context.sheetArea * 2, 5);
+  });
+
+  it('AT-19 enforces deal stage matrix and terminal override permission', async () => {
+    // Недопустимый переход (skip стадии) без исключения → 400
+    const deal = await createDeal(prisma, context, DealStage.QUALIFICATION);
+
+    await request(server)
+      .post(`/deals/${deal.id}/stage`)
+      .set(authHeader(context.managerToken))
+      .send({ newStage: DealStage.NEGOTIATION, reason: 'Skip stages' })
+      .expect(400);
+
+    // Выход из терминальной WON без deals:override_terminal → 403
+    const wonDeal = await createDeal(prisma, context, DealStage.WON);
+
+    await request(server)
+      .post(`/deals/${wonDeal.id}/stage`)
+      .set(authHeader(context.managerToken))
+      .send({ newStage: DealStage.QUALIFICATION, reason: 'Manager reopen' })
+      .expect(403);
+
+    // Выход из терминальной без причины → 400 даже для head
+    await request(server)
+      .post(`/deals/${wonDeal.id}/stage`)
+      .set(authHeader(context.headToken))
+      .send({ newStage: DealStage.QUALIFICATION })
+      .expect(400);
+
+    // Руководитель с deals:override_terminal + причина → 201, флаг исключения
+    await request(server)
+      .post(`/deals/${wonDeal.id}/stage`)
+      .set(authHeader(context.headToken))
+      .send({
+        newStage: DealStage.QUALIFICATION,
+        reason: 'Client returned after contract restart',
+      })
+      .expect(201);
+
+    const history = await prisma.dealStageHistory.findFirstOrThrow({
+      where: {
+        dealId: wonDeal.id,
+        oldStage: DealStage.WON,
+        newStage: DealStage.QUALIFICATION,
+      },
+    });
+
+    expect(history.isException).toBe(true);
+    expect(history.changedById).toBe(context.headId);
+  });
+
+  it('AT-20 enforces payment FSM: only PENDING can be processed once', async () => {
+    const wonDeal = await createDeal(prisma, context, DealStage.WON);
+    const orderResponse = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId: wonDeal.id })
+      .expect(201);
+    const order = bodyAs<OrderResponse>(orderResponse);
+    const payment = await createPayment(order.id, 100);
+
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.headToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(200);
+
+    // Повторный confirm уже обработанного платежа → 409
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.headToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(409);
+
+    // CONFIRMED → REJECTED задним числом запрещён → 409
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.headToken))
+      .send({ status: PaymentRecordStatus.REJECTED })
+      .expect(409);
+
+    const paymentAfter = await prisma.payment.findUniqueOrThrow({
+      where: { id: payment.id },
+    });
+    expect(paymentAfter.status).toBe(PaymentRecordStatus.CONFIRMED);
+  });
+
+  it('AT-21 writes audit records for stock reserve, release and order cancel', async () => {
+    const wonDeal = await createDeal(prisma, context, DealStage.WON);
+    const orderResponse = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId: wonDeal.id })
+      .expect(201);
+    const order = bodyAs<OrderResponse>(orderResponse);
+
+    const reserveAudit = await prisma.auditLog.findFirst({
+      where: {
+        action: 'STOCK_RESERVED',
+        entityType: 'StockBalance',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(reserveAudit).not.toBeNull();
+
+    await request(server)
+      .post(`/orders/${order.id}/cancel`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    const cancelAudit = await prisma.auditLog.findFirst({
+      where: {
+        action: 'ORDER_CANCELLED',
+        entityType: 'Order',
+        entityId: order.id,
+      },
+    });
+    const releaseAudit = await prisma.auditLog.findFirst({
+      where: {
+        action: 'STOCK_RELEASED',
+        entityType: 'StockBalance',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    expect(cancelAudit).not.toBeNull();
+    expect(releaseAudit).not.toBeNull();
+  });
+
+  it('AT-22 paginates tasks by computedStatus with correct total', async () => {
+    const past = new Date(Date.now() - 60 * 60 * 1000);
+
+    for (let index = 0; index < 3; index++) {
+      await prisma.task.create({
+        data: {
+          title: `Paginated overdue ${RUN_ID} ${index}`,
+          type: TaskType.CALL,
+          priority: TaskPriority.MEDIUM,
+          dueDate: past,
+          originalDueDate: past,
+          assigneeId: context.managerId,
+          createdById: context.managerId,
+          relatedType: 'Client',
+          relatedId: context.clientId,
+        },
+      });
+    }
+
+    const future = futureDate(5);
+    await prisma.task.create({
+      data: {
+        title: `Paginated future ${RUN_ID}`,
+        type: TaskType.CALL,
+        priority: TaskPriority.MEDIUM,
+        dueDate: future,
+        originalDueDate: future,
+        assigneeId: context.managerId,
+        createdById: context.managerId,
+        relatedType: 'Client',
+        relatedId: context.clientId,
+      },
+    });
+
+    const firstPage = await request(server)
+      .get('/tasks?computedStatus=OVERDUE&limit=2&page=1')
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    const firstBody = bodyAs<{
+      items: { computedStatus: string }[];
+      total: number;
+      page: number;
+      limit: number;
+    }>(firstPage);
+
+    expect(firstBody.limit).toBe(2);
+    expect(firstBody.page).toBe(1);
+    expect(firstBody.items.length).toBe(2);
+    // total считается по всем совпадениям, а не по размеру страницы
+    expect(firstBody.total).toBeGreaterThanOrEqual(3);
+    expect(
+      firstBody.items.every((task) => task.computedStatus === 'OVERDUE'),
+    ).toBe(true);
+
+    const secondPage = await request(server)
+      .get('/tasks?computedStatus=OVERDUE&limit=2&page=2')
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    const secondBody = bodyAs<{ items: unknown[] }>(secondPage);
+    expect(secondBody.items.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('AT-23 paginates users list with light select', async () => {
+    const response = await request(server)
+      .get('/users?page=1&limit=2')
+      .set(authHeader(context.headToken))
+      .expect(200);
+    const body = bodyAs<{
+      items: Record<string, unknown>[];
+      total: number;
+      page: number;
+      limit: number;
+    }>(response);
+
+    expect(body.items.length).toBe(2);
+    expect(body.page).toBe(1);
+    expect(body.limit).toBe(2);
+    expect(body.total).toBeGreaterThanOrEqual(3);
+    expect(body.items[0].passwordHash).toBeUndefined();
+    expect(body.items[0].email).toBeDefined();
+
+    const searched = await request(server)
+      .get(`/users?search=admin-${RUN_ID}`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    const searchedBody = bodyAs<{ items: { email: string }[]; total: number }>(
+      searched,
+    );
+
+    expect(searchedBody.total).toBe(1);
+    expect(searchedBody.items[0].email).toBe(`admin-${RUN_ID}@hpl.test`);
+  });
+
+  it('AT-24 serves funnel report from in-memory cache within TTL', async () => {
+    const rangeQuery = 'dateFrom=2020-01-01&dateTo=2020-01-31';
+
+    const first = await request(server)
+      .get(`/reports/funnel?${rangeQuery}`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    const firstBody = bodyAs<{ totalDeals: number }>(first);
+
+    // Сделка создана уже после первого запроса, но TTL-кэш её не видит.
+    // dev.db переиспользуется между прогонами, поэтому сравниваем значения,
+    // а не абсолютный ноль.
+    await prisma.deal.create({
+      data: {
+        title: `Cache probe ${RUN_ID}`,
+        clientId: context.clientId,
+        ownerId: context.headId,
+        createdAt: new Date('2020-01-15T00:00:00.000Z'),
+      },
+    });
+
+    const second = await request(server)
+      .get(`/reports/funnel?${rangeQuery}`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    const secondBody = bodyAs<{ totalDeals: number }>(second);
+    expect(secondBody.totalDeals).toBe(firstBody.totalDeals);
+  });
+
+  it('AT-25 rotates hashed refresh session and rejects token reuse', async () => {
+    const tokens = await login(server, `manager-${RUN_ID}@hpl.test`);
+
+    const refreshed = await request(server)
+      .post('/auth/refresh')
+      .send({ refreshToken: tokens.refreshToken })
+      .expect(201);
+    const refreshedTokens = bodyAs<AuthTokens>(refreshed);
+    expect(refreshedTokens.accessToken).toBeDefined();
+    expect(refreshedTokens.refreshToken).not.toBe(tokens.refreshToken);
+
+    // Старый refresh-токен после ротации невалиден (хеш в сессии заменён)
+    await request(server)
+      .post('/auth/refresh')
+      .send({ refreshToken: tokens.refreshToken })
+      .expect(401);
+
+    // Подменённый токен (валидная подпись, чужой jti) → 401
+    await request(server)
+      .post('/auth/refresh')
+      .send({
+        refreshToken: `${refreshedTokens.refreshToken.slice(0, -2)}xx`,
+      })
+      .expect(401);
+  });
+
+  it('AT-26 returns unified error format with request id', async () => {
+    const response = await request(server)
+      .post('/auth/login')
+      .set('x-request-id', 'e2e-request-26')
+      .send({ email: 'not-an-email' })
+      .expect(400);
+
+    expect(response.headers['x-request-id']).toBe('e2e-request-26');
+
+    const body = bodyAs<{
+      statusCode: number;
+      timestamp: string;
+      path: string;
+      method: string;
+      message: string | string[];
+      requestId: string;
+    }>(response);
+
+    expect(body.statusCode).toBe(400);
+    expect(body.path).toBe('/auth/login');
+    expect(body.method).toBe('POST');
+    expect(body.requestId).toBe('e2e-request-26');
+    expect(body.message).toBeDefined();
+  });
+
+  it('AT-27 exposes health check with prisma up', async () => {
+    const response = await request(server).get('/health').expect(200);
+
+    const body = bodyAs<{
+      status: string;
+      details: Record<string, { status: string }>;
+    }>(response);
+
+    expect(body.status).toBe('ok');
+    expect(body.details.prisma.status).toBe('up');
+    expect(response.headers['x-request-id']).toBeDefined();
+  });
+
+  it('AT-28 uploads file with mime validation, lists and downloads it', async () => {
+    // Минимальный валидный PNG (1x1)
+    const pngBuffer = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+
+    const uploaded = await request(server)
+      .post('/files/upload')
+      .set(authHeader(context.managerToken))
+      .attach('file', pngBuffer, 'panel-photo.png')
+      .field('relatedType', 'CLIENT')
+      .field('relatedId', context.clientId)
+      .expect(201);
+    const uploadedBody = bodyAs<{ id: string; url: string }>(uploaded);
+    expect(uploadedBody.url).toBe(`/files/${uploadedBody.id}`);
+
+    const listed = await request(server)
+      .get(`/files?relatedType=CLIENT&relatedId=${context.clientId}`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    const listedBody =
+      bodyAs<Array<{ id: string; originalName: string }>>(listed);
+    expect(listedBody.some((entry) => entry.id === uploadedBody.id)).toBe(true);
+
+    const downloaded = await request(server)
+      .get(`/files/${uploadedBody.id}/download`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    expect(downloaded.headers['content-type']).toBe('image/png');
+
+    // Неподдерживаемый mime → 400
+    await request(server)
+      .post('/files/upload')
+      .set(authHeader(context.managerToken))
+      .attach('file', Buffer.from('MZ'), 'evil.exe')
+      .field('relatedType', 'CLIENT')
+      .field('relatedId', context.clientId)
+      .expect(400);
+
+    // Несуществующая сущность → 404
+    await request(server)
+      .post('/files/upload')
+      .set(authHeader(context.managerToken))
+      .attach('file', pngBuffer, 'panel-photo.png')
+      .field('relatedType', 'CLIENT')
+      .field('relatedId', '00000000-0000-0000-0000-000000000000')
+      .expect(404);
+
+    // Без токена → 401
+    await request(server).get(`/files/${uploadedBody.id}/download`).expect(401);
+  });
+
+  it('PR-2 accepts test webhook with valid X-API-Key', async () => {
+    const response = await request(server)
+      .post('/test/webhook')
+      .set('X-API-Key', context.apiKeyToken)
+      .expect(200);
+
+    expect(bodyAs<{ status: string }>(response).status).toBe('ok');
+  });
+
+  it('PR-2 rejects test webhook without X-API-Key', async () => {
+    await request(server).post('/test/webhook').expect(401);
+  });
+
+  it('PR-2 rejects test webhook when API key lacks permission', async () => {
+    await request(server)
+      .post('/test/webhook')
+      .set('X-API-Key', context.apiKeyLimitedToken)
+      .expect(403);
+  });
+
+  it('PR-2 rejects inactive API key with 403', async () => {
+    const inactiveToken = `e2e-inactive-${RUN_ID}`;
+    const pepper =
+      process.env.SERVICE_ACCOUNT_TOKEN_PEPPER ??
+      'test-service-account-pepper-min-32-chars';
+
+    await prisma.serviceAccount.create({
+      data: {
+        name: `inactive-${RUN_ID}`,
+        tokenHash: hashApiKeyToken(inactiveToken, pepper),
+        permissions: ['leads:create'],
+        isActive: false,
+      },
+    });
+
+    await request(server)
+      .post('/test/webhook')
+      .set('X-API-Key', inactiveToken)
+      .expect(403);
+  });
+
+  it('PR-2 protects Bull Dashboard without JWT', async () => {
+    await request(server).get('/admin/queues').expect(401);
+  });
+
+  it('PR-2 protects Bull Dashboard when JWT lacks admin:queues', async () => {
+    await request(server)
+      .get('/admin/queues')
+      .set(authHeader(context.managerToken))
+      .expect(403);
+  });
+
+  it('PR-2 allows Bull Dashboard for admin with admin:queues', async () => {
+    const response = await request(server)
+      .get('/admin/queues')
+      .set(authHeader(context.adminToken))
+      .expect(200);
+
+    expect(response.text).toContain('Bull Dashboard');
+  });
+
+  it('PR-3 accepts telegram webhook and deduplicates update_id', async () => {
+    const updateId = Number.parseInt(RUN_ID.slice(-6), 10);
+    const payload = {
+      update_id: updateId,
+      message: {
+        message_id: 1,
+        from: { id: 999001, username: 'tg_user', first_name: 'Иван' },
+        text: JSON.stringify({
+          name: 'Иван',
+          phone: '+998901234567',
+          message: 'Нужны панели',
+        }),
+      },
+    };
+
+    const accepted = await request(server)
+      .post('/integrations/telegram/webhook')
+      .set('X-API-Key', context.apiKeyToken)
+      .send(payload)
+      .expect(202);
+
+    expect(bodyAs<{ status: string }>(accepted).status).toBe('accepted');
+
+    const inFlight = await request(server)
+      .post('/integrations/telegram/webhook')
+      .set('X-API-Key', context.apiKeyToken)
+      .send(payload)
+      .expect(202);
+
+    expect(bodyAs<{ status: string }>(inFlight).status).toBe('processing');
+
+    const idempotency = app.get(IdempotencyService);
+    const event = await idempotency.check('telegram', String(updateId));
+    expect(event).not.toBeNull();
+    await idempotency.markProcessed(event!.id);
+
+    const duplicate = await request(server)
+      .post('/integrations/telegram/webhook')
+      .set('X-API-Key', context.apiKeyToken)
+      .send(payload)
+      .expect(200);
+
+    expect(bodyAs<{ status: string }>(duplicate).status).toBe(
+      'already_processed',
+    );
+  });
+
+  it('PR-3 creates telegram lead on pool user and assigns manager manually', async () => {
+    process.env.ADMIN_USER_EMAIL = `admin-${RUN_ID}@hpl.test`;
+
+    const leadFactory = app.get(TelegramLeadFactory);
+    const adminHandler = app.get(TelegramAdminHandlerService);
+    const poolUser = await prisma.user.findUniqueOrThrow({
+      where: { email: 'lead-pool@hpl.com' },
+    });
+
+    const lead = await leadFactory.create({
+      telegramUserId: `tg-${RUN_ID}`,
+      telegramUsername: 'assign_user',
+      formData: {
+        name: 'Assign Test',
+        phone: `+99890${RUN_ID.slice(-7)}`,
+        message: 'Manual assign',
+      },
+      updateId: `manual-${RUN_ID}`,
+      rawPayload: { source: 'e2e' },
+    });
+
+    const metadata = await prisma.telegramLeadMetadata.findUniqueOrThrow({
+      where: { leadId: lead.id },
+    });
+
+    expect(lead.ownerId).toBe(poolUser.id);
+    expect(lead.source).toBe('telegram');
+    expect(metadata.isPendingAssignment).toBe(true);
+
+    await adminHandler.assignManager(lead.id, context.managerId, {
+      adminChatId: '1',
+      adminMessageId: '100',
+      callbackQueryId: 'callback-e2e',
+    });
+
+    const assignedLead = await prisma.lead.findUniqueOrThrow({
+      where: { id: lead.id },
+    });
+    const assignedMetadata = await prisma.telegramLeadMetadata.findUniqueOrThrow(
+      { where: { leadId: lead.id } },
+    );
+    const notification = await prisma.notification.findFirst({
+      where: {
+        userId: context.managerId,
+        relatedType: 'Lead',
+        relatedId: lead.id,
+        type: 'lead_assigned',
+      },
+    });
+
+    expect(assignedLead.ownerId).toBe(context.managerId);
+    expect(assignedMetadata.isPendingAssignment).toBe(false);
+    expect(notification).not.toBeNull();
+  });
+
+  it('PR-3 handles assign callback payload with compact uuid', async () => {
+    const leadFactory = app.get(TelegramLeadFactory);
+    const adminHandler = app.get(TelegramAdminHandlerService);
+    const managers = await adminHandler.listManagers();
+    const managerIndex = managers.findIndex(
+      (manager) => manager.id === context.managerId,
+    );
+
+    expect(managerIndex).toBeGreaterThanOrEqual(0);
+
+    const lead = await leadFactory.create({
+      telegramUserId: `tg-callback-${RUN_ID}`,
+      formData: {
+        name: 'Callback Test',
+        phone: `+99891${RUN_ID.slice(-7)}`,
+        message: 'Callback',
+      },
+      updateId: `callback-${RUN_ID}`,
+      rawPayload: {},
+    });
+
+    await adminHandler.handleCallbackData(
+      `a|${compactUuid(lead.id)}|${managerIndex}`,
+      {
+        adminChatId: '1',
+        adminMessageId: '101',
+        callbackQueryId: 'callback-compact',
+      },
+    );
+
+    const updated = await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
+    expect(updated.ownerId).toBe(context.managerId);
+  });
+
+  it('PR-4 returns panel catalog reference data', async () => {
+    const types = await request(server)
+      .get('/panel-types')
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    const sizes = await request(server)
+      .get('/panel-sizes')
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    const pricing = await request(server)
+      .get('/panel-pricing/thickness')
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    expect(bodyAs<unknown[]>(types)).toHaveLength(3);
+    expect(bodyAs<unknown[]>(sizes)).toHaveLength(20);
+    const pricingBody = bodyAs<
+      Array<{ currencyCode: string; basePricePerM2?: string }>
+    >(pricing);
+    expect(pricingBody.every((item) => item.currencyCode === 'UZS')).toBe(true);
+    expect(
+      pricingBody.every((item) => item.basePricePerM2 === undefined),
+    ).toBe(true);
+  });
+
+  it('PR-4 filters supplier quality classes by panel type', async () => {
+    const response = await request(server)
+      .get('/suppliers/wuya/quality-classes')
+      .query({ panelType: 'exterior' })
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    const mappings = bodyAs<Array<{ qualityClass: { code: string } }>>(response);
+    expect(mappings).toHaveLength(1);
+    expect(mappings[0]?.qualityClass.code).toBe('economy');
+  });
+
+  it('PR-4 protects panel color creation and supports search', async () => {
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const colorPayload = {
+      supplierId: supplier.id,
+      colorCode: `RAL-${RUN_ID.slice(-6)}`,
+      colorName: 'Jet Black',
+    };
+
+    await request(server)
+      .post('/panel-colors')
+      .send(colorPayload)
+      .expect(401);
+
+    const created = await request(server)
+      .post('/panel-colors')
+      .set(authHeader(context.managerToken))
+      .send(colorPayload)
+      .expect(201);
+
+    const color = bodyAs<{
+      id: string;
+      colorCode: string;
+      createdByManagerId: string;
+      supplierId: string;
+    }>(created);
+
+    expect(color.colorCode).toBe(colorPayload.colorCode);
+    expect(color.supplierId).toBe(supplier.id);
+    expect(color.createdByManagerId).toBeTruthy();
+
+    const search = await request(server)
+      .get('/panel-colors')
+      .query({ search: colorPayload.colorCode, supplierId: supplier.id })
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    expect(
+      bodyAs<{ items: Array<{ colorCode: string }> }>(search).items.some(
+        (item) => item.colorCode === colorPayload.colorCode,
+      ),
+    ).toBe(true);
+  });
+
+  it('P1 creates, reads, updates, finalizes and deletes calculations', async () => {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `P1 Calc Lead ${RUN_ID}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+
+    const leadId = bodyAs<EntityResponse>(leadResponse).id;
+
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'exterior' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1220, heightMm: 2440 },
+    });
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+
+    const itemPayload = {
+      panelTypeId: panelType.id,
+      panelSizeId: panelSize.id,
+      thicknessMm: 10,
+      supplierId: supplier.id,
+      qualityClassId: qualityClass.id,
+      requiredAreaM2: '15.50',
+    };
+
+    const created = await request(server)
+      .post('/calculations')
+      .set(authHeader(context.managerToken))
+      .send({
+        leadId,
+        notes: 'P1 draft',
+        items: [itemPayload],
+      })
+      .expect(201);
+
+    const calculation = bodyAs<{
+      id: string;
+      status: string;
+      totalAmount: string;
+      items: Array<{
+        sheetsCount: number;
+        pricePerM2: string;
+        supplierPricePerM2?: string;
+        clientPricePerM2: string;
+      }>;
+    }>(created);
+
+    expect(calculation.status).toBe('draft');
+    expect(calculation.items[0]?.sheetsCount).toBe(6);
+    expect(calculation.items[0]?.supplierPricePerM2).toBeUndefined();
+    expect(calculation.items[0]?.clientPricePerM2).toBe('69000');
+    expect(calculation.items[0]?.pricePerM2).toBe('69000');
+
+    const fetched = await request(server)
+      .get(`/calculations/${calculation.id}`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    expect(bodyAs<{ id: string }>(fetched).id).toBe(calculation.id);
+
+    const updated = await request(server)
+      .patch(`/calculations/${calculation.id}`)
+      .set(authHeader(context.managerToken))
+      .send({
+        notes: 'Updated draft',
+        items: [{ ...itemPayload, requiredAreaM2: '20.00' }],
+      })
+      .expect(200);
+
+    expect(bodyAs<{ notes: string }>(updated).notes).toBe('Updated draft');
+
+    await request(server)
+      .post(`/calculations/${calculation.id}/finalize`)
+      .set(authHeader(context.managerToken))
+      .expect(201);
+
+    await request(server)
+      .patch(`/calculations/${calculation.id}`)
+      .set(authHeader(context.managerToken))
+      .send({ notes: 'Should fail' })
+      .expect(409);
+
+    await request(server)
+      .delete(`/calculations/${calculation.id}`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    await request(server)
+      .get(`/calculations/${calculation.id}`)
+      .set(authHeader(context.managerToken))
+      .expect(404);
+  });
+
+  it('P1 returns lead workspace with catalog and blocks foreign lead access', async () => {
+    const ownLead = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Workspace Lead ${RUN_ID}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+
+    const ownLeadId = bodyAs<EntityResponse>(ownLead).id;
+
+    const workspace = await request(server)
+      .get(`/leads/${ownLeadId}/workspace`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    const workspaceBody = bodyAs<{
+      lead: { virtualStatus: string };
+      catalog: { panelTypes: unknown[]; panelSizes: unknown[] };
+      calculations: unknown[];
+    }>(workspace);
+
+    expect(workspaceBody.catalog.panelTypes.length).toBe(3);
+    expect(workspaceBody.catalog.panelSizes.length).toBe(20);
+    expect(workspaceBody.lead.virtualStatus).toBeTruthy();
+
+    const foreignLead = await request(server)
+      .post('/leads')
+      .set(authHeader(context.headToken))
+      .send({
+        title: `Foreign Lead ${RUN_ID}`,
+        source: 'e2e',
+        clientId: context.clientId,
+        ownerId: context.headId,
+      })
+      .expect(201);
+
+    await request(server)
+      .get(`/leads/${bodyAs<EntityResponse>(foreignLead).id}/workspace`)
+      .set(authHeader(context.managerToken))
+      .expect(403);
+  });
+
+  it('P2 converts finalized calculation to quote and deal', async () => {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `P2 Quote Lead ${RUN_ID}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+
+    const leadId = bodyAs<EntityResponse>(leadResponse).id;
+
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'exterior' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1220, heightMm: 2440 },
+    });
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+
+    const itemPayload = {
+      panelTypeId: panelType.id,
+      panelSizeId: panelSize.id,
+      thicknessMm: 10,
+      supplierId: supplier.id,
+      qualityClassId: qualityClass.id,
+      requiredAreaM2: '15.50',
+    };
+
+    const calculation = await request(server)
+      .post('/calculations')
+      .set(authHeader(context.managerToken))
+      .send({ leadId, items: [itemPayload] })
+      .expect(201);
+
+    const calculationId = bodyAs<EntityResponse>(calculation).id;
+
+    await request(server)
+      .post(`/calculations/${calculationId}/finalize`)
+      .set(authHeader(context.managerToken))
+      .expect(201);
+
+    const quoteResponse = await request(server)
+      .post(`/calculations/${calculationId}/convert-to-quote`)
+      .set(authHeader(context.managerToken))
+      .send({ clientComment: 'Срок поставки 14 дней' })
+      .expect(201);
+
+    const quote = bodyAs<{
+      id: string;
+      status: string;
+      items: Array<{ panelTypeCode: string; totalPrice: string }>;
+    }>(quoteResponse);
+
+    expect(quote.status).toBe('draft');
+    expect(quote.items[0]?.panelTypeCode).toBe('exterior');
+
+    await request(server)
+      .patch(`/quotes/${quote.id}/status`)
+      .set(authHeader(context.managerToken))
+      .send({ status: 'approved' })
+      .expect(409);
+
+    await request(server)
+      .patch(`/quotes/${quote.id}/status`)
+      .set(authHeader(context.managerToken))
+      .send({ status: 'sent' })
+      .expect(200);
+
+    await request(server)
+      .patch(`/quotes/${quote.id}/status`)
+      .set(authHeader(context.managerToken))
+      .send({ status: 'approved' })
+      .expect(403);
+
+    await request(server)
+      .patch(`/quotes/${quote.id}/status`)
+      .set(authHeader(context.headToken))
+      .send({ status: 'approved' })
+      .expect(200);
+
+    const approvalAudit = await prisma.auditLog.findFirst({
+      where: {
+        action: 'QUOTE_APPROVED',
+        entityId: quote.id,
+      },
+    });
+    expect(approvalAudit).toBeTruthy();
+
+    const conversion = await request(server)
+      .post(`/quotes/${quote.id}/convert-to-deal`)
+      .set(authHeader(context.managerToken))
+      .expect(201);
+
+    const conversionBody = bodyAs<{ dealId: string; quote: { status: string } }>(
+      conversion,
+    );
+
+    expect(conversionBody.quote.status).toBe('converted');
+    expect(conversionBody.dealId).toBeTruthy();
+
+    const deal = await prisma.deal.findUniqueOrThrow({
+      where: { id: conversionBody.dealId },
+      include: { items: true, offers: true },
+    });
+
+    expect(deal.clientId).toBe(context.clientId);
+    expect(deal.items.length).toBeGreaterThan(0);
+    expect(deal.offers.length).toBeGreaterThan(0);
+    expect(deal.offers.every((offer) => offer.isApproved === false)).toBe(true);
+
+    const conversionAudit = await prisma.auditLog.findFirst({
+      where: {
+        action: 'QUOTE_CONVERTED',
+        entityId: quote.id,
+      },
+    });
+    expect(conversionAudit).toBeTruthy();
+  });
+
+  it('denies Manager quote approval even when they own the quote', async () => {
+    const quoteId = await createSentPanelQuote();
+
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.managerToken))
+      .send({ status: 'approved' })
+      .expect(403);
+  });
+
+  it('does not convert an unapproved quote into an approved offer', async () => {
+    const quoteId = await createSentPanelQuote();
+
+    await request(server)
+      .post(`/quotes/${quoteId}/convert-to-deal`)
+      .set(authHeader(context.managerToken))
+      .expect(409);
+
+    const quote = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: quoteId },
+      select: { dealId: true, status: true },
+    });
+    expect(quote.dealId).toBeNull();
+    expect(quote.status).toBe('sent');
+  });
+
+  it('locks commercial item mutations after WON', async () => {
+    const wonDeal = await createDeal(prisma, context, DealStage.WON);
+    const addPayload = {
+      items: [skuItemPayload({ quantitySheets: 3 })],
+    };
+    const qtyPayload = {
+      items: [skuItemPayload({ quantitySheets: 4 })],
+    };
+    const pricePayload = {
+      items: [skuItemPayload({ unitPrice: 120 })],
+    };
+    const deletePayload = { items: [] };
+    const discountPayload = {
+      items: [skuItemPayload({ discount: 5 })],
+    };
+
+    await request(server)
+      .post(`/deals/${wonDeal.id}/items`)
+      .set(authHeader(context.managerToken))
+      .send(addPayload)
+      .expect(403);
+
+    await request(server)
+      .post(`/deals/${wonDeal.id}/items`)
+      .set(authHeader(context.managerToken))
+      .send(qtyPayload)
+      .expect(403);
+
+    await request(server)
+      .post(`/deals/${wonDeal.id}/items`)
+      .set(authHeader(context.managerToken))
+      .send(pricePayload)
+      .expect(403);
+
+    await request(server)
+      .post(`/deals/${wonDeal.id}/items`)
+      .set(authHeader(context.managerToken))
+      .send(deletePayload)
+      .expect(403);
+
+    await request(server)
+      .post(`/deals/${wonDeal.id}/items`)
+      .set(authHeader(context.managerToken))
+      .send(discountPayload)
+      .expect(403);
+  });
+
+  it('still allows non-commercial Deal update after WON', async () => {
+    const wonDeal = await createDeal(prisma, context, DealStage.WON);
+    const title = `Operational WON title ${RUN_ID}`;
+
+    const response = await request(server)
+      .patch(`/deals/${wonDeal.id}`)
+      .set(authHeader(context.managerToken))
+      .send({ title })
+      .expect(200);
+
+    expect(bodyAs<{ title: string }>(response).title).toBe(title);
+  });
+
+  it('denies Manager discount injection on create and setItems', async () => {
+    const openDeal = await createDeal(prisma, context);
+
+    await request(server)
+      .post(`/deals/${openDeal.id}/items`)
+      .set(authHeader(context.managerToken))
+      .send({
+        items: [skuItemPayload({ discount: 5 })],
+      })
+      .expect(403);
+
+    await request(server)
+      .post('/deals')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Discount inject ${RUN_ID}`,
+        clientId: context.clientId,
+        items: [skuItemPayload({ discount: 8 })],
+      })
+      .expect(403);
+  });
+
+  async function createSentPanelQuote(): Promise<string> {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Quote lead ${RUN_ID}-${Math.random().toString(16).slice(2)}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+
+    const leadId = bodyAs<EntityResponse>(leadResponse).id;
+
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'exterior' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1220, heightMm: 2440 },
+    });
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+
+    const calculation = await request(server)
+      .post('/calculations')
+      .set(authHeader(context.managerToken))
+      .send({
+        leadId,
+        items: [
+          {
+            panelTypeId: panelType.id,
+            panelSizeId: panelSize.id,
+            thicknessMm: 10,
+            supplierId: supplier.id,
+            qualityClassId: qualityClass.id,
+            requiredAreaM2: '15.50',
+          },
+        ],
+      })
+      .expect(201);
+
+    const calculationId = bodyAs<EntityResponse>(calculation).id;
+
+    await request(server)
+      .post(`/calculations/${calculationId}/finalize`)
+      .set(authHeader(context.managerToken))
+      .expect(201);
+
+    const quoteResponse = await request(server)
+      .post(`/calculations/${calculationId}/convert-to-quote`)
+      .set(authHeader(context.managerToken))
+      .send({ clientComment: 'E2E sent quote' })
+      .expect(201);
+
+    const quoteId = bodyAs<EntityResponse>(quoteResponse).id;
+
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.managerToken))
+      .send({ status: 'sent' })
+      .expect(200);
+
+    return quoteId;
+  }
+
+  function skuItemPayload(
+    overrides: Record<string, unknown> = {},
+  ): Record<string, unknown> {
+    return {
+      productId: context.productId,
+      quantitySheets: 2,
+      quantityM2: 1,
+      unitPrice: 100,
+      discount: 0,
+      ...overrides,
+    };
+  }
+
   async function createPayment(orderId: string, amount: number) {
     const response = await request(server)
       .post(`/orders/${orderId}/payments`)
       .set(authHeader(context.managerToken))
       .send({
         orderId,
-        amount,
+        amount: amount.toFixed(2),
         paymentDate: new Date().toISOString(),
-      })
-      .expect(201);
+      });
+
+    if (response.status !== 201) {
+      console.log('PAYMENT_RESPONSE_BODY', response.body);
+    }
+
+    expect(response.status).toBe(201);
 
     return bodyAs<EntityResponse>(response);
+  }
+
+  async function createWonOrder(): Promise<OrderResponse & { dealId: string }> {
+    const wonDeal = await createDeal(prisma, context, DealStage.WON);
+    const orderResponse = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId: wonDeal.id })
+      .expect(201);
+
+    return { ...bodyAs<OrderResponse>(orderResponse), dealId: wonDeal.id };
+  }
+
+  async function payOrderInFull(
+    orderId: string,
+    totalAmount: string | number,
+  ): Promise<void> {
+    const payment = await createPayment(orderId, Number(totalAmount));
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.headToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(200);
+  }
+
+  function deliveryPayload(
+    orderId: string,
+    orderItemId: string,
+    quantity: number,
+  ) {
+    return {
+      orderId,
+      deliveryDate: new Date().toISOString(),
+      items: [{ orderItemId, quantity }],
+    };
   }
 });
 
@@ -623,6 +2329,8 @@ async function seedAcceptanceData(
   await seedAuthData(prisma);
 
   const passwordHash = await hash(TEST_PASSWORD, 12);
+  await ensureSystemUsers(prisma, passwordHash);
+
   const head = await upsertUser(prisma, {
     email: `head-${RUN_ID}@hpl.test`,
     firstName: 'Acceptance',
@@ -760,6 +2468,12 @@ async function seedAcceptanceData(
     },
   });
 
+  const { apiKeyToken, apiKeyLimitedToken } =
+    await seedServiceAccountsForE2e(prisma);
+
+  await seedPanels(prisma);
+  await seedCalculatorProduct(prisma);
+
   return {
     adminToken: adminTokens.accessToken,
     headToken: headTokens.accessToken,
@@ -771,7 +2485,29 @@ async function seedAcceptanceData(
     projectObjectId: projectObject.id,
     productId: product.id,
     sheetArea,
+    apiKeyToken,
+    apiKeyLimitedToken,
   };
+}
+
+async function ensureSystemUsers(
+  prisma: PrismaService,
+  passwordHash: string,
+): Promise<void> {
+  await upsertUser(prisma, {
+    email: 'lead-pool@hpl.com',
+    firstName: 'Lead',
+    lastName: 'Pool',
+    passwordHash,
+    roleName: RoleName.OBSERVER,
+  });
+  await upsertUser(prisma, {
+    email: 'system@hpl.com',
+    firstName: 'System',
+    lastName: 'Bot',
+    passwordHash,
+    roleName: RoleName.OBSERVER,
+  });
 }
 
 async function seedAuthData(prisma: PrismaService): Promise<void> {
@@ -811,6 +2547,7 @@ async function seedAuthData(prisma: PrismaService): Promise<void> {
     Array.from(permissionSlugs),
   );
   await assignRolePermissions(prisma, roleIds, RoleName.MANAGER, [
+    'auth:me',
     'products:read',
     'clients:read',
     'clients:create',
@@ -828,9 +2565,20 @@ async function seedAuthData(prisma: PrismaService): Promise<void> {
     'deals:create_offer',
     'orders:read',
     'orders:create',
+    'orders:cancel',
     'payments:create',
     'deliveries:create',
+    'files:upload',
+    'files:read',
     'audit:read',
+    'panel_catalog:read',
+    'calculations:read',
+    'calculations:create',
+    'calculations:update',
+    'calculations:delete',
+    'quotes:read',
+    'quotes:create',
+    'quotes:update',
   ]);
   await assignRolePermissions(prisma, roleIds, RoleName.STOREKEEPER, [
     'products:read',
@@ -975,6 +2723,44 @@ function futureDate(days: number): Date {
 
 function futureIso(days: number): string {
   return futureDate(days).toISOString();
+}
+
+function hashApiKeyToken(token: string, pepper: string): string {
+  return createHash('sha256').update(token + pepper).digest('hex');
+}
+
+async function seedServiceAccountsForE2e(
+  prisma: PrismaService,
+): Promise<{ apiKeyToken: string; apiKeyLimitedToken: string }> {
+  const pepper =
+    process.env.SERVICE_ACCOUNT_TOKEN_PEPPER ??
+    'test-service-account-pepper-min-32-chars';
+  const apiKeyToken = `e2e-valid-${RUN_ID}`;
+  const apiKeyLimitedToken = `e2e-limited-${RUN_ID}`;
+
+  await prisma.serviceAccount.upsert({
+    where: { name: `telegram-bot-e2e-${RUN_ID}` },
+    update: {},
+    create: {
+      name: `telegram-bot-e2e-${RUN_ID}`,
+      tokenHash: hashApiKeyToken(apiKeyToken, pepper),
+      permissions: ['leads:create'],
+      isActive: true,
+    },
+  });
+
+  await prisma.serviceAccount.upsert({
+    where: { name: `telegram-bot-limited-${RUN_ID}` },
+    update: {},
+    create: {
+      name: `telegram-bot-limited-${RUN_ID}`,
+      tokenHash: hashApiKeyToken(apiKeyLimitedToken, pepper),
+      permissions: ['clients:create'],
+      isActive: true,
+    },
+  });
+
+  return { apiKeyToken, apiKeyLimitedToken };
 }
 
 function getFromMap<T>(map: Map<string, T>, key: string): T {

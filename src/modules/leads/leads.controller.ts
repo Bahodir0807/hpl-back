@@ -23,6 +23,7 @@ import type { CurrentUser as CurrentUserType } from '../../common/interfaces/cur
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AssignLeadDto } from './dto/assign-lead.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
+import { CreateLeadNoteDto } from './dto/create-lead-note.dto';
 import { DisqualifyLeadDto } from './dto/disqualify-lead.dto';
 import { FilterLeadDto } from './dto/filter-lead.dto';
 import { QualifyLeadDto } from './dto/qualify-lead.dto';
@@ -60,8 +61,11 @@ export class LeadsController {
   @ApiOperation({ summary: 'Get lead card with assignment history' })
   @ApiResponse({ status: 200, description: 'Lead card returned' })
   @ApiResponse({ status: 404, description: 'Lead not found' })
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.leadsService.findOne(id);
+  findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadsService.findOne(id, user.id, user.permissions);
   }
 
   @Patch(':id')
@@ -69,8 +73,12 @@ export class LeadsController {
   @ApiOperation({ summary: 'Update lead fields' })
   @ApiResponse({ status: 200, description: 'Lead updated' })
   @ApiResponse({ status: 404, description: 'Lead not found' })
-  update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateLeadDto) {
-    return this.leadsService.update(id, dto);
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateLeadDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadsService.update(id, dto, user.id, user.permissions);
   }
 
   @Post(':id/qualify')
@@ -84,7 +92,7 @@ export class LeadsController {
     @Body() dto: QualifyLeadDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.leadsService.qualify(id, dto, user.id);
+    return this.leadsService.qualify(id, dto, user.id, user.permissions);
   }
 
   @Post(':id/disqualify')
@@ -96,8 +104,9 @@ export class LeadsController {
   disqualify(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: DisqualifyLeadDto,
+    @CurrentUser() user: CurrentUserType,
   ) {
-    return this.leadsService.disqualify(id, dto);
+    return this.leadsService.disqualify(id, dto, user.id, user.permissions);
   }
 
   @Post(':id/assign')
@@ -113,12 +122,38 @@ export class LeadsController {
     return this.leadsService.assign(id, dto, user.id);
   }
 
+  @Post(':id/calls')
+  @RequirePermissions('leads:update')
+  @ApiOperation({ summary: 'Log outbound call and return tel: URI' })
+  @ApiResponse({ status: 201, description: 'Call activity created' })
+  createCall(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadsService.createCall(id, user.id, user.permissions);
+  }
+
+  @Post(':id/notes')
+  @RequirePermissions('leads:update')
+  @ApiOperation({ summary: 'Add a note to the lead timeline' })
+  @ApiResponse({ status: 201, description: 'Note created' })
+  createNote(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateLeadNoteDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadsService.createNote(id, dto, user.id, user.permissions);
+  }
+
   @Delete(':id')
   @RequirePermissions('leads:delete')
   @ApiOperation({ summary: 'Soft delete lead' })
   @ApiResponse({ status: 200, description: 'Lead soft deleted' })
   @ApiResponse({ status: 404, description: 'Lead not found' })
-  softDelete(@Param('id', ParseUUIDPipe) id: string) {
-    return this.leadsService.softDelete(id);
+  softDelete(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadsService.softDelete(id, user.id, user.permissions);
   }
 }

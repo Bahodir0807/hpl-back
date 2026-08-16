@@ -1,9 +1,10 @@
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Client, Prisma } from '@prisma/client';
+import { Client, DealStage, LeadStatus, Prisma, TaskStatus } from '@prisma/client';
 import { normalizePhone } from '../../common/utils/phone-normalizer';
 import { PrismaService } from '../prisma/prisma.service';
 import { CheckDuplicatesDto } from './dto/check-duplicates.dto';
@@ -28,8 +29,18 @@ export type ClientDuplicateMatch = {
   reasons: DuplicateMatchReason[];
 };
 
+const clientOwnerInclude = Prisma.validator<Prisma.ClientInclude>()({
+  owner: {
+    select: { id: true, firstName: true, lastName: true, email: true },
+  },
+});
+
+type ClientListItem = Prisma.ClientGetPayload<{
+  include: typeof clientOwnerInclude;
+}>;
+
 type ClientListResult = {
-  items: Client[];
+  items: ClientListItem[];
   total: number;
   page: number;
   limit: number;
@@ -73,7 +84,7 @@ export class ClientsService {
 
     if (normalizedName) {
       conditions.push({
-        name: { contains: normalizedName, mode: 'insensitive' },
+        name: { contains: normalizedName },
       });
     }
 
@@ -199,6 +210,7 @@ export class ClientsService {
         orderBy: { createdAt: 'desc' },
         skip: (page - 1) * limit,
         take: limit,
+        include: clientOwnerInclude,
       }),
       this.prisma.client.count({ where }),
     ]);
@@ -206,15 +218,18 @@ export class ClientsService {
     return { items, total, page, limit };
   }
 
-  async findOne(id: string) {
+  async findOne(id: string, currentUserId: string, permissions: string[]) {
     const client = await this.prisma.client.findFirst({
       where: {
         id,
         deletedAt: null,
       },
       include: {
+        ...clientOwnerInclude,
         contacts: true,
-        projectObjects: true,
+        projectObjects: {
+          include: this.projectObjectProductsInclude(),
+        },
         deals: true,
         leads: true,
       },
@@ -224,11 +239,18 @@ export class ClientsService {
       throw new NotFoundException('Client not found');
     }
 
+    this.assertClientAccess(client, currentUserId, permissions);
+
     return client;
   }
 
-  async update(id: string, dto: UpdateClientDto): Promise<Client> {
-    await this.ensureClientExists(id);
+  async update(
+    id: string,
+    dto: UpdateClientDto,
+    currentUserId: string,
+    permissions: string[],
+  ): Promise<Client> {
+    await this.assertClientAccessById(id, currentUserId, permissions);
     const normalizedDto = this.normalizeUpdateClientDto(dto);
 
     return this.prisma.client.update({
@@ -249,8 +271,13 @@ export class ClientsService {
     });
   }
 
-  async addContact(clientId: string, dto: CreateContactDto) {
-    await this.ensureClientExists(clientId);
+  async addContact(
+    clientId: string,
+    dto: CreateContactDto,
+    currentUserId: string,
+    permissions: string[],
+  ) {
+    await this.assertClientAccessById(clientId, currentUserId, permissions);
 
     return this.prisma.contact.create({
       data: {
@@ -260,8 +287,13 @@ export class ClientsService {
     });
   }
 
-  async addObject(clientId: string, dto: CreateProjectObjectDto) {
-    await this.ensureClientExists(clientId);
+  async addObject(
+    clientId: string,
+    dto: CreateProjectObjectDto,
+    currentUserId: string,
+    permissions: string[],
+  ) {
+    await this.assertClientAccessById(clientId, currentUserId, permissions);
 
     return this.prisma.projectObject.create({
       data: {
@@ -277,12 +309,91 @@ export class ClientsService {
     });
   }
 
-  async softDelete(id: string): Promise<Client> {
-    await this.ensureClientExists(id);
+  async softDelete(
+    id: string,
+    currentUserId: string,
+    permissions: string[],
+  ): Promise<Client> {
+    await this.assertClientAccessById(id, currentUserId, permissions);
 
-    return this.prisma.client.update({
-      where: { id },
-      data: { deletedAt: new Date() },
+    const now = new Date();
+    const openLeadStatuses: LeadStatus[] = [
+      LeadStatus.NEW,
+      LeadStatus.IN_PROGRESS,
+      LeadStatus.QUALIFIED,
+    ];
+
+    return this.prisma.$transaction(async (tx) => {
+      const client = await tx.client.update({
+        where: { id },
+        data: { deletedAt: now },
+      });
+
+      const relatedLeads = await tx.lead.findMany({
+        where: { clientId: id, deletedAt: null },
+        select: { id: true },
+      });
+      const relatedDeals = await tx.deal.findMany({
+        where: { clientId: id, deletedAt: null },
+        select: { id: true },
+      });
+      const leadIds = relatedLeads.map((lead) => lead.id);
+      const dealIds = relatedDeals.map((deal) => deal.id);
+
+      const taskScope: Prisma.TaskWhereInput[] = [
+        { relatedType: 'Client', relatedId: id },
+      ];
+      if (leadIds.length > 0) {
+        taskScope.push({ relatedType: 'Lead', relatedId: { in: leadIds } });
+      }
+      if (dealIds.length > 0) {
+        taskScope.push({ relatedType: 'Deal', relatedId: { in: dealIds } });
+      }
+
+      // Tasks have no clientId/cancelledAt: cancel open rows via relatedType.
+      await tx.task.updateMany({
+        where: {
+          completedAt: null,
+          status: { notIn: [TaskStatus.COMPLETED, TaskStatus.CANCELLED] },
+          OR: taskScope,
+        },
+        data: { status: TaskStatus.CANCELLED },
+      });
+
+      // Leads use status (not stage) and have no closedAt.
+      await tx.lead.updateMany({
+        where: {
+          clientId: id,
+          deletedAt: null,
+          status: { in: openLeadStatuses },
+        },
+        data: {
+          status: LeadStatus.UNQUALIFIED,
+          unqualificationReason: 'Client deleted',
+        },
+      });
+
+      // Deals have no closedAt; WON/LOST are the terminal stages.
+      await tx.deal.updateMany({
+        where: {
+          clientId: id,
+          deletedAt: null,
+          stage: { notIn: [DealStage.WON, DealStage.LOST] },
+        },
+        data: {
+          stage: DealStage.LOST,
+          lossReason: 'Client deleted',
+        },
+      });
+
+      await tx.calculationSession.updateMany({
+        where: { clientId: id, deletedAt: null },
+        data: { deletedAt: now },
+      });
+
+      // TODO: do not release stock reservations automatically — requires inventory review
+
+      return client;
     });
   }
 
@@ -305,10 +416,10 @@ export class ClientsService {
         : (filterDto.ownerId ?? currentUserId),
       OR: filterDto.search
         ? [
-            { name: { contains: filterDto.search, mode: 'insensitive' } },
-            { inn: { contains: filterDto.search, mode: 'insensitive' } },
+            { name: { contains: filterDto.search } },
+            { inn: { contains: filterDto.search } },
             { phone: { contains: normalizePhone(filterDto.search) } },
-            { email: { contains: filterDto.search, mode: 'insensitive' } },
+            { email: { contains: filterDto.search } },
             {
               contacts: {
                 some: {
@@ -316,20 +427,17 @@ export class ClientsService {
                     {
                       firstName: {
                         contains: filterDto.search,
-                        mode: 'insensitive',
                       },
                     },
                     {
                       lastName: {
                         contains: filterDto.search,
-                        mode: 'insensitive',
                       },
                     },
                     { phone: { contains: normalizePhone(filterDto.search) } },
                     {
                       email: {
                         contains: filterDto.search,
-                        mode: 'insensitive',
                       },
                     },
                   ],
@@ -339,7 +447,7 @@ export class ClientsService {
             {
               projectObjects: {
                 some: {
-                  name: { contains: filterDto.search, mode: 'insensitive' },
+                  name: { contains: filterDto.search },
                 },
               },
             },
@@ -438,6 +546,60 @@ export class ClientsService {
       email: dto.email,
       isPrimary: dto.isPrimary ?? false,
     };
+  }
+
+  private projectObjectProductsInclude(): Prisma.ProjectObjectInclude {
+    return {
+      products: {
+        where: { deletedAt: null },
+        select: {
+          id: true,
+          sku: true,
+          name: true,
+          decorCode: true,
+          colorName: true,
+          surface: true,
+          thickness: true,
+          status: true,
+          brand: { select: { id: true, name: true } },
+          collection: { select: { id: true, name: true } },
+        },
+      },
+    };
+  }
+
+  private assertClientAccess(
+    client: Pick<Client, 'ownerId'>,
+    currentUserId: string,
+    permissions: string[],
+  ): void {
+    if (permissions.includes(READ_ALL_CLIENTS_PERMISSION)) {
+      return;
+    }
+
+    if (client.ownerId === currentUserId) {
+      return;
+    }
+
+    throw new ForbiddenException('Access to this client is forbidden');
+  }
+
+  private async assertClientAccessById(
+    clientId: string,
+    currentUserId: string,
+    permissions: string[],
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    const client = await (tx ?? this.prisma).client.findFirst({
+      where: { id: clientId, deletedAt: null },
+      select: { ownerId: true },
+    });
+
+    if (!client) {
+      throw new NotFoundException('Client not found');
+    }
+
+    this.assertClientAccess(client, currentUserId, permissions);
   }
 
   private async ensureClientExists(clientId: string): Promise<void> {

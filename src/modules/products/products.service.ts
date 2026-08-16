@@ -8,6 +8,7 @@ import {
   Product,
   ProductPrice,
   ProductPriceType,
+  ProductStatus,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateProductDto } from './dto/create-product.dto';
@@ -26,6 +27,13 @@ type ProductListResult = {
   total: number;
   page: number;
   limit: number;
+};
+
+export type ProductFacets = {
+  collections: { id: string; name: string; count: number }[];
+  thicknesses: { value: number; count: number }[];
+  surfaces: { value: string; count: number }[];
+  brands: { id: string; name: string; count: number }[];
 };
 
 @Injectable()
@@ -123,6 +131,106 @@ export class ProductsService {
     }
 
     return this.hidePurchasePricesIfNeeded(product, userPermissions);
+  }
+
+  async getFacets(): Promise<ProductFacets> {
+    const activeWhere: Prisma.ProductWhereInput = {
+      deletedAt: null,
+      status: ProductStatus.ACTIVE,
+    };
+
+    const [
+      collectionGroups,
+      thicknessGroups,
+      surfaceGroups,
+      brandGroups,
+    ] = await Promise.all([
+      this.prisma.product.groupBy({
+        by: ['collectionId'],
+        where: { ...activeWhere, collectionId: { not: null } },
+        _count: { _all: true },
+      }),
+      this.prisma.product.groupBy({
+        by: ['thickness'],
+        where: activeWhere,
+        _count: { _all: true },
+        orderBy: { thickness: 'asc' },
+      }),
+      this.prisma.product.groupBy({
+        by: ['surface'],
+        where: { ...activeWhere, surface: { not: null } },
+        _count: { _all: true },
+        orderBy: { surface: 'asc' },
+      }),
+      this.prisma.product.groupBy({
+        by: ['brandId'],
+        where: activeWhere,
+        _count: { _all: true },
+      }),
+    ]);
+
+    const collectionIds = collectionGroups
+      .map((group) => group.collectionId)
+      .filter((id): id is string => id !== null);
+    const brandIds = brandGroups.map((group) => group.brandId);
+
+    const [collections, brands] = await Promise.all([
+      collectionIds.length > 0
+        ? this.prisma.productCollection.findMany({
+            where: { id: { in: collectionIds } },
+            select: { id: true, name: true },
+          })
+        : Promise.resolve([]),
+      brandIds.length > 0
+        ? this.prisma.brand.findMany({
+            where: { id: { in: brandIds } },
+            select: { id: true, name: true },
+          })
+        : Promise.resolve([]),
+    ]);
+
+    const collectionNameById = new Map<string, string>(
+      collections.map(
+        (collection) => [collection.id, collection.name] as const,
+      ),
+    );
+    const brandNameById = new Map<string, string>(
+      brands.map((brand) => [brand.id, brand.name] as const),
+    );
+
+    return {
+      collections: collectionGroups
+        .filter(
+          (group): group is typeof group & { collectionId: string } =>
+            group.collectionId !== null,
+        )
+        .map((group) => ({
+          id: group.collectionId,
+          name: collectionNameById.get(group.collectionId) ?? '',
+          count: group._count._all,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+      thicknesses: thicknessGroups.map((group) => ({
+        value: group.thickness,
+        count: group._count._all,
+      })),
+      surfaces: surfaceGroups
+        .filter(
+          (group): group is typeof group & { surface: string } =>
+            group.surface !== null,
+        )
+        .map((group) => ({
+          value: group.surface,
+          count: group._count._all,
+        })),
+      brands: brandGroups
+        .map((group) => ({
+          id: group.brandId,
+          name: brandNameById.get(group.brandId) ?? '',
+          count: group._count._all,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    };
   }
 
   async update(id: string, dto: UpdateProductDto): Promise<ProductWithPrices> {
@@ -234,10 +342,10 @@ export class ProductsService {
       prices: priceFilter ? { some: priceFilter } : undefined,
       OR: filterDto.search
         ? [
-            { sku: { contains: filterDto.search, mode: 'insensitive' } },
-            { name: { contains: filterDto.search, mode: 'insensitive' } },
-            { decorCode: { contains: filterDto.search, mode: 'insensitive' } },
-            { colorName: { contains: filterDto.search, mode: 'insensitive' } },
+            { sku: { contains: filterDto.search } },
+            { name: { contains: filterDto.search } },
+            { decorCode: { contains: filterDto.search } },
+            { colorName: { contains: filterDto.search } },
           ]
         : undefined,
     };
