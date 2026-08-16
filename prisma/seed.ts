@@ -20,7 +20,7 @@ import {
 } from '@prisma/client';
 import { hash } from 'bcryptjs';
 import { seedServiceAccounts } from './seed/service-accounts';
-import { seedPanels } from './seed/panels';
+import { seedPanels, seedFixtureCnyUsdRate } from './seed/panels';
 import { seedCalculatorProduct } from './seed/calculator-product';
 
 let prisma: PrismaClient;
@@ -155,6 +155,7 @@ const permissionDefinitions = [
   ['quotes:create', 'Create panel quotes from calculations'],
   ['quotes:update', 'Update panel quote status'],
   ['quotes:approve', 'Approve panel quotes (privileged commercial approval)'],
+  ['currency_rates:manage', 'Manage the centralized CNY to USD rate'],
 ] as const;
 
 const readPermissions = permissionDefinitions
@@ -332,6 +333,7 @@ const products = [
 ];
 
 async function clearDatabase(): Promise<void> {
+  await prisma.currencyRate.deleteMany();
   await prisma.calculationLineItem.deleteMany();
   await prisma.panelQuoteItem.deleteMany();
   await prisma.panelQuote.deleteMany();
@@ -1343,6 +1345,17 @@ async function main(): Promise<void> {
   await seedServiceAccounts(prisma);
   await seedPanels(prisma);
   await seedCalculatorProduct(prisma);
+
+  if (!isProduction) {
+    const admin = await prisma.user.findUnique({
+      where: { email: 'admin@hpl.com' },
+      select: { id: true },
+    });
+    if (admin) {
+      await seedFixtureCnyUsdRate(prisma, admin.id);
+    }
+  }
+
   console.log('Panel catalog seed completed');
 }
 

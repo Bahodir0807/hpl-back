@@ -9,6 +9,11 @@ import { BusinessException } from '../common/exceptions/business.exception';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
 import { PanelPriceCalculator } from '../panels/services/panel-price-calculator.service';
 import { PanelQuantityCalculator } from '../panels/services/panel-quantity-calculator.service';
+import { CurrencyRateService } from '../panels/services/currency-rate.service';
+import {
+  HPL_SELLING_COEFFICIENT,
+  HPL_SELLING_CURRENCY,
+} from '../panels/pricing/hpl-pricing.constants';
 import { PrismaService } from '../modules/prisma/prisma.service';
 import {
   CALCULATION_PERMISSIONS,
@@ -65,6 +70,7 @@ export class CalculationService {
     private readonly prisma: PrismaService,
     private readonly quantityCalc: PanelQuantityCalculator,
     private readonly priceCalc: PanelPriceCalculator,
+    private readonly currencyRateService: CurrencyRateService,
   ) {}
 
   async create(
@@ -72,7 +78,8 @@ export class CalculationService {
     user: CurrentUser,
   ): Promise<CalculationWithItems> {
     const lead = await this.guardLeadAccess(dto.leadId, user);
-    const calculatedItems = await this.calculateItems(dto.items);
+    const cnyUsdRate = await this.currencyRateService.getActiveCnyUsdRate();
+    const calculatedItems = await this.calculateItems(dto.items, cnyUsdRate);
 
     return this.prisma.$transaction(async (tx) => {
       const totalAmount = calculatedItems.reduce(
@@ -89,6 +96,9 @@ export class CalculationService {
           createdById: user.id,
           status: CALCULATION_STATUS.DRAFT,
           totalAmount: totalAmount.toDecimalPlaces(2),
+          displayCurrency: HPL_SELLING_CURRENCY,
+          cnyUsdRate,
+          sellingCoefficient: HPL_SELLING_COEFFICIENT,
           notes: dto.notes,
           items: {
             create: calculatedItems.map(({ areaM2: _areaM2, ...item }) => item),
@@ -176,8 +186,11 @@ export class CalculationService {
     this.assertCalculationWriteAccess(session, user);
     this.assertDraft(session);
 
+    const cnyUsdRate = dto.items
+      ? await this.currencyRateService.getActiveCnyUsdRate()
+      : undefined;
     const calculatedItems = dto.items
-      ? await this.calculateItems(dto.items)
+      ? await this.calculateItems(dto.items, cnyUsdRate!)
       : undefined;
 
     return this.prisma.$transaction(async (tx) => {
@@ -198,6 +211,13 @@ export class CalculationService {
         where: { id },
         data: {
           notes: dto.notes ?? session.notes,
+          ...(calculatedItems
+            ? {
+                displayCurrency: HPL_SELLING_CURRENCY,
+                cnyUsdRate,
+                sellingCoefficient: HPL_SELLING_COEFFICIENT,
+              }
+            : {}),
           totalAmount:
             totalAmount === null || totalAmount === undefined
               ? null
@@ -241,7 +261,8 @@ export class CalculationService {
   }
 
   async preview(dto: CalculationItemDto) {
-    const item = await this.calculateItem(dto, 0);
+    const cnyUsdRate = await this.currencyRateService.getActiveCnyUsdRate();
+    const item = await this.calculateItem(dto, 0, cnyUsdRate);
 
     return {
       sheetsCount: item.sheetsCount,
@@ -256,15 +277,17 @@ export class CalculationService {
 
   private async calculateItems(
     items: CalculationItemDto[],
+    cnyUsdRate: Prisma.Decimal,
   ): Promise<CalculatedLineItem[]> {
     return Promise.all(
-      items.map((item, index) => this.calculateItem(item, index)),
+      items.map((item, index) => this.calculateItem(item, index, cnyUsdRate)),
     );
   }
 
   private async calculateItem(
     item: CalculationItemDto,
     sortOrder: number,
+    cnyUsdRate: Prisma.Decimal,
   ): Promise<CalculatedLineItem> {
     const requiredArea = new Prisma.Decimal(item.requiredAreaM2);
 
@@ -354,6 +377,14 @@ export class CalculationService {
     }
 
     const quantity = this.quantityCalc.calculate(requiredArea, size);
+    if (quantity.sheetsCount <= 0) {
+      throw new BusinessException(
+        HttpStatus.BAD_REQUEST,
+        'INVALID_QUANTITY',
+        'Количество листов должно быть больше 0',
+      );
+    }
+
     const price = await this.priceCalc.calculate({
       supplierId: item.supplierId,
       qualityClassId: item.qualityClassId,
@@ -361,6 +392,7 @@ export class CalculationService {
       widthMm: size.widthMm,
       heightMm: size.heightMm,
       sheets: quantity.sheetsCount,
+      cnyUsdRate,
     });
 
     return {

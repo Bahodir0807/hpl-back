@@ -3,9 +3,13 @@ import { BullBoardModule } from '@bull-board/nestjs';
 import { ExpressAdapter } from '@bull-board/express';
 import { BullModule } from '@nestjs/bullmq';
 import { MiddlewareConsumer, Module, NestModule, RequestMethod } from '@nestjs/common';
-import { JwtModule } from '@nestjs/jwt';
+import { ConfigService } from '@nestjs/config';
+import { JwtModule, JwtService } from '@nestjs/jwt';
+import { NextFunction, Request, Response } from 'express';
 import { ApiKeyModule } from '../../auth/api-key/api-key.module';
+import type { Env } from '../../config/env.schema';
 import { UsersModule } from '../../modules/users/users.module';
+import { UsersService } from '../../modules/users/users.service';
 import { CalculationConvertProcessor } from './processors/calculation-convert.processor';
 import { NotificationSendProcessor } from './processors/notification-send.processor';
 import { QUEUE_NAMES } from './queue.constants';
@@ -46,9 +50,31 @@ const workerProviders =
         defaultJobOptions,
       },
     ),
-    BullBoardModule.forRoot({
-      route: '/admin/queues',
-      adapter: ExpressAdapter,
+    // Auth MUST be in this same apply() chain. BullBoardRootModule is global, so
+    // its router is registered before QueueModule.configure() middleware and
+    // otherwise serves /admin/queues without JWT.
+    BullBoardModule.forRootAsync({
+      imports: [UsersModule, JwtModule.register({})],
+      inject: [JwtService, ConfigService, UsersService],
+      useFactory: (
+        jwtService: JwtService,
+        configService: ConfigService<Env, true>,
+        usersService: UsersService,
+      ) => {
+        const auth = new QueueDashboardAuthMiddleware(
+          jwtService,
+          configService,
+          usersService,
+        );
+
+        return {
+          route: '/admin/queues',
+          adapter: ExpressAdapter,
+          middleware: (req: Request, res: Response, next: NextFunction) => {
+            void auth.use(req, res, next);
+          },
+        };
+      },
     }),
     BullBoardModule.forFeature(
       {

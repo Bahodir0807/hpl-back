@@ -78,4 +78,36 @@ describe('PermissionsGuard', () => {
 
     expect(guard.canActivate(createContext(user))).toBe(true);
   });
+
+  it('rejects Manager without currency_rates:manage', () => {
+    jest.spyOn(reflector, 'getAllAndOverride').mockImplementation((key) => {
+      if (key === REQUIRED_PERMISSIONS_KEY) {
+        return ['currency_rates:manage'];
+      }
+
+      return false;
+    });
+
+    expect(() => guard.canActivate(createContext(user))).toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('allows HEAD with currency_rates:manage', () => {
+    jest.spyOn(reflector, 'getAllAndOverride').mockImplementation((key) => {
+      if (key === REQUIRED_PERMISSIONS_KEY) {
+        return ['currency_rates:manage'];
+      }
+
+      return false;
+    });
+
+    const head: CurrentUser = {
+      ...user,
+      roles: [RoleName.HEAD],
+      permissions: ['currency_rates:manage'],
+    };
+
+    expect(guard.canActivate(createContext(head))).toBe(true);
+  });
 });

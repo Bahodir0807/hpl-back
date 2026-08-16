@@ -54,6 +54,10 @@ describe('CalculationService', () => {
     calculate: jest.fn(),
   };
 
+  const currencyRateService = {
+    getActiveCnyUsdRate: jest.fn(),
+  };
+
   const baseItem = {
     panelTypeId: 'type-id',
     panelSizeId: 'size-id',
@@ -69,6 +73,7 @@ describe('CalculationService', () => {
       prisma as never,
       quantityCalc as never,
       priceCalc as never,
+      currencyRateService as never,
     );
 
     prisma.lead.findFirst.mockResolvedValue(lead);
@@ -84,15 +89,18 @@ describe('CalculationService', () => {
       currencyCode: 'UZS',
     });
     prisma.supplierQualityMapping.findFirst.mockResolvedValue({ id: 'mapping' });
+    currencyRateService.getActiveCnyUsdRate.mockResolvedValue(
+      new Prisma.Decimal('0.1'),
+    );
     quantityCalc.calculate.mockReturnValue({
       sheetsCount: 6,
       wastePercent: new Prisma.Decimal('5.83'),
     });
     priceCalc.calculate.mockResolvedValue({
-      supplierPricePerM2: new Prisma.Decimal('60000'),
-      clientPricePerM2: new Prisma.Decimal('69000'),
-      pricePerSheet: new Prisma.Decimal('178608'),
-      total: new Prisma.Decimal('1071648'),
+      supplierPricePerM2: new Prisma.Decimal('100'),
+      clientPricePerM2: new Prisma.Decimal('20'),
+      pricePerSheet: new Prisma.Decimal('59.536'),
+      total: new Prisma.Decimal('357.22'),
       areaM2: new Prisma.Decimal('2.9768'),
     });
     prisma.$transaction.mockImplementation(async (callback) => callback(prisma));
@@ -115,7 +123,21 @@ describe('CalculationService', () => {
 
     await service.create(dto, manager);
 
-    expect(prisma.calculationSession.create).toHaveBeenCalled();
+    const createData = prisma.calculationSession.create.mock.calls[0][0]
+      .data as {
+      displayCurrency: string;
+      sellingCoefficient: Prisma.Decimal;
+      cnyUsdRate: Prisma.Decimal;
+    };
+    expect(createData.displayCurrency).toBe('USD');
+    expect(createData.sellingCoefficient.toString()).toBe('2');
+    expect(createData.cnyUsdRate.toString()).toBe('0.1');
+    const priceInput = priceCalc.calculate.mock.calls[0][0] as {
+      cnyUsdRate: Prisma.Decimal;
+      sheets: number;
+    };
+    expect(priceInput.cnyUsdRate.toString()).toBe('0.1');
+    expect(priceInput.sheets).toBe(6);
     expect(prisma.activity.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -246,5 +268,31 @@ describe('CalculationService', () => {
     expect(result.total).toBe(1);
     expect(result.items).toHaveLength(1);
     expect(prisma.lead.findFirst).toHaveBeenCalled();
+  });
+
+  it('ignores manager-injected supplier price, rate and coefficient', async () => {
+    const dto = {
+      leadId: lead.id,
+      items: [
+        {
+          ...baseItem,
+          supplierPricePerM2: '1',
+          cnyUsdRate: '999',
+          coefficient: '1',
+          clientPricePerM2: '1',
+        },
+      ],
+    };
+
+    await service.create(dto as CreateCalculationDto, manager);
+
+    const priceInput = priceCalc.calculate.mock.calls[0][0] as Record<
+      string,
+      unknown
+    >;
+    expect((priceInput.cnyUsdRate as Prisma.Decimal).toString()).toBe('0.1');
+    expect(priceInput.supplierPricePerM2).toBeUndefined();
+    expect(priceInput.coefficient).toBeUndefined();
+    expect(priceInput.clientPricePerM2).toBeUndefined();
   });
 });

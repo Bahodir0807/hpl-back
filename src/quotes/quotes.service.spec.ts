@@ -52,13 +52,15 @@ describe('QuotesService', () => {
     panelQuote: {
       create: jest.fn(),
       findUnique: jest.fn(),
+      findUniqueOrThrow: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
       findMany: jest.fn(),
       count: jest.fn(),
     },
     activity: { create: jest.fn() },
     auditLog: { create: jest.fn() },
-    lead: { findFirst: jest.fn(), findUnique: jest.fn(), update: jest.fn() },
+    lead: { findFirst: jest.fn(), findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
     product: { findUnique: jest.fn() },
     supplier: { findUnique: jest.fn() },
     task: { create: jest.fn() },
@@ -364,7 +366,9 @@ describe('QuotesService', () => {
       id: 'deal-id',
       title: 'Deal',
     });
-    prisma.panelQuote.update.mockResolvedValue({
+    prisma.lead.updateMany.mockResolvedValue({ count: 1 });
+    prisma.panelQuote.updateMany.mockResolvedValue({ count: 1 });
+    prisma.panelQuote.findUniqueOrThrow.mockResolvedValue({
       id: 'quote-id',
       status: QUOTE_STATUS.CONVERTED,
       dealId: 'deal-id',
@@ -383,9 +387,24 @@ describe('QuotesService', () => {
         serviceProductId: 'product-id',
       }),
     );
-    expect(prisma.lead.update).toHaveBeenCalledWith({
-      where: { id: 'lead-id' },
+    expect(prisma.lead.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'lead-id',
+        deletedAt: null,
+        dealId: null,
+      },
       data: { dealId: 'deal-id' },
+    });
+    expect(prisma.panelQuote.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'quote-id',
+        dealId: null,
+        status: QUOTE_STATUS.APPROVED,
+      },
+      data: {
+        status: QUOTE_STATUS.CONVERTED,
+        dealId: 'deal-id',
+      },
     });
     expect(prisma.auditLog.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -395,5 +414,98 @@ describe('QuotesService', () => {
         }),
       }),
     );
+  });
+
+  it('aborts with conflict when the lead was already claimed', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      calculationId: 'calc-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.APPROVED,
+      dealId: null,
+      totalAmount: new Prisma.Decimal('1000'),
+      displayCurrency: 'USD',
+      validUntil: new Date(Date.now() + 86_400_000),
+      items: [
+        {
+          areaM2: new Prisma.Decimal('2.9768'),
+          sheetsCount: 2,
+          pricePerM2: new Prisma.Decimal('20'),
+          supplierPricePerM2: new Prisma.Decimal('100'),
+          totalPrice: new Prisma.Decimal('200'),
+          supplierCode: 'wuya',
+        },
+      ],
+    });
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'lead-id',
+      clientId: 'client-id',
+      projectObjectId: null,
+      dealId: null,
+    });
+    prisma.product.findUnique.mockResolvedValue({ id: 'product-id' });
+    prisma.supplier.findUnique.mockResolvedValue({ id: 'supplier-id' });
+    dealFactory.createFromQuote.mockResolvedValue({
+      id: 'deal-id',
+      title: 'Deal',
+    });
+    prisma.lead.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      service.convertToDeal('quote-id', manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'LEAD_ALREADY_CONVERTED',
+        statusCode: HttpStatus.CONFLICT,
+      }),
+    });
+  });
+
+  it('aborts with conflict when the quote was already claimed', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      calculationId: 'calc-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.APPROVED,
+      dealId: null,
+      totalAmount: new Prisma.Decimal('1000'),
+      displayCurrency: 'USD',
+      validUntil: new Date(Date.now() + 86_400_000),
+      items: [
+        {
+          areaM2: new Prisma.Decimal('2.9768'),
+          sheetsCount: 2,
+          pricePerM2: new Prisma.Decimal('20'),
+          supplierPricePerM2: new Prisma.Decimal('100'),
+          totalPrice: new Prisma.Decimal('200'),
+          supplierCode: 'wuya',
+        },
+      ],
+    });
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'lead-id',
+      clientId: 'client-id',
+      projectObjectId: null,
+      dealId: null,
+    });
+    prisma.product.findUnique.mockResolvedValue({ id: 'product-id' });
+    prisma.supplier.findUnique.mockResolvedValue({ id: 'supplier-id' });
+    dealFactory.createFromQuote.mockResolvedValue({
+      id: 'deal-id',
+      title: 'Deal',
+    });
+    prisma.lead.updateMany.mockResolvedValue({ count: 1 });
+    prisma.panelQuote.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      service.convertToDeal('quote-id', manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'QUOTE_ALREADY_CONVERTED',
+        statusCode: HttpStatus.CONFLICT,
+      }),
+    });
   });
 });

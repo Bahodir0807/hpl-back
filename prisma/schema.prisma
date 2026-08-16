@@ -235,6 +235,7 @@ model User {
   stageExceptionApprovals DealStageHistory[]      @relation("StageExceptionApprover")
   createdCalculations     CalculationSession[]    @relation("CalculationCreator")
   panelQuotes             PanelQuote[]            @relation("QuoteManager")
+  createdCurrencyRates    CurrencyRate[]          @relation("CurrencyRateCreator")
 
   @@index([teamId])
   @@index([managerId])
@@ -1187,7 +1188,7 @@ model PanelThicknessPricing {
   qualityClassId String
   thicknessMm    Int
   basePricePerM2 Decimal   @db.Decimal(12, 2)
-  currencyCode   String    @default("UZS")
+  currencyCode   String    @default("CNY")
   validFrom      DateTime  @default(now())
   validTo        DateTime?
   isActive       Boolean   @default(true)
@@ -1271,7 +1272,9 @@ model CalculationSession {
   createdById     String
   status          String    @default("draft")
   totalAmount     Decimal?  @db.Decimal(12, 2)
-  displayCurrency String    @default("UZS")
+  displayCurrency String    @default("USD")
+  cnyUsdRate          Decimal? @db.Decimal(18, 8)
+  sellingCoefficient  Decimal? @db.Decimal(8, 4)
   notes           String?
   deletedAt       DateTime?
   createdAt       DateTime  @default(now())
@@ -1328,7 +1331,9 @@ model PanelQuote {
   dealId          String?
   status          String   @default("draft")
   totalAmount     Decimal  @db.Decimal(12, 2)
-  displayCurrency String   @default("UZS")
+  displayCurrency String   @default("USD")
+  cnyUsdRate          Decimal? @db.Decimal(18, 8)
+  sellingCoefficient  Decimal? @db.Decimal(8, 4)
   deliveryCost    Decimal? @db.Decimal(10, 2)
   clientComment   String?
   rejectionReason String?
@@ -1374,4 +1379,22 @@ model PanelQuoteItem {
   quote PanelQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([quoteId, sortOrder])
+}
+
+// Centralized CNY → USD rate for the HPL selling formula. Not a multi-currency FX subsystem.
+model CurrencyRate {
+  id            String    @id @default(uuid())
+  fromCurrency  String
+  toCurrency    String
+  rate          Decimal   @db.Decimal(18, 8)
+  effectiveFrom DateTime  @default(now())
+  effectiveTo   DateTime?
+  createdById   String
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  createdBy User @relation("CurrencyRateCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([fromCurrency, toCurrency, effectiveFrom])
+  @@index([createdById])
 }

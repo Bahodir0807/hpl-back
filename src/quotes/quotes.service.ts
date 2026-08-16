@@ -147,6 +147,8 @@ export class QuotesService {
           status: QUOTE_STATUS.DRAFT,
           totalAmount,
           displayCurrency: calculation.displayCurrency,
+          cnyUsdRate: calculation.cnyUsdRate,
+          sellingCoefficient: calculation.sellingCoefficient,
           deliveryCost,
           clientComment: dto.clientComment,
           validUntil,
@@ -401,17 +403,45 @@ export class QuotesService {
         supplierId: supplier.id,
       });
 
-      await tx.lead.update({
-        where: { id: quote.leadId },
+      const claimedLead = await tx.lead.updateMany({
+        where: {
+          id: quote.leadId,
+          deletedAt: null,
+          dealId: null,
+        },
         data: { dealId: deal.id },
       });
 
-      const updatedQuote = await tx.panelQuote.update({
-        where: { id: quote.id },
+      if (claimedLead.count !== 1) {
+        throw new BusinessException(
+          HttpStatus.CONFLICT,
+          'LEAD_ALREADY_CONVERTED',
+          'У лида уже есть связанная сделка',
+        );
+      }
+
+      const claimedQuote = await tx.panelQuote.updateMany({
+        where: {
+          id: quote.id,
+          dealId: null,
+          status: QUOTE_STATUS.APPROVED,
+        },
         data: {
           status: QUOTE_STATUS.CONVERTED,
           dealId: deal.id,
         },
+      });
+
+      if (claimedQuote.count !== 1) {
+        throw new BusinessException(
+          HttpStatus.CONFLICT,
+          'QUOTE_ALREADY_CONVERTED',
+          'КП уже конвертировано в сделку',
+        );
+      }
+
+      const updatedQuote = await tx.panelQuote.findUniqueOrThrow({
+        where: { id: quote.id },
         include: quoteInclude,
       });
 

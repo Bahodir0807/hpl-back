@@ -18,6 +18,8 @@ export type QuoteForDeal = {
   displayCurrency: string;
   validUntil: Date;
   deliveryCost?: Prisma.Decimal | null;
+  cnyUsdRate?: Prisma.Decimal | null;
+  sellingCoefficient?: Prisma.Decimal | null;
   items: QuoteItemForDeal[];
 };
 
@@ -51,6 +53,10 @@ export class DealFactory {
       const quantityM2 = new Prisma.Decimal(item.areaM2.toString()).mul(
         item.sheetsCount,
       );
+      const purchaseUsdPerM2 = this.toUsdPurchasePerM2(
+        item.supplierPricePerM2,
+        quote.cnyUsdRate,
+      );
 
       return {
         productId: serviceProductId,
@@ -59,7 +65,7 @@ export class DealFactory {
         unitPrice: item.pricePerM2,
         discount: new Prisma.Decimal(0),
         totalPrice: item.totalPrice,
-        purchasePriceSnapshot: item.supplierPricePerM2,
+        purchasePriceSnapshot: purchaseUsdPerM2,
         source: OrderItemSource.PANEL_CALCULATOR,
       };
     });
@@ -68,8 +74,12 @@ export class DealFactory {
       const quantityM2 = new Prisma.Decimal(item.areaM2.toString()).mul(
         item.sheetsCount,
       );
+      const purchaseUsdPerM2 = this.toUsdPurchasePerM2(
+        item.supplierPricePerM2,
+        quote.cnyUsdRate,
+      );
 
-      return sum.plus(quantityM2.mul(item.supplierPricePerM2));
+      return sum.plus(quantityM2.mul(purchaseUsdPerM2));
     }, new Prisma.Decimal(0));
 
     const margin = new Prisma.Decimal(quote.totalAmount.toString()).minus(
@@ -129,5 +139,17 @@ export class DealFactory {
     });
 
     return { id: deal.id, title: deal.title };
+  }
+
+  private toUsdPurchasePerM2(
+    supplierPricePerM2: Prisma.Decimal,
+    cnyUsdRate?: Prisma.Decimal | null,
+  ): Prisma.Decimal {
+    const supplier = new Prisma.Decimal(supplierPricePerM2.toString());
+    if (!cnyUsdRate || new Prisma.Decimal(cnyUsdRate.toString()).lte(0)) {
+      return supplier.toDecimalPlaces(2);
+    }
+
+    return supplier.mul(cnyUsdRate).toDecimalPlaces(2);
   }
 }

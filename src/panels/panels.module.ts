@@ -5,9 +5,11 @@ import { PanelPricingController } from './controllers/panel-pricing.controller';
 import { PanelSizesController } from './controllers/panel-sizes.controller';
 import { PanelTypesController } from './controllers/panel-types.controller';
 import { SupplierQualityController } from './controllers/supplier-quality.controller';
+import { CurrencyRateController } from './controllers/currency-rate.controller';
 import { PanelPriceCalculator } from './services/panel-price-calculator.service';
 import { PanelQuantityCalculator } from './services/panel-quantity-calculator.service';
 import { PanelColorsService } from './services/panel-colors.service';
+import { CurrencyRateService } from './services/currency-rate.service';
 
 @Module({
   imports: [PrismaModule],
@@ -17,8 +19,19 @@ import { PanelColorsService } from './services/panel-colors.service';
     PanelPricingController,
     SupplierQualityController,
     PanelColorsController,
+    CurrencyRateController,
   ],
-  providers: [PanelQuantityCalculator, PanelPriceCalculator, PanelColorsService],
-  exports: [PanelQuantityCalculator, PanelPriceCalculator, PanelColorsService],
+  providers: [
+    PanelQuantityCalculator,
+    PanelPriceCalculator,
+    PanelColorsService,
+    CurrencyRateService,
+  ],
+  exports: [
+    PanelQuantityCalculator,
+    PanelPriceCalculator,
+    PanelColorsService,
+    CurrencyRateService,
+  ],
 })
 export class PanelsModule {}

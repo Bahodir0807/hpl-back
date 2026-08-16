@@ -1,4 +1,11 @@
 import { Prisma, PrismaClient } from '@prisma/client';
+import {
+  HPL_FIXTURE_CNY_USD_RATE,
+  HPL_FIXTURE_ECONOMY_10MM_CNY_PER_M2,
+  HPL_SELLING_CURRENCY,
+  HPL_SOURCE_CURRENCY,
+} from '../../src/panels/pricing/hpl-pricing.constants';
+import { SEEDED_SUPPLIER_QUALITY_MAPPINGS } from '../../src/panels/pricing/hpl-quality-matrix';
 
 const panelTypes = [
   { code: 'exterior', displayNameRu: 'Экстерьерные' },
@@ -30,13 +37,13 @@ const sizeDefinitions = [
 ] as const;
 
 const thicknessPricings = [
-  { thicknessMm: 6, basePricePerM2: 45000.0 },
-  { thicknessMm: 8, basePricePerM2: 52000.0 },
-  { thicknessMm: 10, basePricePerM2: 60000.0 },
-  { thicknessMm: 12, basePricePerM2: 75000.0 },
-  { thicknessMm: 16, basePricePerM2: 90000.0 },
-  { thicknessMm: 18, basePricePerM2: 110000.0 },
-  { thicknessMm: 20, basePricePerM2: 130000.0 },
+  { thicknessMm: 6, basePricePerM2: 60 },
+  { thicknessMm: 8, basePricePerM2: 80 },
+  { thicknessMm: 10, basePricePerM2: Number(HPL_FIXTURE_ECONOMY_10MM_CNY_PER_M2) },
+  { thicknessMm: 12, basePricePerM2: 120 },
+  { thicknessMm: 16, basePricePerM2: 160 },
+  { thicknessMm: 18, basePricePerM2: 180 },
+  { thicknessMm: 20, basePricePerM2: 200 },
 ] as const;
 
 const qualityClasses = [
@@ -62,6 +69,30 @@ const panelSuppliers = [
 
 function calcAreaM2(widthMm: number, heightMm: number): Prisma.Decimal {
   return new Prisma.Decimal((widthMm * heightMm) / 1_000_000);
+}
+
+export async function seedFixtureCnyUsdRate(
+  prisma: PrismaClient,
+  createdById: string,
+): Promise<void> {
+  const now = new Date();
+  await prisma.currencyRate.updateMany({
+    where: {
+      fromCurrency: HPL_SOURCE_CURRENCY,
+      toCurrency: HPL_SELLING_CURRENCY,
+      effectiveTo: null,
+    },
+    data: { effectiveTo: now },
+  });
+  await prisma.currencyRate.create({
+    data: {
+      fromCurrency: HPL_SOURCE_CURRENCY,
+      toCurrency: HPL_SELLING_CURRENCY,
+      rate: new Prisma.Decimal(HPL_FIXTURE_CNY_USD_RATE),
+      effectiveFrom: now,
+      createdById,
+    },
+  });
 }
 
 export async function seedPanels(prisma: PrismaClient): Promise<void> {
@@ -136,6 +167,9 @@ export async function seedPanels(prisma: PrismaClient): Promise<void> {
         ];
 
       for (const pricing of thicknessPricings) {
+        const basePricePerM2 = new Prisma.Decimal(pricing.basePricePerM2)
+          .mul(multiplier)
+          .toDecimalPlaces(2);
         const existing = await prisma.panelThicknessPricing.findFirst({
           where: {
             supplierId: supplier.id,
@@ -145,16 +179,25 @@ export async function seedPanels(prisma: PrismaClient): Promise<void> {
           },
         });
 
-        if (!existing) {
+        if (existing) {
+          const shouldReplaceLegacyUzsFixture =
+            existing.currencyCode !== HPL_SOURCE_CURRENCY;
+          await prisma.panelThicknessPricing.update({
+            where: { id: existing.id },
+            data: {
+              ...(shouldReplaceLegacyUzsFixture
+                ? { basePricePerM2, currencyCode: HPL_SOURCE_CURRENCY }
+                : {}),
+            },
+          });
+        } else {
           await prisma.panelThicknessPricing.create({
             data: {
               supplierId: supplier.id,
               qualityClassId: qualityClass.id,
               thicknessMm: pricing.thicknessMm,
-              basePricePerM2: new Prisma.Decimal(pricing.basePricePerM2)
-                .mul(multiplier)
-                .toDecimalPlaces(2),
-              currencyCode: 'UZS',
+              basePricePerM2,
+              currencyCode: HPL_SOURCE_CURRENCY,
               validFrom,
               validTo: null,
               isActive: true,
@@ -165,28 +208,42 @@ export async function seedPanels(prisma: PrismaClient): Promise<void> {
     }
   }
 
-  const mappings: Array<{
-    supplierCode: string;
-    panelTypeCode: string;
-    qualityClassCode: string;
-    isDefault: boolean;
-  }> = [
-    { supplierCode: 'wuya', panelTypeCode: 'exterior', qualityClassCode: 'economy', isDefault: true },
-    { supplierCode: 'wuya', panelTypeCode: 'interior', qualityClassCode: 'economy', isDefault: true },
-    { supplierCode: 'polybet', panelTypeCode: 'exterior', qualityClassCode: 'premium', isDefault: true },
-    { supplierCode: 'polybet', panelTypeCode: 'interior', qualityClassCode: 'premium', isDefault: true },
-    { supplierCode: 'tianran', panelTypeCode: 'exterior', qualityClassCode: 'economy', isDefault: true },
-    { supplierCode: 'tianran', panelTypeCode: 'exterior', qualityClassCode: 'medium', isDefault: false },
-    { supplierCode: 'tianran', panelTypeCode: 'exterior', qualityClassCode: 'premium', isDefault: false },
-    { supplierCode: 'tianran', panelTypeCode: 'interior', qualityClassCode: 'economy', isDefault: true },
-    { supplierCode: 'tianran', panelTypeCode: 'interior', qualityClassCode: 'medium', isDefault: false },
-    { supplierCode: 'tianran', panelTypeCode: 'interior', qualityClassCode: 'premium', isDefault: false },
-    { supplierCode: 'tianran', panelTypeCode: 'laboratory', qualityClassCode: 'economy', isDefault: true },
-    { supplierCode: 'tianran', panelTypeCode: 'laboratory', qualityClassCode: 'medium', isDefault: false },
-    { supplierCode: 'tianran', panelTypeCode: 'laboratory', qualityClassCode: 'premium', isDefault: false },
-  ];
+  const allowedKeys = new Set(
+    SEEDED_SUPPLIER_QUALITY_MAPPINGS.map(
+      (mapping) =>
+        `${mapping.supplierCode}|${mapping.panelTypeCode}|${mapping.qualityClassCode}`,
+    ),
+  );
 
-  for (const mapping of mappings) {
+  const existingMappings = await prisma.supplierQualityMapping.findMany({
+    where: {
+      supplier: {
+        code: { in: [...panelSuppliers.map((item) => item.code)] },
+      },
+    },
+    include: {
+      supplier: { select: { code: true } },
+      panelType: { select: { code: true } },
+      qualityClass: { select: { code: true } },
+    },
+  });
+
+  const staleMappingIds = existingMappings
+    .filter(
+      (mapping) =>
+        !allowedKeys.has(
+          `${mapping.supplier.code}|${mapping.panelType.code}|${mapping.qualityClass.code}`,
+        ),
+    )
+    .map((mapping) => mapping.id);
+
+  if (staleMappingIds.length > 0) {
+    await prisma.supplierQualityMapping.deleteMany({
+      where: { id: { in: staleMappingIds } },
+    });
+  }
+
+  for (const mapping of SEEDED_SUPPLIER_QUALITY_MAPPINGS) {
     const supplier = await prisma.supplier.findUniqueOrThrow({
       where: { code: mapping.supplierCode },
     });
@@ -215,3 +272,4 @@ export async function seedPanels(prisma: PrismaClient): Promise<void> {
     });
   }
 }
+

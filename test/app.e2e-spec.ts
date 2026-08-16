@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import './jest-e2e.env';
 import { createHash } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -25,7 +25,8 @@ import { hash } from 'bcryptjs';
 import request, { Response } from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
-import { seedPanels } from './../prisma/seed/panels';
+import { TestIntegrationsModule } from './../src/integrations/test/test-integrations.module';
+import { seedPanels, seedFixtureCnyUsdRate } from './../prisma/seed/panels';
 import { seedCalculatorProduct } from './../prisma/seed/calculator-product';
 import { IdempotencyService } from './../src/integrations/telegram/services/idempotency.service';
 import { TelegramAdminHandlerService } from './../src/integrations/telegram/services/telegram-admin-handler.service';
@@ -157,6 +158,7 @@ const permissionSlugs = [
   'quotes:create',
   'quotes:update',
   'quotes:approve',
+  'currency_rates:manage',
 ] as const;
 
 describe('CRM HPL acceptance criteria (e2e)', () => {
@@ -178,7 +180,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       'postgresql://crm:crm@localhost:5432/crm_test';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
+      imports: [AppModule, TestIntegrationsModule],
     }).compile();
 
     app = moduleFixture.createNestApplication();
@@ -1572,7 +1574,14 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
   });
 
   it('PR-2 protects Bull Dashboard without JWT', async () => {
-    await request(server).get('/admin/queues').expect(401);
+    const response = await request(server).get('/admin/queues').expect(401);
+
+    expect(response.body).toEqual(
+      expect.objectContaining({
+        message: 'Missing or invalid Authorization header',
+      }),
+    );
+    expect(response.text).not.toContain('Bull Dashboard');
   });
 
   it('PR-2 protects Bull Dashboard when JWT lacks admin:queues', async () => {
@@ -1751,7 +1760,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const pricingBody = bodyAs<
       Array<{ currencyCode: string; basePricePerM2?: string }>
     >(pricing);
-    expect(pricingBody.every((item) => item.currencyCode === 'UZS')).toBe(true);
+    expect(pricingBody.every((item) => item.currencyCode === 'CNY')).toBe(true);
     expect(
       pricingBody.every((item) => item.basePricePerM2 === undefined),
     ).toBe(true);
@@ -1874,8 +1883,12 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(calculation.status).toBe('draft');
     expect(calculation.items[0]?.sheetsCount).toBe(6);
     expect(calculation.items[0]?.supplierPricePerM2).toBeUndefined();
-    expect(calculation.items[0]?.clientPricePerM2).toBe('69000');
-    expect(calculation.items[0]?.pricePerM2).toBe('69000');
+    expect(new Prisma.Decimal(calculation.items[0]?.clientPricePerM2).toString()).toBe(
+      '20',
+    );
+    expect(new Prisma.Decimal(calculation.items[0]?.pricePerM2).toString()).toBe(
+      '20',
+    );
 
     const fetched = await request(server)
       .get(`/calculations/${calculation.id}`)
@@ -2114,6 +2127,256 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(quote.status).toBe('sent');
   });
 
+  it('enforces Tianran quality matrix and Wuya/Polybet qualities', async () => {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Quality matrix ${RUN_ID}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<EntityResponse>(leadResponse).id;
+
+    const interior = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'interior' },
+    });
+    const exterior = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'exterior' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1220, heightMm: 2440 },
+    });
+    const tianran = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'tianran' },
+    });
+    const wuya = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const polybet = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'polybet' },
+    });
+    const economy = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+    const medium = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'medium' },
+    });
+    const premium = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'premium' },
+    });
+
+    const preview = (
+      supplierId: string,
+      panelTypeId: string,
+      qualityClassId: string,
+    ) =>
+      request(server)
+        .post('/calculations/preview')
+        .set(authHeader(context.managerToken))
+        .send({
+          panelTypeId,
+          panelSizeId: panelSize.id,
+          thicknessMm: 10,
+          supplierId,
+          qualityClassId,
+          requiredAreaM2: '2.9768',
+        });
+
+    await preview(tianran.id, interior.id, economy.id).expect(201);
+    await preview(tianran.id, exterior.id, economy.id).expect(400);
+    await preview(tianran.id, exterior.id, medium.id).expect(201);
+    await preview(tianran.id, exterior.id, premium.id).expect(201);
+    await preview(wuya.id, exterior.id, economy.id).expect(201);
+    await preview(wuya.id, exterior.id, premium.id).expect(400);
+    await preview(polybet.id, exterior.id, premium.id).expect(201);
+    await preview(polybet.id, exterior.id, economy.id).expect(400);
+
+    await request(server)
+      .post('/calculations')
+      .set(authHeader(context.managerToken))
+      .send({
+        leadId,
+        items: [
+          {
+            panelTypeId: exterior.id,
+            panelSizeId: panelSize.id,
+            thicknessMm: 10,
+            supplierId: tianran.id,
+            qualityClassId: economy.id,
+            requiredAreaM2: '2.9768',
+          },
+        ],
+      })
+      .expect(400);
+  });
+
+  it('ignores manager-injected supplier price, rate and coefficient', async () => {
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'exterior' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1220, heightMm: 2440 },
+    });
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+
+    const preview = await request(server)
+      .post('/calculations/preview')
+      .set(authHeader(context.managerToken))
+      .send({
+        panelTypeId: panelType.id,
+        panelSizeId: panelSize.id,
+        thicknessMm: 10,
+        supplierId: supplier.id,
+        qualityClassId: qualityClass.id,
+        requiredAreaM2: '1',
+        supplierPricePerM2: '1',
+        cnyUsdRate: '999',
+        coefficient: '1',
+        clientPricePerM2: '1',
+      })
+      .expect(201);
+
+    const body = bodyAs<{ clientPricePerM2: string; total: string }>(preview);
+    expect(new Prisma.Decimal(body.clientPricePerM2).toString()).toBe('20');
+  });
+
+  it('forbids Manager from managing CurrencyRate', async () => {
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.managerToken))
+      .send({ rate: '0.2' })
+      .expect(403);
+
+    await request(server)
+      .get('/currency-rates/current')
+      .set(authHeader(context.managerToken))
+      .expect(403);
+  });
+
+  it('allows Head to set and read the CNY→USD rate', async () => {
+    const created = await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.headToken))
+      .send({ rate: '0.11' })
+      .expect(201);
+
+    expect(bodyAs<{ rate: string }>(created).rate).toBeDefined();
+
+    const current = await request(server)
+      .get('/currency-rates/current')
+      .set(authHeader(context.headToken))
+      .expect(200);
+
+    expect(new Prisma.Decimal(bodyAs<{ rate: string }>(current).rate).toString()).toBe(
+      '0.11',
+    );
+
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.headToken))
+      .send({ rate: '0.1' })
+      .expect(201);
+  });
+
+  it('converts one quote concurrently into exactly one deal', async () => {
+    const quoteId = await createApprovedPanelQuote();
+    const quote = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: quoteId },
+      select: { leadId: true },
+    });
+
+    const [first, second] = await Promise.all([
+      request(server)
+        .post(`/quotes/${quoteId}/convert-to-deal`)
+        .set(authHeader(context.managerToken)),
+      request(server)
+        .post(`/quotes/${quoteId}/convert-to-deal`)
+        .set(authHeader(context.managerToken)),
+    ]);
+
+    const statuses = [first.status, second.status].sort();
+    expect(statuses).toEqual([201, 409]);
+
+    const winner = first.status === 201 ? first : second;
+    const loser = first.status === 201 ? second : first;
+    const winnerBody = bodyAs<{ dealId: string }>(winner);
+    const loserBody = bodyAs<{ errorCode?: string }>(loser);
+
+    expect(winnerBody.dealId).toBeTruthy();
+    expect(
+      loserBody.errorCode === 'QUOTE_ALREADY_CONVERTED' ||
+        loserBody.errorCode === 'LEAD_ALREADY_CONVERTED',
+    ).toBe(true);
+
+    const deals = await prisma.deal.findMany({
+      where: { title: `КП #${quoteId.slice(0, 8)}` },
+    });
+    expect(deals).toHaveLength(1);
+    expect(deals[0]?.id).toBe(winnerBody.dealId);
+
+    const lead = await prisma.lead.findUniqueOrThrow({
+      where: { id: quote.leadId },
+    });
+    const convertedQuote = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: quoteId },
+    });
+    expect(lead.dealId).toBe(winnerBody.dealId);
+    expect(convertedQuote.dealId).toBe(winnerBody.dealId);
+  });
+
+  it('keeps one Lead → one Deal across qualify and quote convert', async () => {
+    const quoteId = await createApprovedPanelQuote();
+    const quote = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: quoteId },
+      select: { leadId: true },
+    });
+
+    const [qualify, convert] = await Promise.all([
+      request(server)
+        .post(`/leads/${quote.leadId}/qualify`)
+        .set(authHeader(context.managerToken))
+        .send({
+          clientId: context.clientId,
+          projectObjectId: context.projectObjectId,
+          needDescription: 'HPL panels for lobby',
+          estimatedAmount: 125000,
+          targetDate: futureIso(20),
+          decisionMakerContact: 'Chief architect',
+        }),
+      request(server)
+        .post(`/quotes/${quoteId}/convert-to-deal`)
+        .set(authHeader(context.managerToken)),
+    ]);
+
+    const successStatuses = [qualify.status, convert.status].filter(
+      (status) => status === 201,
+    );
+    expect(successStatuses).toHaveLength(1);
+    expect([qualify.status, convert.status]).toContain(409);
+
+    const lead = await prisma.lead.findUniqueOrThrow({
+      where: { id: quote.leadId },
+    });
+    expect(lead.dealId).toBeTruthy();
+
+    const quoteDeals = await prisma.deal.findMany({
+      where: { title: `КП #${quoteId.slice(0, 8)}` },
+    });
+    const relatedDealIds = new Set(
+      [lead.dealId, ...quoteDeals.map((deal) => deal.id)].filter(
+        (id): id is string => Boolean(id),
+      ),
+    );
+    expect(relatedDealIds.size).toBe(1);
+  });
+
   it('locks commercial item mutations after WON', async () => {
     const wonDeal = await createDeal(prisma, context, DealStage.WON);
     const addPayload = {
@@ -2195,6 +2458,18 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       })
       .expect(403);
   });
+
+  async function createApprovedPanelQuote(): Promise<string> {
+    const quoteId = await createSentPanelQuote();
+
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.headToken))
+      .send({ status: 'approved' })
+      .expect(200);
+
+    return quoteId;
+  }
 
   async function createSentPanelQuote(): Promise<string> {
     const leadResponse = await request(server)
@@ -2356,7 +2631,7 @@ async function seedAcceptanceData(
     roleName: RoleName.MANAGER,
     managerId: head.id,
   });
-  await upsertUser(prisma, {
+  const admin = await upsertUser(prisma, {
     email: `admin-${RUN_ID}@hpl.test`,
     firstName: 'Acceptance',
     lastName: 'Admin',
@@ -2482,6 +2757,7 @@ async function seedAcceptanceData(
     await seedServiceAccountsForE2e(prisma);
 
   await seedPanels(prisma);
+  await seedFixtureCnyUsdRate(prisma, admin.id);
   await seedCalculatorProduct(prisma);
 
   return {
