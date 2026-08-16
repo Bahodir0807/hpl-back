@@ -15,6 +15,12 @@
  *
  * Local / India matrices are deferred.
  */
+export function panelTypeCodeForApplication(
+  application: 'INTERIOR' | 'EXTERIOR',
+): 'interior' | 'exterior' {
+  return application === 'INTERIOR' ? 'interior' : 'exterior';
+}
+
 export const SEEDED_SUPPLIER_QUALITY_MAPPINGS = [
   { supplierCode: 'wuya', panelTypeCode: 'exterior', qualityClassCode: 'economy', isDefault: true },
   { supplierCode: 'wuya', panelTypeCode: 'interior', qualityClassCode: 'economy', isDefault: true },

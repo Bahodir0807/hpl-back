@@ -54,6 +54,10 @@ enum LeadStatus {
   CONVERTED
 }
 
+enum CommercialQualificationStatus {
+  CONFIRMED
+}
+
 enum TaskType {
   FIRST_CONTACT
   CALL
@@ -241,6 +245,7 @@ model User {
   createdCalculations     CalculationSession[]    @relation("CalculationCreator")
   panelQuotes             PanelQuote[]            @relation("QuoteManager")
   createdCurrencyRates    CurrencyRate[]          @relation("CurrencyRateCreator")
+  confirmedCommercialQualifications LeadCommercialQualification[] @relation("LeadCommercialConfirmedBy")
 
   @@index([teamId])
   @@index([managerId])
@@ -367,6 +372,7 @@ model Supplier {
   thicknessPricings    PanelThicknessPricing[]
   supplierOrders       SupplierOrder[]
   deals                Deal[]
+  commercialQualifications LeadCommercialQualification[]
 
   @@index([name])
 }
@@ -601,6 +607,7 @@ model Lead {
   panelQuotes           PanelQuote[]
   telegramLeadMetadata  TelegramLeadMetadata?
   qualification         LeadQualification?
+  commercialQualification LeadCommercialQualification?
 
   @@index([ownerId])
   @@index([ownerId, status, createdAt])
@@ -646,6 +653,33 @@ model LeadQualification {
   @@index([installationRequired])
   @@index([stockOnly])
   @@index([urgent])
+}
+
+model LeadCommercialQualification {
+  id              String                         @id @default(uuid())
+  leadId          String                         @unique
+  supplierId      String
+  qualityClassId  String
+  mappingId       String
+  status          CommercialQualificationStatus  @default(CONFIRMED)
+  decisionComment String?
+  confirmedById   String
+  confirmedAt     DateTime
+  createdAt       DateTime                       @default(now())
+  updatedAt       DateTime                       @updatedAt
+
+  lead         Lead                    @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  supplier     Supplier                @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  qualityClass QualityClass            @relation(fields: [qualityClassId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  mapping      SupplierQualityMapping  @relation(fields: [mappingId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  confirmedBy  User                    @relation("LeadCommercialConfirmedBy", fields: [confirmedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([supplierId])
+  @@index([qualityClassId])
+  @@index([mappingId])
+  @@index([confirmedById])
+  @@index([status])
+  @@index([confirmedAt])
 }
 
 model LeadAssignmentHistory {
@@ -1250,6 +1284,7 @@ model QualityClass {
   supplierMappings  SupplierQualityMapping[]
   calculationLineItems CalculationLineItem[]
   thicknessPricings PanelThicknessPricing[]
+  commercialQualifications LeadCommercialQualification[]
 }
 
 model SupplierQualityMapping {
@@ -1262,6 +1297,7 @@ model SupplierQualityMapping {
   supplier     Supplier     @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   panelType    PanelType    @relation(fields: [panelTypeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   qualityClass QualityClass @relation(fields: [qualityClassId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  commercialQualifications LeadCommercialQualification[]
 
   @@unique([supplierId, panelTypeId, qualityClassId])
   @@index([supplierId])
@@ -1318,6 +1354,9 @@ model CalculationSession {
   cnyUsdRate          Decimal? @db.Decimal(18, 8)
   sellingCoefficient  Decimal? @db.Decimal(8, 4)
   notes           String?
+  commercialSupplierId     String?
+  commercialQualityClassId String?
+  commercialConfirmedAt    DateTime?
   deletedAt       DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt

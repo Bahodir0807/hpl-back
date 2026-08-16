@@ -18,27 +18,39 @@ export function resolveThicknessMm(dto: {
   return dto.thicknessMm ?? dto.thickness;
 }
 
-@ValidatorConstraint({ name: 'thicknessMmRequired', async: false })
-class ThicknessMmConstraint implements ValidatorConstraintInterface {
+@ValidatorConstraint({ name: 'catalogPreviewRequired', async: false })
+class CatalogPreviewRequiredConstraint implements ValidatorConstraintInterface {
   validate(_: unknown, args: ValidationArguments) {
-    const thicknessMm = resolveThicknessMm(
-      args.object as { thicknessMm?: number; thickness?: number },
+    const dto = args.object as PreviewCalculationDto;
+    if (dto.leadId) {
+      return true;
+    }
+
+    const thicknessMm = resolveThicknessMm(dto);
+    return Boolean(
+      dto.panelTypeId &&
+        dto.panelSizeId &&
+        dto.supplierId &&
+        dto.qualityClassId &&
+        dto.requiredAreaM2 &&
+        Number.isInteger(thicknessMm) &&
+        (thicknessMm as number) > 0,
     );
-    return Number.isInteger(thicknessMm) && (thicknessMm as number) > 0;
   }
 
   defaultMessage() {
-    return 'thicknessMm (or thickness) must be a positive integer';
+    return 'Catalog preview requires panelTypeId, panelSizeId, thicknessMm, supplierId, qualityClassId and requiredAreaM2';
   }
 }
 
 export class CalculationItemDto {
+  @IsOptional()
   @IsUUID()
-  @Validate(ThicknessMmConstraint)
-  panelTypeId!: string;
+  panelTypeId?: string;
 
+  @IsOptional()
   @IsUUID()
-  panelSizeId!: string;
+  panelSizeId?: string;
 
   @IsOptional()
   @Type(() => Number)
@@ -50,25 +62,31 @@ export class CalculationItemDto {
   @IsInt()
   thicknessMm?: number;
 
+  @IsOptional()
   @IsUUID()
-  supplierId!: string;
+  supplierId?: string;
 
+  @IsOptional()
   @IsUUID()
-  qualityClassId!: string;
+  qualityClassId?: string;
 
   @IsOptional()
   @IsUUID()
   colorId?: string;
 
+  @IsOptional()
   @Transform(({ value }: { value: unknown }) =>
     value == null ? value : String(value),
   )
   @IsNumberString()
   @MaxLength(20)
-  requiredAreaM2!: string;
+  requiredAreaM2?: string;
 }
 
 export class PreviewCalculationDto extends CalculationItemDto {
+  @Validate(CatalogPreviewRequiredConstraint)
+  private readonly catalogPreviewGuard = true;
+
   @IsOptional()
   @IsUUID()
   leadId?: string;

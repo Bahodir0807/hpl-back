@@ -1,4 +1,4 @@
-import { SEEDED_SUPPLIER_QUALITY_MAPPINGS } from '../pricing/hpl-quality-matrix';
+import { SEEDED_SUPPLIER_QUALITY_MAPPINGS, panelTypeCodeForApplication } from '../pricing/hpl-quality-matrix';
 
 describe('HPL supplier quality matrix', () => {
   const key = (
@@ -56,5 +56,10 @@ describe('HPL supplier quality matrix', () => {
     for (const mapping of SEEDED_SUPPLIER_QUALITY_MAPPINGS) {
       expect(['tianran', 'wuya', 'polybet']).toContain(mapping.supplierCode);
     }
+  });
+
+  it('maps INTERIOR/EXTERIOR to catalog panel type codes', () => {
+    expect(panelTypeCodeForApplication('INTERIOR')).toBe('interior');
+    expect(panelTypeCodeForApplication('EXTERIOR')).toBe('exterior');
   });
 });

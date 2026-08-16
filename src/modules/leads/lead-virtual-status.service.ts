@@ -1,6 +1,6 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ActivityType, LeadStatus } from '@prisma/client';
+import { ActivityType, CommercialQualificationStatus, LeadStatus } from '@prisma/client';
 import { BusinessException } from '../../common/exceptions/business.exception';
 import type { Env } from '../../config/env.schema';
 import { PrismaService } from '../prisma/prisma.service';
@@ -38,6 +38,16 @@ export class LeadVirtualStatusService {
     }
 
     if (lead.status === LeadStatus.QUALIFIED) {
+      const commercial =
+        await this.prisma.leadCommercialQualification.findUnique({
+          where: { leadId },
+          select: { status: true },
+        });
+
+      if (commercial?.status === CommercialQualificationStatus.CONFIRMED) {
+        return 'commercially_qualified';
+      }
+
       return 'qualified';
     }
 

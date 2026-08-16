@@ -24,6 +24,26 @@ describe('CalculationService', () => {
     projectObjectId: null,
     dealId: null,
     deletedAt: null,
+    status: LeadStatus.QUALIFIED,
+    qualification: {
+      application: 'EXTERIOR',
+      panelTypeId: 'type-id',
+      thicknessMm: 10,
+      panelSizeId: 'size-id',
+      customWidthMm: null,
+      customHeightMm: null,
+      colorCode: 'W100',
+      colorName: 'White',
+      requiredAreaM2: 15.5,
+      installationRequired: false,
+      customerRequirements: 'Need in stock',
+    },
+    commercialQualification: {
+      supplierId: 'supplier-id',
+      qualityClassId: 'quality-id',
+      status: 'CONFIRMED',
+      confirmedAt: new Date('2026-08-17T00:00:00.000Z'),
+    },
   };
 
   const prisma = {
@@ -77,7 +97,7 @@ describe('CalculationService', () => {
     );
 
     prisma.lead.findFirst.mockResolvedValue(lead);
-    prisma.panelType.findFirst.mockResolvedValue({ id: 'type-id' });
+    prisma.panelType.findFirst.mockResolvedValue({ id: 'type-id', code: 'exterior' });
     prisma.panelSize.findFirst.mockResolvedValue({
       id: 'size-id',
       areaM2: new Prisma.Decimal('2.9768'),
@@ -128,10 +148,14 @@ describe('CalculationService', () => {
       displayCurrency: string;
       sellingCoefficient: Prisma.Decimal;
       cnyUsdRate: Prisma.Decimal;
+      commercialSupplierId: string;
+      commercialQualityClassId: string;
     };
     expect(createData.displayCurrency).toBe('USD');
     expect(createData.sellingCoefficient.toString()).toBe('2');
     expect(createData.cnyUsdRate.toString()).toBe('0.1');
+    expect(createData.commercialSupplierId).toBe('supplier-id');
+    expect(createData.commercialQualityClassId).toBe('quality-id');
     const priceInput = priceCalc.calculate.mock.calls[0][0] as {
       cnyUsdRate: Prisma.Decimal;
       sheets: number;
@@ -186,6 +210,90 @@ describe('CalculationService', () => {
         }),
       }),
     );
+  });
+
+  it('rejects calculation before Stage-2 commercial qualification', async () => {
+    prisma.lead.findFirst.mockResolvedValue({
+      ...lead,
+      commercialQualification: null,
+    });
+
+    await expect(
+      service.create({ leadId: lead.id, items: [baseItem] }, manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'COMMERCIAL_QUALIFICATION_REQUIRED',
+      }),
+    });
+    expect(prisma.calculationSession.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects calculation on a Stage-1 NEW lead', async () => {
+    prisma.lead.findFirst.mockResolvedValue({
+      ...lead,
+      status: LeadStatus.NEW,
+    });
+
+    await expect(
+      service.create({ leadId: lead.id, items: [baseItem] }, manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'COMMERCIAL_QUALIFICATION_REQUIRED',
+      }),
+    });
+  });
+
+  it('rejects client override of Stage-2 supplier or quality', async () => {
+    await expect(
+      service.create(
+        {
+          leadId: lead.id,
+          items: [{ ...baseItem, supplierId: 'other-supplier' }],
+        },
+        manager,
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'COMMERCIAL_OVERRIDE_FORBIDDEN',
+      }),
+    });
+
+    await expect(
+      service.create(
+        {
+          leadId: lead.id,
+          items: [{ ...baseItem, qualityClassId: 'other-quality' }],
+        },
+        manager,
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'COMMERCIAL_OVERRIDE_FORBIDDEN',
+      }),
+    });
+  });
+
+  it('derives supplier and quality from Stage 2, not the client payload', async () => {
+    const dto = {
+      leadId: lead.id,
+      items: [
+        {
+          panelTypeId: baseItem.panelTypeId,
+          panelSizeId: baseItem.panelSizeId,
+          thicknessMm: baseItem.thicknessMm,
+          requiredAreaM2: baseItem.requiredAreaM2,
+        },
+      ],
+    };
+
+    await service.create(dto as CreateCalculationDto, manager);
+
+    const createData = prisma.calculationSession.create.mock.calls[0][0]
+      .data as {
+      items: { create: Array<{ supplierId: string; qualityClassId: string }> };
+    };
+    expect(createData.items.create[0]?.supplierId).toBe('supplier-id');
+    expect(createData.items.create[0]?.qualityClassId).toBe('quality-id');
   });
 
   it('rejects invalid supplier and quality mapping', async () => {

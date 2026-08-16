@@ -21,11 +21,13 @@ import { DisqualifyLeadDto } from './dto/disqualify-lead.dto';
 import { FilterLeadDto } from './dto/filter-lead.dto';
 import { QualifyLeadDto } from './dto/qualify-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
+import {
+  READ_ALL_LEADS_PERMISSION,
+  STAGE2_HANDOFF_TASK_PREFIX,
+} from './lead.constants';
 import { LeadQualificationService } from './lead-qualification.service';
 
 const FIRST_CONTACT_SLA_MS = 2 * 60 * 60 * 1000;
-const READ_ALL_LEADS_PERMISSION = 'leads:read_all';
-const STAGE2_HANDOFF_TASK_PREFIX = 'Stage 2 commercial qualification:';
 const QUALIFIABLE_LEAD_STATUSES: LeadStatus[] = [
   LeadStatus.NEW,
   LeadStatus.IN_PROGRESS,
@@ -66,6 +68,12 @@ const leadRelationsInclude = Prisma.validator<Prisma.LeadInclude>()({
           areaM2: true,
         },
       },
+    },
+  },
+  commercialQualification: {
+    include: {
+      supplier: { select: { id: true, code: true, name: true } },
+      qualityClass: { select: { id: true, code: true, nameRu: true } },
     },
   },
 });

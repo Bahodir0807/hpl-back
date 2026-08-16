@@ -9,6 +9,7 @@ describe('LeadVirtualStatusService', () => {
     activity: { findMany: jest.fn() },
     telegramLeadMetadata: { findUnique: jest.fn() },
     user: { findUnique: jest.fn() },
+    leadCommercialQualification: { findUnique: jest.fn() },
   };
 
   const configService = {
@@ -58,11 +59,28 @@ describe('LeadVirtualStatusService', () => {
       source: 'manual',
       ownerId: 'manager-id',
     });
+    prisma.leadCommercialQualification.findUnique.mockResolvedValue(null);
     prisma.activity.findMany.mockResolvedValue([
       { type: ActivityType.CALL, metadata: {} },
     ]);
     prisma.telegramLeadMetadata.findUnique.mockResolvedValue(null);
 
     await expect(service.getStatus('lead-id')).resolves.toBe('qualified');
+  });
+
+  it('returns commercially_qualified after Stage-2 confirmation', async () => {
+    prisma.lead.findFirst.mockResolvedValue({
+      id: 'lead-id',
+      status: LeadStatus.QUALIFIED,
+      source: 'manual',
+      ownerId: 'manager-id',
+    });
+    prisma.leadCommercialQualification.findUnique.mockResolvedValue({
+      status: 'CONFIRMED',
+    });
+
+    await expect(service.getStatus('lead-id')).resolves.toBe(
+      'commercially_qualified',
+    );
   });
 });

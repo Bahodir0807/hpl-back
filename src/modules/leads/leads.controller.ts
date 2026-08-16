@@ -28,7 +28,10 @@ import { DisqualifyLeadDto } from './dto/disqualify-lead.dto';
 import { FilterLeadDto } from './dto/filter-lead.dto';
 import { QualifyLeadDto } from './dto/qualify-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
+import { UpsertLeadCommercialQualificationDto } from './dto/upsert-lead-commercial-qualification.dto';
 import { UpsertLeadQualificationDto } from './dto/upsert-lead-qualification.dto';
+import { LEADS_COMMERCIAL_QUALIFY_PERMISSION } from './lead.constants';
+import { LeadCommercialQualificationService } from './lead-commercial-qualification.service';
 import { LeadQualificationService } from './lead-qualification.service';
 import { LeadsService } from './leads.service';
 
@@ -40,6 +43,7 @@ export class LeadsController {
   constructor(
     private readonly leadsService: LeadsService,
     private readonly leadQualificationService: LeadQualificationService,
+    private readonly leadCommercialQualificationService: LeadCommercialQualificationService,
   ) {}
 
   @Post()
@@ -98,6 +102,54 @@ export class LeadsController {
     @CurrentUser() user: CurrentUserType,
   ) {
     return this.leadQualificationService.upsert(
+      id,
+      dto,
+      user.id,
+      user.permissions,
+    );
+  }
+
+  @Get(':id/commercial-qualification')
+  @RequirePermissions('leads:read')
+  @ApiOperation({
+    summary: 'Get Stage-2 HEAD commercial qualification for a lead',
+  })
+  @ApiResponse({ status: 200, description: 'Commercial qualification returned' })
+  @ApiResponse({ status: 404, description: 'Lead not found' })
+  getCommercialQualification(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadCommercialQualificationService.get(
+      id,
+      user.id,
+      user.permissions,
+    );
+  }
+
+  @Post(':id/commercial-qualification')
+  @RequirePermissions(LEADS_COMMERCIAL_QUALIFY_PERMISSION)
+  @ApiOperation({
+    summary:
+      'Confirm Stage-2 commercial qualification (HEAD). Does not create a Deal.',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Commercial qualification confirmed; Lead stays QUALIFIED',
+  })
+  @ApiResponse({ status: 400, description: 'Invalid supplier/quality mapping' })
+  @ApiResponse({ status: 403, description: 'Insufficient commercial authority' })
+  @ApiResponse({ status: 404, description: 'Lead not found' })
+  @ApiResponse({
+    status: 409,
+    description: 'Lead is not Stage-1 QUALIFIED or is terminal',
+  })
+  confirmCommercialQualification(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpsertLeadCommercialQualificationDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadCommercialQualificationService.confirm(
       id,
       dto,
       user.id,

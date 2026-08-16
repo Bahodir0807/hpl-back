@@ -61,6 +61,7 @@ describe('QuotesService', () => {
     activity: { create: jest.fn() },
     auditLog: { create: jest.fn() },
     lead: { findFirst: jest.fn(), findUnique: jest.fn(), update: jest.fn(), updateMany: jest.fn() },
+    leadCommercialQualification: { findUnique: jest.fn() },
     product: { findUnique: jest.fn() },
     supplier: { findUnique: jest.fn() },
     task: { create: jest.fn() },
@@ -73,6 +74,8 @@ describe('QuotesService', () => {
     createFromQuote: jest.fn(),
   };
 
+  const confirmedAt = new Date('2026-08-17T00:00:00.000Z');
+
   const calculation = {
     id: 'calc-id',
     leadId: 'lead-id',
@@ -80,6 +83,9 @@ describe('QuotesService', () => {
     createdById: 'manager-id',
     totalAmount: new Prisma.Decimal('1000'),
     displayCurrency: 'UZS',
+    commercialSupplierId: 'supplier-id',
+    commercialQualityClassId: 'quality-id',
+    commercialConfirmedAt: confirmedAt,
     panelQuote: null,
     items: [
       {
@@ -116,6 +122,12 @@ describe('QuotesService', () => {
       callback(prisma),
     );
     prisma.calculationSession.findFirst.mockResolvedValue(calculation);
+    prisma.leadCommercialQualification.findUnique.mockResolvedValue({
+      supplierId: 'supplier-id',
+      qualityClassId: 'quality-id',
+      status: 'CONFIRMED',
+      confirmedAt,
+    });
     prisma.panelQuote.create.mockResolvedValue({
       id: 'quote-id',
       status: QUOTE_STATUS.DRAFT,
@@ -140,6 +152,73 @@ describe('QuotesService', () => {
         }),
       }),
     );
+  });
+
+  it('rejects quote creation when calculation was not created under Stage 2', async () => {
+    prisma.calculationSession.findFirst.mockResolvedValue({
+      ...calculation,
+      commercialConfirmedAt: null,
+    });
+
+    await expect(
+      service.createFromCalculation('calc-id', {}, manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'CALCULATION_NOT_COMMERCIALLY_QUALIFIED',
+      }),
+    });
+    expect(prisma.panelQuote.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects quote creation when Stage 2 has changed since the calculation', async () => {
+    prisma.leadCommercialQualification.findUnique.mockResolvedValue({
+      supplierId: 'new-supplier-id',
+      qualityClassId: 'new-quality-id',
+      status: 'CONFIRMED',
+      confirmedAt: new Date('2026-08-18T00:00:00.000Z'),
+    });
+
+    await expect(
+      service.createFromCalculation('calc-id', {}, manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'COMMERCIAL_QUALIFICATION_CHANGED',
+        statusCode: HttpStatus.CONFLICT,
+      }),
+    });
+    expect(prisma.panelQuote.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects quote creation when supplier/quality match but confirmedAt does not', async () => {
+    prisma.leadCommercialQualification.findUnique.mockResolvedValue({
+      supplierId: 'supplier-id',
+      qualityClassId: 'quality-id',
+      status: 'CONFIRMED',
+      confirmedAt: new Date('2026-08-18T00:00:00.000Z'),
+    });
+
+    await expect(
+      service.createFromCalculation('calc-id', {}, manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'COMMERCIAL_QUALIFICATION_CHANGED',
+        statusCode: HttpStatus.CONFLICT,
+      }),
+    });
+    expect(prisma.panelQuote.create).not.toHaveBeenCalled();
+  });
+
+  it('allows quote creation after an identical Stage-2 retry that does not change confirmedAt', async () => {
+    prisma.leadCommercialQualification.findUnique.mockResolvedValue({
+      supplierId: 'supplier-id',
+      qualityClassId: 'quality-id',
+      status: 'CONFIRMED',
+      confirmedAt,
+    });
+
+    await service.createFromCalculation('calc-id', {}, manager);
+
+    expect(prisma.panelQuote.create).toHaveBeenCalled();
   });
 
   it('rejects quote creation when calculation is not finalized', async () => {

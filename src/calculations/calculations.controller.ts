@@ -60,8 +60,11 @@ export class CalculationsController {
   @Post('preview')
   @RequirePermissions(CALCULATION_PERMISSIONS.CREATE)
   @ApiOperation({ summary: 'Preview calculation for one line item without saving' })
-  preview(@Body() dto: PreviewCalculationDto) {
-    return this.calculationService.preview(dto);
+  preview(
+    @Body() dto: PreviewCalculationDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.calculationService.preview(dto, user);
   }
 
   @Get()

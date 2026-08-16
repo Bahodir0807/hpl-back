@@ -2,11 +2,16 @@ import { HttpStatus, Injectable } from '@nestjs/common';
 import {
   ActivityType,
   CalculationSession,
+  CommercialQualificationStatus,
+  HplApplication,
   Lead,
+  LeadQualification,
+  LeadStatus,
   Prisma,
 } from '@prisma/client';
 import { BusinessException } from '../common/exceptions/business.exception';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
+import { panelTypeCodeForApplication } from '../panels/pricing/hpl-quality-matrix';
 import { PanelPriceCalculator } from '../panels/services/panel-price-calculator.service';
 import { PanelQuantityCalculator } from '../panels/services/panel-quantity-calculator.service';
 import { CurrencyRateService } from '../panels/services/currency-rate.service';
@@ -15,6 +20,7 @@ import {
   HPL_SELLING_CURRENCY,
 } from '../panels/pricing/hpl-pricing.constants';
 import { PrismaService } from '../modules/prisma/prisma.service';
+import { assertStage1QualificationComplete } from '../modules/leads/lead-qualification.rules';
 import {
   CALCULATION_PERMISSIONS,
   CALCULATION_STATUS,
@@ -22,6 +28,7 @@ import {
 } from './calculation.constants';
 import {
   CalculationItemDto,
+  PreviewCalculationDto,
   resolveThicknessMm,
 } from './dto/calculation-item.dto';
 import { CreateCalculationDto } from './dto/create-calculation.dto';
@@ -64,6 +71,32 @@ type CalculatedLineItem = {
   areaM2: Prisma.Decimal;
 };
 
+type LeadForHplCalculation = Lead & {
+  qualification: LeadQualification | null;
+  commercialQualification: {
+    supplierId: string;
+    qualityClassId: string;
+    status: CommercialQualificationStatus;
+    confirmedAt: Date;
+  } | null;
+};
+
+type CommercialDecision = {
+  supplierId: string;
+  qualityClassId: string;
+  confirmedAt: Date;
+};
+
+type ResolvedCalculationItem = {
+  panelTypeId: string;
+  panelSizeId: string;
+  thicknessMm: number;
+  supplierId: string;
+  qualityClassId: string;
+  colorId?: string;
+  requiredAreaM2: string;
+};
+
 @Injectable()
 export class CalculationService {
   constructor(
@@ -77,9 +110,19 @@ export class CalculationService {
     dto: CreateCalculationDto,
     user: CurrentUser,
   ): Promise<CalculationWithItems> {
-    const lead = await this.guardLeadAccess(dto.leadId, user);
+    const lead = await this.guardLeadForHplCalculation(dto.leadId, user);
+    const commercial = this.requireCommercialDecision(lead);
+    const items = this.deriveCalculationItems(
+      dto.items,
+      lead.qualification,
+      commercial,
+    );
     const cnyUsdRate = await this.currencyRateService.getActiveCnyUsdRate();
-    const calculatedItems = await this.calculateItems(dto.items, cnyUsdRate);
+    const calculatedItems = await this.calculateItems(
+      items,
+      cnyUsdRate,
+      lead.qualification?.application,
+    );
 
     return this.prisma.$transaction(async (tx) => {
       const totalAmount = calculatedItems.reduce(
@@ -100,6 +143,9 @@ export class CalculationService {
           cnyUsdRate,
           sellingCoefficient: HPL_SELLING_COEFFICIENT,
           notes: dto.notes,
+          commercialSupplierId: commercial.supplierId,
+          commercialQualityClassId: commercial.qualityClassId,
+          commercialConfirmedAt: commercial.confirmedAt,
           items: {
             create: calculatedItems.map(({ areaM2: _areaM2, ...item }) => item),
           },
@@ -186,11 +232,24 @@ export class CalculationService {
     this.assertCalculationWriteAccess(session, user);
     this.assertDraft(session);
 
-    const cnyUsdRate = dto.items
+    const lead = dto.items
+      ? await this.guardLeadForHplCalculation(session.leadId, user)
+      : null;
+    const commercial = lead ? this.requireCommercialDecision(lead) : null;
+    const derivedItems =
+      dto.items && lead && commercial
+        ? this.deriveCalculationItems(dto.items, lead.qualification, commercial)
+        : undefined;
+
+    const cnyUsdRate = derivedItems
       ? await this.currencyRateService.getActiveCnyUsdRate()
       : undefined;
-    const calculatedItems = dto.items
-      ? await this.calculateItems(dto.items, cnyUsdRate!)
+    const calculatedItems = derivedItems
+      ? await this.calculateItems(
+          derivedItems,
+          cnyUsdRate!,
+          lead?.qualification?.application,
+        )
       : undefined;
 
     return this.prisma.$transaction(async (tx) => {
@@ -216,6 +275,9 @@ export class CalculationService {
                 displayCurrency: HPL_SELLING_CURRENCY,
                 cnyUsdRate,
                 sellingCoefficient: HPL_SELLING_COEFFICIENT,
+                commercialSupplierId: commercial!.supplierId,
+                commercialQualityClassId: commercial!.qualityClassId,
+                commercialConfirmedAt: commercial!.confirmedAt,
               }
             : {}),
           totalAmount:
@@ -260,9 +322,40 @@ export class CalculationService {
     });
   }
 
-  async preview(dto: CalculationItemDto) {
+  async preview(dto: PreviewCalculationDto, user: CurrentUser) {
+    if (dto.leadId) {
+      const lead = await this.guardLeadForHplCalculation(dto.leadId, user);
+      const commercial = this.requireCommercialDecision(lead);
+      const [item] = this.deriveCalculationItems(
+        [dto],
+        lead.qualification,
+        commercial,
+      );
+      const cnyUsdRate = await this.currencyRateService.getActiveCnyUsdRate();
+      const calculated = await this.calculateItem(
+        item,
+        0,
+        cnyUsdRate,
+        lead.qualification?.application,
+      );
+
+      return {
+        sheetsCount: calculated.sheetsCount,
+        areaM2: calculated.areaM2,
+        wastePercent: calculated.wastePercent,
+        supplierPricePerM2: calculated.supplierPricePerM2,
+        clientPricePerM2: calculated.clientPricePerM2,
+        pricePerSheet: calculated.pricePerSheet,
+        total: calculated.totalPrice,
+      };
+    }
+
     const cnyUsdRate = await this.currencyRateService.getActiveCnyUsdRate();
-    const item = await this.calculateItem(dto, 0, cnyUsdRate);
+    const item = await this.calculateItem(
+      this.resolveCatalogPreviewItem(dto),
+      0,
+      cnyUsdRate,
+    );
 
     return {
       sheetsCount: item.sheetsCount,
@@ -276,18 +369,22 @@ export class CalculationService {
   }
 
   private async calculateItems(
-    items: CalculationItemDto[],
+    items: ResolvedCalculationItem[],
     cnyUsdRate: Prisma.Decimal,
+    application?: HplApplication | null,
   ): Promise<CalculatedLineItem[]> {
     return Promise.all(
-      items.map((item, index) => this.calculateItem(item, index, cnyUsdRate)),
+      items.map((item, index) =>
+        this.calculateItem(item, index, cnyUsdRate, application),
+      ),
     );
   }
 
   private async calculateItem(
-    item: CalculationItemDto,
+    item: ResolvedCalculationItem,
     sortOrder: number,
     cnyUsdRate: Prisma.Decimal,
+    application?: HplApplication | null,
   ): Promise<CalculatedLineItem> {
     const requiredArea = new Prisma.Decimal(item.requiredAreaM2);
 
@@ -334,6 +431,17 @@ export class CalculationService {
       );
     }
 
+    if (
+      application &&
+      panelType.code !== panelTypeCodeForApplication(application)
+    ) {
+      throw new BusinessException(
+        HttpStatus.BAD_REQUEST,
+        'APPLICATION_PANEL_TYPE_MISMATCH',
+        'Тип панели не соответствует запрошенному применению клиента',
+      );
+    }
+
     if (!size) {
       throw new BusinessException(
         HttpStatus.BAD_REQUEST,
@@ -366,9 +474,9 @@ export class CalculationService {
       );
     }
 
-    const thicknessMm = resolveThicknessMm(item);
+    const thicknessMm = item.thicknessMm;
 
-    if (thicknessMm == null) {
+    if (!Number.isInteger(thicknessMm) || thicknessMm <= 0) {
       throw new BusinessException(
         HttpStatus.BAD_REQUEST,
         'INVALID_THICKNESS',
@@ -413,6 +521,169 @@ export class CalculationService {
       sortOrder,
       areaM2: price.areaM2,
     };
+  }
+
+  private deriveCalculationItems(
+    items: CalculationItemDto[],
+    qualification: LeadQualification | null,
+    commercial: CommercialDecision,
+  ): ResolvedCalculationItem[] {
+    assertStage1QualificationComplete(qualification);
+
+    return items.map((item) => {
+      if (item.supplierId && item.supplierId !== commercial.supplierId) {
+        throw new BusinessException(
+          HttpStatus.BAD_REQUEST,
+          'COMMERCIAL_OVERRIDE_FORBIDDEN',
+          'Поставщик берётся из коммерческой квалификации руководителя',
+        );
+      }
+
+      if (
+        item.qualityClassId &&
+        item.qualityClassId !== commercial.qualityClassId
+      ) {
+        throw new BusinessException(
+          HttpStatus.BAD_REQUEST,
+          'COMMERCIAL_OVERRIDE_FORBIDDEN',
+          'Класс качества берётся из коммерческой квалификации руководителя',
+        );
+      }
+
+      const panelTypeId = item.panelTypeId ?? qualification!.panelTypeId;
+      const panelSizeId = item.panelSizeId ?? qualification!.panelSizeId;
+      const thicknessMm =
+        resolveThicknessMm(item) ?? qualification!.thicknessMm;
+      const requiredAreaM2 =
+        item.requiredAreaM2 ?? qualification!.requiredAreaM2?.toString();
+
+      if (!panelTypeId || !panelSizeId || !thicknessMm || !requiredAreaM2) {
+        throw new BusinessException(
+          HttpStatus.BAD_REQUEST,
+          'CALCULATION_PREFILL_INCOMPLETE',
+          'Недостаточно данных Stage-1 для расчёта',
+        );
+      }
+
+      return {
+        panelTypeId,
+        panelSizeId,
+        thicknessMm,
+        requiredAreaM2,
+        supplierId: commercial.supplierId,
+        qualityClassId: commercial.qualityClassId,
+        colorId: item.colorId,
+      };
+    });
+  }
+
+  private resolveCatalogPreviewItem(
+    dto: PreviewCalculationDto,
+  ): ResolvedCalculationItem {
+    const thicknessMm = resolveThicknessMm(dto);
+    if (
+      !dto.panelTypeId ||
+      !dto.panelSizeId ||
+      !dto.supplierId ||
+      !dto.qualityClassId ||
+      !dto.requiredAreaM2 ||
+      thicknessMm == null
+    ) {
+      throw new BusinessException(
+        HttpStatus.BAD_REQUEST,
+        'CALCULATION_PREFILL_INCOMPLETE',
+        'Для предпросмотра каталога нужны тип, размер, толщина, поставщик, качество и площадь',
+      );
+    }
+
+    return {
+      panelTypeId: dto.panelTypeId,
+      panelSizeId: dto.panelSizeId,
+      thicknessMm,
+      supplierId: dto.supplierId,
+      qualityClassId: dto.qualityClassId,
+      requiredAreaM2: dto.requiredAreaM2,
+      colorId: dto.colorId,
+    };
+  }
+
+  private requireCommercialDecision(
+    lead: LeadForHplCalculation,
+  ): CommercialDecision {
+    const commercial = lead.commercialQualification;
+    if (
+      !commercial ||
+      commercial.status !== CommercialQualificationStatus.CONFIRMED
+    ) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'COMMERCIAL_QUALIFICATION_REQUIRED',
+        'Расчёт доступен после коммерческой квалификации руководителя',
+      );
+    }
+
+    return {
+      supplierId: commercial.supplierId,
+      qualityClassId: commercial.qualityClassId,
+      confirmedAt: commercial.confirmedAt,
+    };
+  }
+
+  private async guardLeadForHplCalculation(
+    leadId: string,
+    user: CurrentUser,
+  ): Promise<LeadForHplCalculation> {
+    const lead = await this.prisma.lead.findFirst({
+      where: { id: leadId, deletedAt: null },
+      include: {
+        qualification: true,
+        commercialQualification: true,
+      },
+    });
+
+    if (!lead) {
+      throw new BusinessException(
+        HttpStatus.NOT_FOUND,
+        'LEAD_NOT_FOUND',
+        'Лид не найден',
+      );
+    }
+
+    if (
+      !user.permissions.includes(LEADS_READ_ALL_PERMISSION) &&
+      lead.ownerId !== user.id
+    ) {
+      throw new BusinessException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'У вас нет доступа к этому лиду',
+      );
+    }
+
+    if (
+      lead.status === LeadStatus.CONVERTED ||
+      lead.status === LeadStatus.UNQUALIFIED ||
+      lead.dealId !== null
+    ) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'LEAD_NOT_CALCULABLE',
+        'Расчёт недоступен для терминального лида',
+      );
+    }
+
+    if (lead.status !== LeadStatus.QUALIFIED) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'COMMERCIAL_QUALIFICATION_REQUIRED',
+        'Расчёт доступен после квалификации Stage 1 и коммерческой квалификации руководителя',
+      );
+    }
+
+    assertStage1QualificationComplete(lead.qualification);
+    this.requireCommercialDecision(lead);
+
+    return lead;
   }
 
   private async guardLeadAccess(

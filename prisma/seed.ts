@@ -115,6 +115,7 @@ const permissionDefinitions = [
   ['leads:update', 'Update leads'],
   ['leads:delete', 'Delete leads'],
   ['leads:qualify', 'Qualify leads'],
+  ['leads:commercial_qualify', 'Confirm Stage-2 commercial qualification'],
   ['leads:assign', 'Assign leads'],
   ['tasks:read', 'Read tasks'],
   ['tasks:read_all', 'Read all tasks'],

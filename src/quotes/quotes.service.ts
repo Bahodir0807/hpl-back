@@ -5,6 +5,7 @@ import {
   Prisma,
   TaskPriority,
   TaskType,
+  CommercialQualificationStatus,
 } from '@prisma/client';
 import { CALCULATION_PERMISSIONS, CALCULATION_STATUS } from '../calculations/calculation.constants';
 import { BusinessException } from '../common/exceptions/business.exception';
@@ -86,6 +87,18 @@ export class QuotesService {
         'КП можно создать только из зафиксированного расчёта',
       );
     }
+
+    const currentCommercial =
+      await this.prisma.leadCommercialQualification.findUnique({
+        where: { leadId: calculation.leadId },
+        select: {
+          supplierId: true,
+          qualityClassId: true,
+          status: true,
+          confirmedAt: true,
+        },
+      });
+    this.assertCalculationMatchesCurrentStage2(calculation, currentCommercial);
 
     if (calculation.panelQuote) {
       throw new BusinessException(
@@ -526,6 +539,50 @@ export class QuotesService {
     }
 
     return quote;
+  }
+
+  private assertCalculationMatchesCurrentStage2(
+    calculation: {
+      commercialSupplierId: string | null;
+      commercialQualityClassId: string | null;
+      commercialConfirmedAt: Date | null;
+    },
+    current: {
+      supplierId: string;
+      qualityClassId: string;
+      status: CommercialQualificationStatus;
+      confirmedAt: Date;
+    } | null,
+  ): void {
+    if (
+      !calculation.commercialConfirmedAt ||
+      !calculation.commercialSupplierId ||
+      !calculation.commercialQualityClassId
+    ) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'CALCULATION_NOT_COMMERCIALLY_QUALIFIED',
+        'КП можно создать только из расчёта после коммерческой квалификации руководителя',
+      );
+    }
+
+    const snapshotTime = calculation.commercialConfirmedAt.getTime();
+    const currentTime = current?.confirmedAt.getTime();
+    const matchesCurrentDecision =
+      current !== null &&
+      current.status === CommercialQualificationStatus.CONFIRMED &&
+      calculation.commercialSupplierId === current.supplierId &&
+      calculation.commercialQualityClassId === current.qualityClassId &&
+      Number.isFinite(snapshotTime) &&
+      snapshotTime === currentTime;
+
+    if (!matchesCurrentDecision) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'COMMERCIAL_QUALIFICATION_CHANGED',
+        'Расчёт основан на предыдущей коммерческой квалификации. Создайте новый расчёт',
+      );
+    }
   }
 
   private assertCalculationAccess(

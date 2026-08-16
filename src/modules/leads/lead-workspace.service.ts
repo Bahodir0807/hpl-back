@@ -4,6 +4,7 @@ import { BusinessException } from '../../common/exceptions/business.exception';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import { LEADS_READ_ALL_PERMISSION } from '../../calculations/calculation.constants';
 import { PrismaService } from '../prisma/prisma.service';
+import { toCommercialPrefill } from './lead-commercial-qualification.mapper';
 import { toCalculationRequirementPrefill } from './lead-qualification.mapper';
 import { LeadVirtualStatusService } from './lead-virtual-status.service';
 
@@ -42,6 +43,12 @@ const leadWorkspaceInclude = Prisma.validator<Prisma.LeadInclude>()({
           areaM2: true,
         },
       },
+    },
+  },
+  commercialQualification: {
+    include: {
+      supplier: { select: { id: true, code: true, name: true } },
+      qualityClass: { select: { id: true, code: true, nameRu: true } },
     },
   },
 });
@@ -177,6 +184,10 @@ export class LeadWorkspaceService {
         : null,
       requirementPrefill: lead.qualification
         ? toCalculationRequirementPrefill(lead.qualification)
+        : null,
+      commercialQualification: lead.commercialQualification ?? null,
+      commercialPrefill: lead.commercialQualification
+        ? toCommercialPrefill(lead.commercialQualification)
         : null,
       activities,
       calculations,
