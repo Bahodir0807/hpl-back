@@ -22,6 +22,7 @@ import { DisqualifyLeadDto } from './dto/disqualify-lead.dto';
 import { FilterLeadDto } from './dto/filter-lead.dto';
 import { QualifyLeadDto } from './dto/qualify-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
+import { LeadQualificationService } from './lead-qualification.service';
 
 const FIRST_CONTACT_SLA_MS = 2 * 60 * 60 * 1000;
 const READ_ALL_LEADS_PERMISSION = 'leads:read_all';
@@ -34,6 +35,22 @@ const leadRelationsInclude = Prisma.validator<Prisma.LeadInclude>()({
   projectObject: { select: { id: true, name: true } },
   contact: { select: { id: true, firstName: true, lastName: true } },
   deal: { select: { id: true, title: true } },
+  qualification: {
+    include: {
+      panelType: {
+        select: { id: true, code: true, displayNameRu: true },
+      },
+      panelSize: {
+        select: {
+          id: true,
+          displayName: true,
+          widthMm: true,
+          heightMm: true,
+          areaM2: true,
+        },
+      },
+    },
+  },
 });
 
 type LeadWithRelations = Prisma.LeadGetPayload<{
@@ -58,7 +75,10 @@ type QualificationData = {
 
 @Injectable()
 export class LeadsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly leadQualificationService: LeadQualificationService,
+  ) {}
 
   async create(
     dto: CreateLeadDto,
@@ -299,6 +319,21 @@ export class LeadsService {
     const dueDate = new Date(Date.now() + FIRST_CONTACT_SLA_MS);
 
     return this.prisma.$transaction(async (tx) => {
+      if (dto.qualification) {
+        await this.leadQualificationService.upsertInTx(
+          tx,
+          id,
+          dto.qualification,
+          currentUserId,
+          'lead_qualification_completed',
+        );
+      }
+
+      const stage1 = await tx.leadQualification.findUnique({
+        where: { leadId: id },
+      });
+      this.leadQualificationService.assertStage1Complete(stage1);
+
       const deal = await tx.deal.create({
         data: {
           title: lead.title,

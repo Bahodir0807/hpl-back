@@ -275,7 +275,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       })
       .expect(400);
 
-    const qualifyResponse = await request(server)
+    await request(server)
       .post(`/leads/${lead.id}/qualify`)
       .set(authHeader(context.managerToken))
       .send({
@@ -286,6 +286,22 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         targetDate: futureIso(20),
         decisionMakerContact: 'Chief architect',
       })
+      .expect(400);
+
+    const qualifyResponse = await request(server)
+      .post(`/leads/${lead.id}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send({
+        clientId: context.clientId,
+        projectObjectId: context.projectObjectId,
+        needDescription: 'HPL panels for lobby',
+        estimatedAmount: 125000,
+        targetDate: futureIso(20),
+        decisionMakerContact: 'Chief architect',
+        qualification: await stage1QualificationPayload(prisma, {
+          installationRequired: false,
+        }),
+      })
       .expect(201);
     const qualifiedLead = bodyAs<LeadResponse>(qualifyResponse);
 
@@ -295,6 +311,253 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       where: { id: qualifiedLead.dealId },
     });
     expect(deal.stage).toBe(DealStage.QUALIFICATION);
+  });
+
+  it('BP1 allows a new lead without installationRequired', async () => {
+    const response = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Partial HPL lead ${RUN_ID}`,
+        source: 'website',
+      })
+      .expect(201);
+    const lead = bodyAs<LeadResponse>(response);
+
+    const qualification = await request(server)
+      .get(`/leads/${lead.id}/qualification`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    expect(
+      bodyAs<{ qualification: { installationRequired: boolean | null } | null }>(
+        qualification,
+      ).qualification,
+    ).toBeNull();
+
+    const created = await prisma.lead.findUniqueOrThrow({
+      where: { id: lead.id },
+      include: { qualification: true },
+    });
+    expect(created.qualification).toBeNull();
+  });
+
+  it('BP1 distinguishes unknown vs NO installation and persists Stage-1 need', async () => {
+    const created = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Stage-1 persist ${RUN_ID}`,
+        source: 'email',
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(created).id;
+    const payload = await stage1QualificationPayload(prisma, {
+      installationRequired: true,
+      stockOnly: true,
+      urgent: true,
+      willingToWait: false,
+    });
+
+    await request(server)
+      .patch(`/leads/${leadId}/qualification`)
+      .set(authHeader(context.managerToken))
+      .send({ application: 'EXTERIOR' })
+      .expect(200);
+
+    const unknownInstallation = await request(server)
+      .get(`/leads/${leadId}/qualification`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    expect(
+      bodyAs<{ qualification: { installationRequired: boolean | null } }>(
+        unknownInstallation,
+      ).qualification.installationRequired,
+    ).toBeNull();
+
+    await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send({
+        clientId: context.clientId,
+        projectObjectId: context.projectObjectId,
+        needDescription: 'HPL for facade',
+        estimatedAmount: 125000,
+        targetDate: futureIso(20),
+        decisionMakerContact: 'Chief architect',
+      })
+      .expect(400);
+
+    const saved = await request(server)
+      .patch(`/leads/${leadId}/qualification`)
+      .set(authHeader(context.managerToken))
+      .send(payload)
+      .expect(200);
+    const savedBody = bodyAs<{
+      application: string;
+      thicknessMm: number;
+      colorCode: string;
+      requiredAreaM2: string;
+      installationRequired: boolean;
+      stockOnly: boolean;
+      urgent: boolean;
+      willingToWait: boolean;
+      customerRequirements: string;
+    }>(saved);
+
+    expect(savedBody.application).toBe('EXTERIOR');
+    expect(savedBody.thicknessMm).toBe(10);
+    expect(savedBody.colorCode).toBe('W100');
+    expect(Number(savedBody.requiredAreaM2)).toBe(15.5);
+    expect(savedBody.installationRequired).toBe(true);
+    expect(savedBody.stockOnly).toBe(true);
+    expect(savedBody.urgent).toBe(true);
+    expect(savedBody.willingToWait).toBe(false);
+    expect(savedBody.customerRequirements).toContain('in stock');
+
+    const activity = await prisma.activity.findFirst({
+      where: {
+        relatedType: 'Lead',
+        relatedId: leadId,
+        authorId: context.managerId,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(activity?.content).toContain('Stage-1 HPL qualification');
+
+    const noInstallLead = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `No install ${RUN_ID}`,
+        source: 'email',
+      })
+      .expect(201);
+    const noInstallId = bodyAs<LeadResponse>(noInstallLead).id;
+
+    await request(server)
+      .post(`/leads/${noInstallId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send({
+        clientId: context.clientId,
+        projectObjectId: context.projectObjectId,
+        needDescription: 'HPL for lobby',
+        estimatedAmount: 125000,
+        targetDate: futureIso(20),
+        decisionMakerContact: 'Chief architect',
+        qualification: await stage1QualificationPayload(prisma, {
+          installationRequired: false,
+        }),
+      })
+      .expect(201);
+
+    const noInstall = await prisma.leadQualification.findUniqueOrThrow({
+      where: { leadId: noInstallId },
+    });
+    expect(noInstall.installationRequired).toBe(false);
+  });
+
+  it('BP1 denies foreign manager qualification access and blocks commercial fields', async () => {
+    const passwordHash = await hash(TEST_PASSWORD, 12);
+    const managerB = await upsertUser(prisma, {
+      email: `manager-b-${RUN_ID}@hpl.test`,
+      firstName: 'Other',
+      lastName: 'Manager',
+      passwordHash,
+      roleName: RoleName.MANAGER,
+      managerId: context.headId,
+    });
+    const managerBTokens = await login(server, `manager-b-${RUN_ID}@hpl.test`);
+
+    const ownLead = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Owner qualification ${RUN_ID}`,
+        source: 'e2e',
+      })
+      .expect(201);
+    const ownLeadId = bodyAs<LeadResponse>(ownLead).id;
+
+    await request(server)
+      .patch(`/leads/${ownLeadId}/qualification`)
+      .set(authHeader(context.managerToken))
+      .send({
+        application: 'INTERIOR',
+        thicknessMm: 8,
+        colorName: 'Black',
+        requiredAreaM2: 10,
+        installationRequired: false,
+        stockOnly: false,
+        urgent: false,
+      })
+      .expect(200);
+
+    await request(server)
+      .get(`/leads/${ownLeadId}/qualification`)
+      .set(authHeader(managerBTokens.accessToken))
+      .expect(403);
+
+    await request(server)
+      .patch(`/leads/${ownLeadId}/qualification`)
+      .set(authHeader(managerBTokens.accessToken))
+      .send({ installationRequired: true })
+      .expect(403);
+
+    await request(server)
+      .get(`/leads/${ownLeadId}/qualification`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+
+    const commercial = await request(server)
+      .patch(`/leads/${ownLeadId}/qualification`)
+      .set(authHeader(context.managerToken))
+      .send({
+        application: 'INTERIOR',
+        supplierId: managerB.id,
+        supplierPrice: 80,
+        cnyUsdRate: 0.14,
+        sellingCoefficient: 1.8,
+        discount: 10,
+        finalPrice: 999,
+      })
+      .expect(400);
+
+    expect(JSON.stringify(commercial.body)).toContain('supplier');
+
+    const afterReject = await prisma.leadQualification.findUniqueOrThrow({
+      where: { leadId: ownLeadId },
+    });
+    expect(afterReject.installationRequired).toBe(false);
+    expect(
+      Object.prototype.hasOwnProperty.call(afterReject, 'supplierId'),
+    ).toBe(false);
+  });
+
+  it('BP1 telegram intake does not default installationRequired to false', async () => {
+    const leadFactory = app.get(TelegramLeadFactory);
+    const lead = await leadFactory.create({
+      telegramUserId: `tg-hpl-${RUN_ID}`,
+      telegramUsername: 'hpl_user',
+      formData: {
+        name: 'HPL TG',
+        phone: `+99892${RUN_ID.slice(-7)}`,
+        message: 'Need panels',
+        panelTypePreference: 'exterior',
+      },
+      updateId: `hpl-tg-${RUN_ID}`,
+      rawPayload: {},
+    });
+
+    const qualification = await prisma.leadQualification.findUnique({
+      where: { leadId: lead.id },
+    });
+
+    expect(qualification).not.toBeNull();
+    expect(qualification?.application).toBe('EXTERIOR');
+    expect(qualification?.installationRequired).toBeNull();
+    expect(qualification?.stockOnly).toBeNull();
+    expect(qualification?.urgent).toBeNull();
   });
 
   it('AT-04 syncs deal nextActionAt with nearest open task', async () => {
@@ -2349,6 +2612,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
           estimatedAmount: 125000,
           targetDate: futureIso(20),
           decisionMakerContact: 'Chief architect',
+          qualification: await stage1QualificationPayload(prisma, {
+            installationRequired: false,
+          }),
         }),
       request(server)
         .post(`/quotes/${quoteId}/convert-to-deal`)
@@ -3009,6 +3275,38 @@ function futureDate(days: number): Date {
 
 function futureIso(days: number): string {
   return futureDate(days).toISOString();
+}
+
+async function stage1QualificationPayload(
+  prisma: PrismaService,
+  overrides: {
+    installationRequired: boolean;
+    stockOnly?: boolean;
+    urgent?: boolean;
+    willingToWait?: boolean;
+  },
+): Promise<Record<string, unknown>> {
+  const panelType = await prisma.panelType.findFirstOrThrow({
+    where: { code: 'exterior' },
+  });
+  const panelSize = await prisma.panelSize.findFirstOrThrow({
+    where: { widthMm: 1220, heightMm: 2440 },
+  });
+
+  return {
+    application: 'EXTERIOR',
+    panelTypeId: panelType.id,
+    thicknessMm: 10,
+    panelSizeId: panelSize.id,
+    colorCode: 'W100',
+    colorName: 'White',
+    requiredAreaM2: 15.5,
+    installationRequired: overrides.installationRequired,
+    stockOnly: overrides.stockOnly ?? false,
+    urgent: overrides.urgent ?? false,
+    willingToWait: overrides.willingToWait ?? true,
+    customerRequirements: 'Only buys if material is in stock',
+  };
 }
 
 function hashApiKeyToken(token: string, pepper: string): string {

@@ -28,6 +28,8 @@ import { DisqualifyLeadDto } from './dto/disqualify-lead.dto';
 import { FilterLeadDto } from './dto/filter-lead.dto';
 import { QualifyLeadDto } from './dto/qualify-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
+import { UpsertLeadQualificationDto } from './dto/upsert-lead-qualification.dto';
+import { LeadQualificationService } from './lead-qualification.service';
 import { LeadsService } from './leads.service';
 
 @ApiTags('Leads')
@@ -35,7 +37,10 @@ import { LeadsService } from './leads.service';
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('leads')
 export class LeadsController {
-  constructor(private readonly leadsService: LeadsService) {}
+  constructor(
+    private readonly leadsService: LeadsService,
+    private readonly leadQualificationService: LeadQualificationService,
+  ) {}
 
   @Post()
   @RequirePermissions('leads:create')
@@ -66,6 +71,38 @@ export class LeadsController {
     @CurrentUser() user: CurrentUserType,
   ) {
     return this.leadsService.findOne(id, user.id, user.permissions);
+  }
+
+  @Get(':id/qualification')
+  @RequirePermissions('leads:read')
+  @ApiOperation({ summary: 'Get Stage-1 HPL qualification for a lead' })
+  @ApiResponse({ status: 200, description: 'Qualification returned' })
+  @ApiResponse({ status: 404, description: 'Lead not found' })
+  getQualification(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadQualificationService.get(id, user.id, user.permissions);
+  }
+
+  @Patch(':id/qualification')
+  @RequirePermissions('leads:update')
+  @ApiOperation({
+    summary: 'Save Stage-1 HPL customer-need qualification (partial allowed)',
+  })
+  @ApiResponse({ status: 200, description: 'Qualification saved' })
+  @ApiResponse({ status: 404, description: 'Lead not found' })
+  upsertQualification(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpsertLeadQualificationDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadQualificationService.upsert(
+      id,
+      dto,
+      user.id,
+      user.permissions,
+    );
   }
 
   @Patch(':id')

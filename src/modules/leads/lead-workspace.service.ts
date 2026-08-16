@@ -4,6 +4,7 @@ import { BusinessException } from '../../common/exceptions/business.exception';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import { LEADS_READ_ALL_PERMISSION } from '../../calculations/calculation.constants';
 import { PrismaService } from '../prisma/prisma.service';
+import { toCalculationRequirementPrefill } from './lead-qualification.mapper';
 import { LeadVirtualStatusService } from './lead-virtual-status.service';
 
 const leadWorkspaceInclude = Prisma.validator<Prisma.LeadInclude>()({
@@ -25,6 +26,22 @@ const leadWorkspaceInclude = Prisma.validator<Prisma.LeadInclude>()({
       title: true,
       stage: true,
       supplierOrder: { select: { id: true, status: true } },
+    },
+  },
+  qualification: {
+    include: {
+      panelType: {
+        select: { id: true, code: true, displayNameRu: true },
+      },
+      panelSize: {
+        select: {
+          id: true,
+          displayName: true,
+          widthMm: true,
+          heightMm: true,
+          areaM2: true,
+        },
+      },
     },
   },
 });
@@ -146,6 +163,21 @@ export class LeadWorkspaceService {
         ...lead,
         virtualStatus,
       },
+      qualification: lead.qualification
+        ? {
+            ...lead.qualification,
+            requiredAreaM2: lead.qualification.requiredAreaM2?.toString() ?? null,
+            panelSize: lead.qualification.panelSize
+              ? {
+                  ...lead.qualification.panelSize,
+                  areaM2: lead.qualification.panelSize.areaM2.toString(),
+                }
+              : null,
+          }
+        : null,
+      requirementPrefill: lead.qualification
+        ? toCalculationRequirementPrefill(lead.qualification)
+        : null,
       activities,
       calculations,
       catalog: {

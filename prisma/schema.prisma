@@ -192,6 +192,11 @@ enum ActivityType {
   SUPPLIER_ORDER_STATUS_CHANGED
 }
 
+enum HplApplication {
+  INTERIOR
+  EXTERIOR
+}
+
 model User {
   id           String    @id @default(uuid()) 
   email        String    @unique
@@ -595,6 +600,7 @@ model Lead {
   calculationSessions CalculationSession[]
   panelQuotes           PanelQuote[]
   telegramLeadMetadata  TelegramLeadMetadata?
+  qualification         LeadQualification?
 
   @@index([ownerId])
   @@index([ownerId, status, createdAt])
@@ -606,6 +612,40 @@ model Lead {
   @@index([projectObjectId])
   @@index([deletedAt])
   @@index([createdAt])
+}
+
+model LeadQualification {
+  id     String @id @default(uuid())
+  leadId String @unique
+
+  application            HplApplication?
+  panelTypeId            String?
+  thicknessMm            Int?
+  panelSizeId            String?
+  customWidthMm          Int?
+  customHeightMm         Int?
+  colorCode              String?
+  colorName              String?
+  requiredAreaM2         Decimal? @db.Decimal(10, 4)
+  installationRequired   Boolean?
+  stockOnly              Boolean?
+  urgent                 Boolean?
+  willingToWait          Boolean?
+  customerRequirements   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lead      Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  panelType PanelType? @relation(fields: [panelTypeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  panelSize PanelSize? @relation(fields: [panelSizeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([application])
+  @@index([panelTypeId])
+  @@index([panelSizeId])
+  @@index([installationRequired])
+  @@index([stockOnly])
+  @@index([urgent])
 }
 
 model LeadAssignmentHistory {
@@ -1166,6 +1206,7 @@ model PanelType {
 
   qualityMappings SupplierQualityMapping[]
   calculationLineItems CalculationLineItem[]
+  qualifications       LeadQualification[]
 }
 
 model PanelSize {
@@ -1178,6 +1219,7 @@ model PanelSize {
   isActive    Boolean @default(true)
 
   calculationLineItems CalculationLineItem[]
+  qualifications       LeadQualification[]
 
   @@unique([widthMm, heightMm])
 }

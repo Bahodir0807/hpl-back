@@ -26,7 +26,10 @@ describe('LeadsService authorization', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new LeadsService(prisma as never);
+    service = new LeadsService(prisma as never, {
+      upsertInTx: jest.fn(),
+      assertStage1Complete: jest.fn(),
+    } as never);
     prisma.lead.findFirst.mockResolvedValue(ownedLead);
   });
 

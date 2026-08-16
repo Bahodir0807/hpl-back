@@ -160,4 +160,93 @@ describe('TelegramLeadFactory', () => {
 
     expect(lead.id).toBe('lead-2');
   });
+
+  it('does not invent installationRequired=false when Telegram did not ask', async () => {
+    prisma.contact.findFirst.mockResolvedValue(null);
+    prisma.client.findFirst.mockResolvedValue(null);
+
+    const leadQualificationCreate = jest.fn();
+
+    prisma.$transaction.mockImplementation(async (callback) =>
+      callback({
+        client: {
+          create: jest.fn().mockResolvedValue({
+            id: 'client-1',
+            type: ClientType.INDIVIDUAL,
+            status: ClientStatus.ACTIVE,
+          }),
+        },
+        contact: { create: jest.fn().mockResolvedValue({ id: 'contact-1' }) },
+        lead: { create: jest.fn().mockResolvedValue({ id: 'lead-3' }) },
+        panelType: { findFirst: jest.fn() },
+        leadQualification: { create: leadQualificationCreate },
+        telegramLeadMetadata: { create: jest.fn().mockResolvedValue({}) },
+        activity: { create: jest.fn().mockResolvedValue({}) },
+      }),
+    );
+
+    await factory.create({
+      telegramUserId: '999',
+      formData: {
+        name: 'Иван',
+        phone: '+998901234567',
+        message: 'Нужны панели',
+      },
+      updateId: '3',
+      rawPayload: {},
+    });
+
+    expect(leadQualificationCreate).not.toHaveBeenCalled();
+  });
+
+  it('maps a trusted interior preference and leaves installation unknown', async () => {
+    prisma.contact.findFirst.mockResolvedValue({
+      client: { id: 'client-existing' },
+    });
+
+    const leadQualificationCreate = jest.fn().mockResolvedValue({});
+    const panelTypeFindFirst = jest.fn().mockResolvedValue({ id: 'pt-interior' });
+
+    prisma.$transaction.mockImplementation(async (callback) =>
+      callback({
+        lead: { create: jest.fn().mockResolvedValue({ id: 'lead-4' }) },
+        panelType: { findFirst: panelTypeFindFirst },
+        leadQualification: { create: leadQualificationCreate },
+        telegramLeadMetadata: { create: jest.fn().mockResolvedValue({}) },
+        activity: { create: jest.fn().mockResolvedValue({}) },
+      }),
+    );
+
+    await factory.create({
+      telegramUserId: '999',
+      formData: {
+        name: 'Иван',
+        phone: '+998901234567',
+        message: 'test',
+        panelTypePreference: 'interior',
+      },
+      updateId: '4',
+      rawPayload: {},
+    });
+
+    expect(panelTypeFindFirst).toHaveBeenCalledWith({
+      where: { code: 'interior', isActive: true },
+      select: { id: true },
+    });
+    expect(leadQualificationCreate).toHaveBeenCalledWith({
+      data: {
+        leadId: 'lead-4',
+        application: 'INTERIOR',
+        panelTypeId: 'pt-interior',
+      },
+    });
+    const created = leadQualificationCreate.mock.calls[0][0].data as {
+      installationRequired?: boolean;
+      stockOnly?: boolean;
+      urgent?: boolean;
+    };
+    expect(created.installationRequired).toBeUndefined();
+    expect(created.stockOnly).toBeUndefined();
+    expect(created.urgent).toBeUndefined();
+  });
 });

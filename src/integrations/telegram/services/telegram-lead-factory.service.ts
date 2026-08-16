@@ -4,6 +4,7 @@ import {
   Client,
   ClientStatus,
   ClientType,
+  HplApplication,
   Lead,
   Prisma,
   RoleName,
@@ -100,6 +101,21 @@ export class TelegramLeadFactory {
           status: 'NEW',
         },
       });
+
+      const mappedNeed = await this.mapTrustedPanelPreference(
+        tx,
+        input.formData.panelTypePreference,
+      );
+
+      if (mappedNeed) {
+        await tx.leadQualification.create({
+          data: {
+            leadId: lead.id,
+            application: mappedNeed.application,
+            panelTypeId: mappedNeed.panelTypeId,
+          },
+        });
+      }
 
       await tx.telegramLeadMetadata.create({
         data: {
@@ -253,6 +269,66 @@ export class TelegramLeadFactory {
     return this.prisma.user.findUniqueOrThrow({
       where: { email },
     });
+  }
+
+  private async mapTrustedPanelPreference(
+    tx: Prisma.TransactionClient,
+    rawPreference?: string,
+  ): Promise<{
+    application: HplApplication | null;
+    panelTypeId: string | null;
+  } | null> {
+    const normalized = rawPreference?.trim().toLowerCase();
+    if (!normalized) {
+      return null;
+    }
+
+    const interiorAliases = new Set([
+      'interior',
+      'интерьер',
+      'интерьерные',
+      'inside',
+    ]);
+    const exteriorAliases = new Set([
+      'exterior',
+      'экстерьер',
+      'экстерьерные',
+      'outside',
+      'fasad',
+      'фасад',
+    ]);
+    const laboratoryAliases = new Set([
+      'laboratory',
+      'лабораторные',
+      'lab',
+    ]);
+
+    let application: HplApplication | null = null;
+    let panelTypeCode: string | null = null;
+
+    if (interiorAliases.has(normalized)) {
+      application = HplApplication.INTERIOR;
+      panelTypeCode = 'interior';
+    } else if (exteriorAliases.has(normalized)) {
+      application = HplApplication.EXTERIOR;
+      panelTypeCode = 'exterior';
+    } else if (laboratoryAliases.has(normalized)) {
+      panelTypeCode = 'laboratory';
+    } else {
+      return null;
+    }
+
+    const panelType = panelTypeCode
+      ? await tx.panelType.findFirst({
+          where: { code: panelTypeCode, isActive: true },
+          select: { id: true },
+        })
+      : null;
+
+    return {
+      application,
+      panelTypeId: panelType?.id ?? null,
+    };
   }
 
   private buildDescription(input: {
