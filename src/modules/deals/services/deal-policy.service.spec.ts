@@ -53,6 +53,25 @@ describe('DealPolicyService commercial lock', () => {
     expect(perms.canMutateCommercial).toBe(false);
   });
 
+  it('does not grant OBSERVER global deal visibility from deals:read_all alone', () => {
+    const observer: PolicyUser = {
+      id: 'observer-id',
+      roles: [RoleName.OBSERVER],
+      permissions: ['deals:read', 'deals:read_all'],
+    };
+    const deal = { ownerId: manager.id, stage: DealStage.QUALIFICATION };
+
+    expect(policy.canReadDeal(observer, deal)).toBe(false);
+    expect(policy.getScopeFilter(observer)).toEqual({ ownerId: observer.id });
+  });
+
+  it('scopes a manager without deals:read_all to owned deals', () => {
+    const deal = { ownerId: 'other-manager', stage: DealStage.QUALIFICATION };
+
+    expect(policy.canReadDeal(manager, deal)).toBe(false);
+    expect(policy.getScopeFilter(manager)).toEqual({ ownerId: manager.id });
+  });
+
   it('locks commercial fields after WON for HEAD and ADMIN', () => {
     const deal = { ownerId: manager.id, stage: DealStage.WON };
 

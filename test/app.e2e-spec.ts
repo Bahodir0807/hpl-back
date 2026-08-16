@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { createHash } from 'node:crypto';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   ActivityType,
@@ -482,7 +483,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const firstPayment = await createPayment(order.id, firstAmount);
     const firstConfirmation = await request(server)
       .patch(`/orders/payments/${firstPayment.id}/confirm`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.adminToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
     const partiallyPaidOrder = bodyAs<OrderResponse>(firstConfirmation);
@@ -497,7 +498,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const secondPayment = await createPayment(order.id, secondAmount);
     const secondConfirmation = await request(server)
       .patch(`/orders/payments/${secondPayment.id}/confirm`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.adminToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
     const paidOrder = bodyAs<OrderResponse>(secondConfirmation);
@@ -520,14 +521,14 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const firstPayment = await createPayment(order.id, totalAmount - 20);
     await request(server)
       .patch(`/orders/payments/${firstPayment.id}/confirm`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.adminToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
 
     const secondPayment = await createPayment(order.id, totalAmount / 2);
     await request(server)
       .patch(`/orders/payments/${secondPayment.id}/confirm`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.adminToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(409);
 
@@ -661,7 +662,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.adminToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
 
@@ -749,7 +750,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.adminToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(409);
 
@@ -806,7 +807,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const payment = await createPayment(order.id, half);
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.adminToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
 
@@ -990,7 +991,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .patch(`/orders/payments/${overpay.id}/confirm`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.adminToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(409);
 
@@ -1220,19 +1221,25 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .patch(`/orders/payments/${payment.id}/confirm`)
       .set(authHeader(context.headToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(403);
+
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.adminToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
 
     // Повторный confirm уже обработанного платежа → 409
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.adminToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(409);
 
     // CONFIRMED → REJECTED задним числом запрещён → 409
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.adminToken))
       .send({ status: PaymentRecordStatus.REJECTED })
       .expect(409);
 
@@ -1713,6 +1720,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         adminChatId: '1',
         adminMessageId: '101',
         callbackQueryId: 'callback-compact',
+        actorUserId: String(
+          app.get(ConfigService).get('TELEGRAM_ADMIN_USER_ID') ?? '',
+        ),
       },
     );
 
@@ -2304,7 +2314,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const payment = await createPayment(orderId, Number(totalAmount));
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.adminToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
   }
@@ -2544,7 +2554,7 @@ async function seedAuthData(prisma: PrismaService): Promise<void> {
     prisma,
     roleIds,
     RoleName.HEAD,
-    Array.from(permissionSlugs),
+    permissionSlugs.filter((slug) => slug !== 'payments:confirm'),
   );
   await assignRolePermissions(prisma, roleIds, RoleName.MANAGER, [
     'auth:me',

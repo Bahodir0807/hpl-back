@@ -52,7 +52,7 @@ export class OrderPolicyService {
         canEdit: canMutate,
         canDelete: canMutate,
         canAddPayment: canMutate,
-        canConfirmPayment: user.permissions.includes('payments:confirm'),
+        canConfirmPayment: false,
         canCreateDelivery: canMutate,
       };
     }

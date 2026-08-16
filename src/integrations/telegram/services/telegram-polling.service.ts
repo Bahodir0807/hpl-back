@@ -73,6 +73,7 @@ export class TelegramPollingService implements OnModuleInit, OnModuleDestroy {
             adminChatId: String(callback.message?.chat?.id ?? ''),
             adminMessageId: String(callback.message?.message_id ?? ''),
             callbackQueryId: callback.id,
+            actorUserId: String(callback.from?.id ?? ''),
           });
         }
       } catch (error) {

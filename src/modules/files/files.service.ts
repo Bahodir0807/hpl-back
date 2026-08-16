@@ -6,7 +6,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { File, RoleName } from '@prisma/client';
-import { fromBuffer } from 'file-type';
+import { fileTypeFromBuffer } from 'file-type';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -57,7 +57,7 @@ export class FilesService {
 
     await this.assertRelatedAccess(dto.relatedType, dto.relatedId, user);
 
-    const detectedType = await fromBuffer(file.buffer);
+    const detectedType = await fileTypeFromBuffer(file.buffer);
     if (
       !detectedType ||
       !this.isAllowedFileContent(detectedType.mime, file.mimetype)
@@ -176,7 +176,7 @@ export class FilesService {
       return;
     }
 
-    const ownerId = await this.resolveOwnerId(relatedType, relatedId);
+    const ownerId = await this.resolveOwnerId(relatedType, relatedId, user);
 
     if (ownerId === null) {
       throw new NotFoundException(`${relatedType} not found`);
@@ -192,6 +192,7 @@ export class FilesService {
   private async resolveOwnerId(
     relatedType: FileRelatedType,
     relatedId: string,
+    user: CurrentUser,
   ): Promise<string | null> {
     switch (relatedType) {
       case FileRelatedType.CLIENT: {
@@ -220,7 +221,16 @@ export class FilesService {
           where: { id: relatedId },
           select: { assigneeId: true, createdById: true },
         });
-        return task ? task.assigneeId : null;
+
+        if (!task) {
+          return null;
+        }
+
+        if (task.assigneeId === user.id || task.createdById === user.id) {
+          return user.id;
+        }
+
+        return task.assigneeId;
       }
       case FileRelatedType.PRODUCT: {
         const product = await this.prisma.product.findFirst({

@@ -162,6 +162,7 @@ export class TelegramIncomingProcessor extends WorkerHost {
       adminChatId,
       adminMessageId,
       callbackQueryId: callback.id,
+      actorUserId: String(callback.from?.id ?? ''),
     });
   }
 

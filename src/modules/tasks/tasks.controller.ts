@@ -39,7 +39,7 @@ export class TasksController {
   @ApiOperation({ summary: 'Create task' })
   @ApiResponse({ status: 201, description: 'Task created' })
   create(@Body() dto: CreateTaskDto, @CurrentUser() user: CurrentUserType) {
-    return this.tasksService.create(dto, user.id);
+    return this.tasksService.create(dto, user);
   }
 
   @Get()
@@ -84,7 +84,7 @@ export class TasksController {
     @Body() dto: CompleteTaskDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.tasksService.complete(id, dto, user.id);
+    return this.tasksService.complete(id, dto, user);
   }
 
   @Patch(':id/complete')
@@ -98,7 +98,7 @@ export class TasksController {
     @Body() dto: CompleteTaskDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.tasksService.complete(id, dto, user.id);
+    return this.tasksService.complete(id, dto, user);
   }
 
   @Post(':id/reschedule')
@@ -112,7 +112,7 @@ export class TasksController {
     @Body() dto: RescheduleTaskDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.tasksService.reschedule(id, dto, user.id);
+    return this.tasksService.reschedule(id, dto, user);
   }
 
   @Delete(':id')
@@ -120,7 +120,10 @@ export class TasksController {
   @ApiOperation({ summary: 'Cancel task' })
   @ApiResponse({ status: 200, description: 'Task cancelled' })
   @ApiResponse({ status: 404, description: 'Task not found' })
-  cancel(@Param('id', ParseUUIDPipe) id: string) {
-    return this.tasksService.cancel(id);
+  cancel(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.tasksService.cancel(id, user);
   }
 }

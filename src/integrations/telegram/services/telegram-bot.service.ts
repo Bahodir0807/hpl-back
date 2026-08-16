@@ -27,6 +27,7 @@ export type TelegramPollingUpdate = {
   callback_query?: {
     id: string;
     data?: string;
+    from?: { id: number | string };
     message?: {
       message_id: number;
       chat?: { id: number };

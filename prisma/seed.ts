@@ -170,7 +170,9 @@ const readPermissions = permissionDefinitions
 
 const rolePermissionSlugs: Record<RoleName, string[]> = {
   [RoleName.ADMIN]: permissionDefinitions.map(([slug]) => slug),
-  [RoleName.HEAD]: permissionDefinitions.map(([slug]) => slug),
+  [RoleName.HEAD]: permissionDefinitions
+    .map(([slug]) => slug)
+    .filter((slug) => slug !== 'payments:confirm'),
   [RoleName.MANAGER]: [
     'auth:me',
     'references:read',

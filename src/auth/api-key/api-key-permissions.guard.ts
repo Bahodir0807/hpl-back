@@ -25,7 +25,7 @@ export class ApiKeyPermissionsGuard implements CanActivate {
     );
 
     if (!required || required.length === 0) {
-      return true;
+      throw new ForbiddenException('API key permission required');
     }
 
     const request = context.switchToHttp().getRequest<ApiKeyRequest>();

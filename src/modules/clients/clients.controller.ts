@@ -9,6 +9,7 @@ import {
   Post,
   Query,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -19,6 +20,7 @@ import {
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import { PurchasePriceInterceptor } from '../../common/interceptors/purchase-price.interceptor';
 import type { CurrentUser as CurrentUserType } from '../../common/interfaces/current-user.interface';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { CheckDuplicatesDto } from './dto/check-duplicates.dto';
@@ -32,6 +34,7 @@ import { ClientsService } from './clients.service';
 @ApiTags('Clients')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
+@UseInterceptors(PurchasePriceInterceptor)
 @Controller('clients')
 export class ClientsController {
   constructor(private readonly clientsService: ClientsService) {}
@@ -40,8 +43,11 @@ export class ClientsController {
   @RequirePermissions('clients:read')
   @ApiOperation({ summary: 'Check client data for duplicates' })
   @ApiResponse({ status: 201, description: 'Potential duplicates returned' })
-  checkDuplicates(@Body() dto: CheckDuplicatesDto) {
-    return this.clientsService.checkDuplicates(dto);
+  checkDuplicates(
+    @Body() dto: CheckDuplicatesDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.clientsService.checkDuplicates(dto, user);
   }
 
   @Post()
@@ -50,7 +56,7 @@ export class ClientsController {
   @ApiResponse({ status: 201, description: 'Client created' })
   @ApiResponse({ status: 409, description: 'Exact duplicate detected' })
   create(@Body() dto: CreateClientDto, @CurrentUser() user: CurrentUserType) {
-    return this.clientsService.create(dto, user.id);
+    return this.clientsService.create(dto, user);
   }
 
   @Get()

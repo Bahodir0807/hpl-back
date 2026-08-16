@@ -60,8 +60,16 @@ type QualificationData = {
 export class LeadsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: CreateLeadDto, currentUserId: string): Promise<LeadWithRelations> {
-    const ownerId = dto.ownerId ?? currentUserId;
+  async create(
+    dto: CreateLeadDto,
+    currentUserId: string,
+    permissions: string[],
+  ): Promise<LeadWithRelations> {
+    const ownerId = this.resolveCreateOwnerId(
+      dto.ownerId,
+      currentUserId,
+      permissions,
+    );
     const now = new Date();
     const dueDate = new Date(now.getTime() + FIRST_CONTACT_SLA_MS);
 
@@ -239,7 +247,12 @@ export class LeadsService {
         );
       }
 
-      await this.assign(id, { newOwnerId: dto.ownerId }, currentUserId);
+      await this.assign(
+        id,
+        { newOwnerId: dto.ownerId },
+        currentUserId,
+        permissions,
+      );
     }
 
     return this.prisma.lead.update({
@@ -380,8 +393,10 @@ export class LeadsService {
     id: string,
     dto: AssignLeadDto,
     currentUserId: string,
+    permissions: string[],
   ): Promise<LeadWithRelations> {
     const lead = await this.ensureLeadExists(id);
+    this.assertLeadAccess(lead, currentUserId, permissions);
 
     if (lead.ownerId === dto.newOwnerId) {
       return this.prisma.lead.findUniqueOrThrow({
@@ -488,6 +503,24 @@ export class LeadsService {
         missingFields,
       });
     }
+  }
+
+  private resolveCreateOwnerId(
+    requestedOwnerId: string | undefined,
+    currentUserId: string,
+    permissions: string[],
+  ): string {
+    if (!requestedOwnerId || requestedOwnerId === currentUserId) {
+      return currentUserId;
+    }
+
+    if (!permissions.includes('leads:assign')) {
+      throw new ForbiddenException(
+        'leads:assign is required to assign lead owner',
+      );
+    }
+
+    return requestedOwnerId;
   }
 
   private assertLeadAccess(

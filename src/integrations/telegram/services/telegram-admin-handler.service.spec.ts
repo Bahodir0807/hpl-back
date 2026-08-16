@@ -100,6 +100,10 @@ describe('TelegramAdminHandlerService', () => {
                 return systemUser.email;
               }
 
+              if (key === 'TELEGRAM_ADMIN_USER_ID') {
+                return '999001';
+              }
+
               return undefined;
             }),
           },
@@ -182,12 +186,53 @@ describe('TelegramAdminHandlerService', () => {
       adminChatId: '1',
       adminMessageId: '100',
       callbackQueryId: 'cq-3',
+      actorUserId: '999001',
     });
 
     expect(assignSpy).toHaveBeenCalledWith(
       leadId,
       0,
       expect.objectContaining({ callbackQueryId: 'cq-3' }),
+    );
+  });
+
+  it('denies state-changing callback from an unauthorized Telegram actor', async () => {
+    const leadId = '11111111-1111-1111-1111-111111111111';
+    const assignSpy = jest
+      .spyOn(service, 'assignManagerByIndex')
+      .mockResolvedValue(undefined);
+
+    await service.handleCallbackData(`a|${compactUuid(leadId)}|0`, {
+      adminChatId: '1',
+      adminMessageId: '100',
+      callbackQueryId: 'cq-unauthorized',
+      actorUserId: '555555',
+    });
+
+    expect(assignSpy).not.toHaveBeenCalled();
+    expect(botService.answerCallbackQuery).toHaveBeenCalledWith(
+      'cq-unauthorized',
+      '❌ Недостаточно прав',
+    );
+  });
+
+  it('allows state-changing callback from the configured Telegram admin', async () => {
+    const leadId = '11111111-1111-1111-1111-111111111111';
+    const assignSpy = jest
+      .spyOn(service, 'assignManagerByIndex')
+      .mockResolvedValue(undefined);
+
+    await service.handleCallbackData(`assign:${compactUuid(leadId)}:1`, {
+      adminChatId: '1',
+      adminMessageId: '100',
+      callbackQueryId: 'cq-admin',
+      actorUserId: '999001',
+    });
+
+    expect(assignSpy).toHaveBeenCalledWith(
+      leadId,
+      1,
+      expect.objectContaining({ callbackQueryId: 'cq-admin' }),
     );
   });
 

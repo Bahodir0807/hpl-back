@@ -14,7 +14,12 @@ describe('QuotesService', () => {
     firstName: 'Manager',
     lastName: 'Test',
     roles: ['MANAGER'],
-    permissions: ['quotes:create', 'quotes:read', 'quotes:update', 'calculations:read'],
+    permissions: [
+      'quotes:create',
+      'quotes:read',
+      'quotes:update',
+      'calculations:read',
+    ],
   };
 
   const managerWithReadAll: CurrentUser = {
@@ -103,9 +108,11 @@ describe('QuotesService', () => {
     service = new QuotesService(
       prisma as never,
       notificationService as never,
-      dealFactory as never,
+      dealFactory,
     );
-    prisma.$transaction.mockImplementation(async (callback) => callback(prisma));
+    prisma.$transaction.mockImplementation(async (callback) =>
+      callback(prisma),
+    );
     prisma.calculationSession.findFirst.mockResolvedValue(calculation);
     prisma.panelQuote.create.mockResolvedValue({
       id: 'quote-id',
@@ -117,7 +124,11 @@ describe('QuotesService', () => {
   });
 
   it('creates quote from finalized calculation', async () => {
-    await service.createFromCalculation('calc-id', { clientComment: 'Test' }, manager);
+    await service.createFromCalculation(
+      'calc-id',
+      { clientComment: 'Test' },
+      manager,
+    );
 
     expect(prisma.panelQuote.create).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -186,11 +197,30 @@ describe('QuotesService', () => {
     });
 
     await expect(
-      service.updateStatus('quote-id', { status: QUOTE_STATUS.APPROVED }, manager),
+      service.updateStatus(
+        'quote-id',
+        { status: QUOTE_STATUS.APPROVED },
+        manager,
+      ),
     ).rejects.toMatchObject({
       response: expect.objectContaining({
         errorCode: 'INVALID_QUOTE_TRANSITION',
         statusCode: HttpStatus.CONFLICT,
+      }),
+    });
+  });
+
+  it('forbids reading another manager quote without quotes:read_all', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      managerId: 'other-manager',
+      items: [],
+    });
+
+    await expect(service.findOne('quote-id', manager)).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'FORBIDDEN',
+        statusCode: HttpStatus.FORBIDDEN,
       }),
     });
   });
@@ -206,7 +236,11 @@ describe('QuotesService', () => {
     });
 
     await expect(
-      service.updateStatus('quote-id', { status: QUOTE_STATUS.APPROVED }, manager),
+      service.updateStatus(
+        'quote-id',
+        { status: QUOTE_STATUS.APPROVED },
+        manager,
+      ),
     ).rejects.toMatchObject({
       response: expect.objectContaining({
         errorCode: 'QUOTE_APPROVAL_FORBIDDEN',
@@ -286,7 +320,9 @@ describe('QuotesService', () => {
       items: [],
     });
 
-    await expect(service.convertToDeal('quote-id', manager)).rejects.toMatchObject({
+    await expect(
+      service.convertToDeal('quote-id', manager),
+    ).rejects.toMatchObject({
       response: expect.objectContaining({
         errorCode: 'QUOTE_NOT_APPROVED',
       }),

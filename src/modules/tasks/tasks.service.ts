@@ -11,6 +11,7 @@ import {
   TaskComputedStatus,
   TaskStatus,
 } from '@prisma/client';
+import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import { NotificationService } from '../notifications/notification.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CompleteTaskDto } from './dto/complete-task.dto';
@@ -72,7 +73,9 @@ export class TasksService {
     private readonly notificationService: NotificationService,
   ) {}
 
-  async create(dto: CreateTaskDto, createdById: string): Promise<Task> {
+  async create(dto: CreateTaskDto, user: CurrentUser): Promise<Task> {
+    await this.assertRelatedRecordAccess(dto.relatedType, dto.relatedId, user);
+
     const computedStatus = calculateComputedStatus(
       dto.dueDate,
       TaskStatus.PENDING,
@@ -87,7 +90,7 @@ export class TasksService {
         dueDate: dto.dueDate,
         originalDueDate: dto.dueDate,
         assigneeId: dto.assigneeId,
-        createdById,
+        createdById: user.id,
         relatedType: dto.relatedType,
         relatedId: dto.relatedId,
         computedStatus,
@@ -167,6 +170,7 @@ export class TasksService {
           orderBy: { createdAt: 'desc' },
         },
         notifications: {
+          where: { userId: currentUserId },
           orderBy: { createdAt: 'desc' },
         },
       },
@@ -275,7 +279,7 @@ export class TasksService {
   async complete(
     id: string,
     dto: CompleteTaskDto,
-    currentUserId: string,
+    user: CurrentUser,
   ): Promise<Task> {
     const result = dto.result.trim();
 
@@ -283,7 +287,16 @@ export class TasksService {
       throw new BadRequestException('result is required to complete task');
     }
 
-    await this.ensureTaskExists(id);
+    const task = await this.ensureTaskExists(id);
+    this.assertTaskAccess(task, user.id, user.permissions);
+
+    if (dto.createNextTask) {
+      await this.assertRelatedRecordAccess(
+        dto.createNextTask.relatedType,
+        dto.createNextTask.relatedId,
+        user,
+      );
+    }
 
     return this.prisma.$transaction(async (tx) => {
       const completedTask = await tx.task.update({
@@ -306,7 +319,7 @@ export class TasksService {
             dueDate: dto.createNextTask.dueDate,
             originalDueDate: dto.createNextTask.dueDate,
             assigneeId: dto.createNextTask.assigneeId,
-            createdById: currentUserId,
+            createdById: user.id,
             relatedType: dto.createNextTask.relatedType,
             relatedId: dto.createNextTask.relatedId,
             computedStatus: calculateComputedStatus(
@@ -324,7 +337,7 @@ export class TasksService {
   async reschedule(
     id: string,
     dto: RescheduleTaskDto,
-    currentUserId: string,
+    user: CurrentUser,
   ): Promise<Task> {
     const reason = dto.reason.trim();
 
@@ -333,6 +346,7 @@ export class TasksService {
     }
 
     const task = await this.ensureTaskExists(id);
+    this.assertTaskAccess(task, user.id, user.permissions);
     const computedStatus = calculateComputedStatus(dto.newDueDate, task.status);
 
     return this.prisma.$transaction(async (tx) => {
@@ -342,7 +356,7 @@ export class TasksService {
           oldDueDate: task.dueDate,
           newDueDate: dto.newDueDate,
           reason,
-          authorId: currentUserId,
+          authorId: user.id,
         },
       });
 
@@ -357,8 +371,9 @@ export class TasksService {
     });
   }
 
-  async cancel(id: string): Promise<Task> {
-    await this.ensureTaskExists(id);
+  async cancel(id: string, user: CurrentUser): Promise<Task> {
+    const task = await this.ensureTaskExists(id);
+    this.assertTaskAccess(task, user.id, user.permissions);
 
     return this.prisma.task.update({
       where: { id },
@@ -600,6 +615,93 @@ export class TasksService {
         relatedId: input.relatedId,
       },
     });
+  }
+
+  private async assertRelatedRecordAccess(
+    relatedType: string,
+    relatedId: string,
+    user: CurrentUser,
+  ): Promise<void> {
+    switch (relatedType) {
+      case 'Lead': {
+        const lead = await this.prisma.lead.findFirst({
+          where: { id: relatedId, deletedAt: null },
+          select: { ownerId: true },
+        });
+
+        if (!lead) {
+          throw new NotFoundException('Related lead not found');
+        }
+
+        if (
+          user.permissions.includes('leads:read_all') ||
+          lead.ownerId === user.id
+        ) {
+          return;
+        }
+
+        throw new ForbiddenException('Access to related lead is forbidden');
+      }
+      case 'Deal': {
+        const deal = await this.prisma.deal.findFirst({
+          where: { id: relatedId, deletedAt: null },
+          select: { ownerId: true },
+        });
+
+        if (!deal) {
+          throw new NotFoundException('Related deal not found');
+        }
+
+        if (
+          user.permissions.includes('deals:read_all') ||
+          deal.ownerId === user.id
+        ) {
+          return;
+        }
+
+        throw new ForbiddenException('Access to related deal is forbidden');
+      }
+      case 'Client': {
+        const client = await this.prisma.client.findFirst({
+          where: { id: relatedId, deletedAt: null },
+          select: { ownerId: true },
+        });
+
+        if (!client) {
+          throw new NotFoundException('Related client not found');
+        }
+
+        if (
+          user.permissions.includes('clients:read_all') ||
+          client.ownerId === user.id
+        ) {
+          return;
+        }
+
+        throw new ForbiddenException('Access to related client is forbidden');
+      }
+      case 'Order': {
+        const order = await this.prisma.order.findFirst({
+          where: { id: relatedId, deletedAt: null },
+          select: { deal: { select: { ownerId: true } } },
+        });
+
+        if (!order) {
+          throw new NotFoundException('Related order not found');
+        }
+
+        if (
+          user.permissions.includes('deals:read_all') ||
+          order.deal.ownerId === user.id
+        ) {
+          return;
+        }
+
+        throw new ForbiddenException('Access to related order is forbidden');
+      }
+      default:
+        return;
+    }
   }
 
   private assertTaskAccess(

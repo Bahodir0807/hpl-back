@@ -42,7 +42,7 @@ export class LeadsController {
   @ApiOperation({ summary: 'Create lead and first-contact task' })
   @ApiResponse({ status: 201, description: 'Lead created' })
   create(@Body() dto: CreateLeadDto, @CurrentUser() user: CurrentUserType) {
-    return this.leadsService.create(dto, user.id);
+    return this.leadsService.create(dto, user.id, user.permissions);
   }
 
   @Get()
@@ -119,7 +119,7 @@ export class LeadsController {
     @Body() dto: AssignLeadDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.leadsService.assign(id, dto, user.id);
+    return this.leadsService.assign(id, dto, user.id, user.permissions);
   }
 
   @Post(':id/calls')

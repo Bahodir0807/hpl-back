@@ -4,8 +4,15 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Client, DealStage, LeadStatus, Prisma, TaskStatus } from '@prisma/client';
+import {
+  Client,
+  DealStage,
+  LeadStatus,
+  Prisma,
+  TaskStatus,
+} from '@prisma/client';
 import { normalizePhone } from '../../common/utils/phone-normalizer';
+import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { CheckDuplicatesDto } from './dto/check-duplicates.dto';
 import { CreateClientDto } from './dto/create-client.dto';
@@ -52,6 +59,7 @@ export class ClientsService {
 
   async checkDuplicates(
     dto: CheckDuplicatesDto,
+    user: CurrentUser,
   ): Promise<ClientDuplicateMatch[]> {
     const normalizedPhone = dto.phone ? normalizePhone(dto.phone) : undefined;
     const normalizedEmail = dto.email?.toLowerCase().trim();
@@ -126,29 +134,24 @@ export class ClientsService {
       });
 
       return {
-        client: {
-          id: client.id,
-          type: client.type,
-          name: client.name,
-          inn: client.inn,
-          phone: client.phone,
-          email: client.email,
-          ownerId: client.ownerId,
-          status: client.status,
-        },
+        client: this.toDuplicateClientView(client, user),
         reasons,
       };
     });
   }
 
-  async create(dto: CreateClientDto, ownerId: string): Promise<Client> {
+  async create(dto: CreateClientDto, user: CurrentUser): Promise<Client> {
+    const ownerId = user.id;
     const normalizedDto = this.normalizeCreateClientDto(dto);
-    const duplicates = await this.checkDuplicates({
-      inn: normalizedDto.inn,
-      phone: normalizedDto.phone,
-      email: normalizedDto.email,
-      name: normalizedDto.name,
-    });
+    const duplicates = await this.checkDuplicates(
+      {
+        inn: normalizedDto.inn,
+        phone: normalizedDto.phone,
+        email: normalizedDto.email,
+        name: normalizedDto.name,
+      },
+      user,
+    );
     const exactDuplicates = duplicates.filter((duplicate) =>
       duplicate.reasons.some(
         (reason) => reason === 'MATCH_INN' || reason === 'MATCH_PHONE',
@@ -411,9 +414,7 @@ export class ClientsService {
       status: filterDto.status,
       segment: filterDto.segment,
       region: filterDto.region,
-      ownerId: canReadAllClients
-        ? filterDto.ownerId
-        : (filterDto.ownerId ?? currentUserId),
+      ownerId: canReadAllClients ? filterDto.ownerId : currentUserId,
       OR: filterDto.search
         ? [
             { name: { contains: filterDto.search } },
@@ -568,16 +569,52 @@ export class ClientsService {
     };
   }
 
+  private toDuplicateClientView(
+    client: DuplicateClient,
+    user: CurrentUser,
+  ): DuplicateClient {
+    if (this.canAccessClientRecord(client, user.id, user.permissions)) {
+      return {
+        id: client.id,
+        type: client.type,
+        name: client.name,
+        inn: client.inn,
+        phone: client.phone,
+        email: client.email,
+        ownerId: client.ownerId,
+        status: client.status,
+      };
+    }
+
+    return {
+      id: client.id,
+      type: client.type,
+      name: client.name,
+      inn: null,
+      phone: null,
+      email: null,
+      ownerId: client.ownerId,
+      status: client.status,
+    };
+  }
+
+  private canAccessClientRecord(
+    client: Pick<Client, 'ownerId'>,
+    currentUserId: string,
+    permissions: string[],
+  ): boolean {
+    return (
+      permissions.includes(READ_ALL_CLIENTS_PERMISSION) ||
+      client.ownerId === currentUserId
+    );
+  }
+
   private assertClientAccess(
     client: Pick<Client, 'ownerId'>,
     currentUserId: string,
     permissions: string[],
   ): void {
-    if (permissions.includes(READ_ALL_CLIENTS_PERMISSION)) {
-      return;
-    }
-
-    if (client.ownerId === currentUserId) {
+    if (this.canAccessClientRecord(client, currentUserId, permissions)) {
       return;
     }
 

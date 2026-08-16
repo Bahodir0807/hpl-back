@@ -14,7 +14,10 @@ export const COMMERCIAL_FIELDS_LOCKED_MESSAGE =
 
 @Injectable()
 export class DealPolicyService {
-  getPermissions(user: PolicyUser, deal: Pick<Deal, 'ownerId' | 'stage'>): DealPermissions {
+  getPermissions(
+    user: PolicyUser,
+    deal: Pick<Deal, 'ownerId' | 'stage'>,
+  ): DealPermissions {
     const role = resolveUserRole(user);
     const isOwner = deal.ownerId === user.id;
     const isClosed = CLOSED_DEAL_STAGES.includes(deal.stage);

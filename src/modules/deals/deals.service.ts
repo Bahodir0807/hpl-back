@@ -41,7 +41,6 @@ import { FilterDealDto } from './dto/filter-deal.dto';
 import { SetDealItemsDto } from './dto/set-deal-items.dto';
 import { UpdateDealDto } from './dto/update-deal.dto';
 
-const READ_ALL_DEALS_PERMISSION = 'deals:read_all';
 const STAGE_EXCEPTION_PERMISSION = 'deals:stage_exception';
 const FIRST_DEAL_ACTION_SLA_MS = 2 * 60 * 60 * 1000;
 const DEAL_RELATED_TYPE = 'Deal';
@@ -140,7 +139,7 @@ export class DealsService {
     dto: CreateDealDto,
     user: CurrentUser,
   ): Promise<DealDetails> {
-    const ownerId = dto.ownerId ?? user.id;
+    const ownerId = this.resolveCreateOwnerId(dto.ownerId, user);
     const initialTaskDueDate = new Date(Date.now() + FIRST_DEAL_ACTION_SLA_MS);
 
     return this.prisma.$transaction(async (tx) => {
@@ -1037,6 +1036,25 @@ export class DealsService {
     if (!permissions.canMutateCommercial) {
       throw new ForbiddenException(COMMERCIAL_FIELDS_LOCKED_MESSAGE);
     }
+  }
+
+  private resolveCreateOwnerId(
+    requestedOwnerId: string | undefined,
+    user: CurrentUser,
+  ): string {
+    if (!requestedOwnerId || requestedOwnerId === user.id) {
+      return user.id;
+    }
+
+    const role = resolveUserRole(user);
+
+    if (role === UserRole.ADMIN || role === UserRole.SALES_HEAD) {
+      return requestedOwnerId;
+    }
+
+    throw new ForbiddenException(
+      'Insufficient permissions to assign deal owner',
+    );
   }
 
   private async ensureOpenTaskForActiveDeal(

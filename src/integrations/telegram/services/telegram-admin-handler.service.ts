@@ -18,6 +18,7 @@ type CallbackContext = {
   adminChatId: string;
   adminMessageId: string;
   callbackQueryId: string;
+  actorUserId?: string;
 };
 
 const ASSIGNMENT_FALLBACK_DELAY_MS = 10 * 60 * 1000;
@@ -243,6 +244,14 @@ export class TelegramAdminHandlerService {
     data: string,
     context: CallbackContext,
   ): Promise<void> {
+    if (!this.isAuthorizedTelegramAdmin(context)) {
+      this.logger.warn(
+        `Unauthorized Telegram callback actor ${context.actorUserId ?? 'unknown'}`,
+      );
+      await this.answerCallback(context, '❌ Недостаточно прав');
+      return;
+    }
+
     if (data.includes(':') && !data.includes('|')) {
       await this.handleColonCallback(data, context);
       return;
@@ -319,6 +328,18 @@ export class TelegramAdminHandlerService {
     if (action === 'more_managers') {
       await this.showMoreManagers(leadId, context);
     }
+  }
+
+  private isAuthorizedTelegramAdmin(context: CallbackContext): boolean {
+    const adminUserId = this.configService.get('TELEGRAM_ADMIN_USER_ID', {
+      infer: true,
+    });
+
+    if (!adminUserId || !context.actorUserId) {
+      return false;
+    }
+
+    return String(context.actorUserId) === String(adminUserId);
   }
 
   private async showMoreManagers(

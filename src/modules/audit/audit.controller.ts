@@ -11,8 +11,10 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
+import type { CurrentUser as CurrentUserType } from '../../common/interfaces/current-user.interface';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AuditService } from './audit.service';
 
@@ -30,7 +32,8 @@ export class AuditController {
   getTimeline(
     @Param('relatedType') relatedType: string,
     @Param('relatedId', ParseUUIDPipe) relatedId: string,
+    @CurrentUser() user: CurrentUserType,
   ) {
-    return this.auditService.getTimeline(relatedType, relatedId);
+    return this.auditService.getTimeline(relatedType, relatedId, user);
   }
 }
