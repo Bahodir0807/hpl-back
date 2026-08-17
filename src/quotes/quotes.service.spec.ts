@@ -354,6 +354,53 @@ describe('QuotesService', () => {
     });
   });
 
+  it('denies DIRECTOR and ADMIN quote approval without quotes:approve', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.SENT,
+      validUntil: new Date(Date.now() + 86_400_000),
+      items: [],
+    });
+
+    const director: CurrentUser = {
+      id: 'director-id',
+      email: 'director@test.com',
+      teamId: null,
+      managerId: null,
+      roles: ['DIRECTOR'],
+      permissions: ['quotes:read', 'quotes:read_all', 'quotes:update'],
+    };
+    const admin: CurrentUser = {
+      id: 'admin-id',
+      email: 'admin@test.com',
+      teamId: null,
+      managerId: null,
+      roles: ['ADMIN'],
+      permissions: ['quotes:read', 'quotes:read_all', 'quotes:update'],
+    };
+
+    await expect(
+      service.updateStatus(
+        'quote-id',
+        { status: QUOTE_STATUS.APPROVED },
+        director,
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'QUOTE_APPROVAL_FORBIDDEN',
+      }),
+    });
+    await expect(
+      service.updateStatus('quote-id', { status: QUOTE_STATUS.APPROVED }, admin),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'QUOTE_APPROVAL_FORBIDDEN',
+      }),
+    });
+  });
+
   it('allows authorized role to approve a sent quote', async () => {
     prisma.panelQuote.findUnique.mockResolvedValue({
       id: 'quote-id',

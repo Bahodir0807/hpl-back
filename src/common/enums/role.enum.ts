@@ -3,9 +3,12 @@ import type { CurrentUser } from '../interfaces/current-user.interface';
 
 export enum UserRole {
   ADMIN = 'ADMIN',
+  DIRECTOR = 'DIRECTOR',
   SALES_HEAD = 'SALES_HEAD',
   MANAGER = 'MANAGER',
-  FINANCIER = 'FINANCIER',
+  ACCOUNTANT = 'ACCOUNTANT',
+  STOREKEEPER = 'STOREKEEPER',
+  INSTALLER = 'INSTALLER',
 }
 
 export type OrderPermissions = {
@@ -34,13 +37,44 @@ export function resolveUserRole(user: PolicyUser): UserRole {
     return UserRole.ADMIN;
   }
 
+  if (user.roles.includes(RoleName.DIRECTOR)) {
+    return UserRole.DIRECTOR;
+  }
+
   if (user.roles.includes(RoleName.HEAD)) {
     return UserRole.SALES_HEAD;
   }
 
-  if ((user.roles as string[]).includes(UserRole.FINANCIER)) {
-    return UserRole.FINANCIER;
+  if (user.roles.includes(RoleName.ACCOUNTANT)) {
+    return UserRole.ACCOUNTANT;
+  }
+
+  if (user.roles.includes(RoleName.STOREKEEPER)) {
+    return UserRole.STOREKEEPER;
+  }
+
+  if (user.roles.includes(RoleName.INSTALLER)) {
+    return UserRole.INSTALLER;
   }
 
   return UserRole.MANAGER;
+}
+
+export function hasUnscopedDealVisibility(user: PolicyUser): boolean {
+  const role = resolveUserRole(user);
+  return (
+    role === UserRole.SALES_HEAD ||
+    role === UserRole.DIRECTOR ||
+    role === UserRole.ACCOUNTANT
+  );
+}
+
+export function hasUnscopedOrderVisibility(user: PolicyUser): boolean {
+  const role = resolveUserRole(user);
+  return (
+    role === UserRole.SALES_HEAD ||
+    role === UserRole.DIRECTOR ||
+    role === UserRole.ACCOUNTANT ||
+    role === UserRole.STOREKEEPER
+  );
 }

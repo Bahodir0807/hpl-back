@@ -8,10 +8,12 @@ datasource db {
 
 enum RoleName {
   ADMIN
+  DIRECTOR
   HEAD
   MANAGER
+  ACCOUNTANT
   STOREKEEPER
-  OBSERVER
+  INSTALLER
 }
 
 enum ProductStatus {

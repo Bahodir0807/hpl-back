@@ -36,10 +36,6 @@ export class PricingPolicyService {
   ): void {
     const role = resolveUserRole(user);
 
-    if (role === UserRole.ADMIN) {
-      return;
-    }
-
     for (const item of items) {
       if (item.price < item.purchasePrice) {
         throw new BadRequestException(

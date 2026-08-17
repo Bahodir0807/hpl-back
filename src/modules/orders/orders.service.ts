@@ -18,7 +18,6 @@ import {
   PaymentStatus,
   Prisma,
   ProductPriceType,
-  RoleName,
   StockReservationStatus,
 } from '@prisma/client';
 import { InventoryService } from '../inventory/inventory.service';
@@ -333,10 +332,7 @@ export class OrdersService {
       throw new NotFoundException('Payment not found');
     }
 
-    if (
-      payment.createdById === user.id &&
-      !user.roles.includes(RoleName.ADMIN)
-    ) {
+    if (payment.createdById === user.id) {
       throw new ForbiddenException(
         'Пользователь не может подтверждать платеж, созданный им самим (Maker-Checker)',
       );

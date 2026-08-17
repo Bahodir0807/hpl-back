@@ -1048,7 +1048,7 @@ export class DealsService {
 
     const role = resolveUserRole(user);
 
-    if (role === UserRole.ADMIN || role === UserRole.SALES_HEAD) {
+    if (role === UserRole.SALES_HEAD) {
       return requestedOwnerId;
     }
 

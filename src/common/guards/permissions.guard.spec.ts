@@ -93,7 +93,25 @@ describe('PermissionsGuard', () => {
     );
   });
 
-  it('allows HEAD with currency_rates:manage', () => {
+  it('allows HEAD with currency_rates:read', () => {
+    jest.spyOn(reflector, 'getAllAndOverride').mockImplementation((key) => {
+      if (key === REQUIRED_PERMISSIONS_KEY) {
+        return ['currency_rates:read'];
+      }
+
+      return false;
+    });
+
+    const head: CurrentUser = {
+      ...user,
+      roles: [RoleName.HEAD],
+      permissions: ['currency_rates:read'],
+    };
+
+    expect(guard.canActivate(createContext(head))).toBe(true);
+  });
+
+  it('rejects HEAD without currency_rates:manage', () => {
     jest.spyOn(reflector, 'getAllAndOverride').mockImplementation((key) => {
       if (key === REQUIRED_PERMISSIONS_KEY) {
         return ['currency_rates:manage'];
@@ -105,9 +123,29 @@ describe('PermissionsGuard', () => {
     const head: CurrentUser = {
       ...user,
       roles: [RoleName.HEAD],
+      permissions: ['currency_rates:read'],
+    };
+
+    expect(() => guard.canActivate(createContext(head))).toThrow(
+      ForbiddenException,
+    );
+  });
+
+  it('allows DIRECTOR with currency_rates:manage', () => {
+    jest.spyOn(reflector, 'getAllAndOverride').mockImplementation((key) => {
+      if (key === REQUIRED_PERMISSIONS_KEY) {
+        return ['currency_rates:manage'];
+      }
+
+      return false;
+    });
+
+    const director: CurrentUser = {
+      ...user,
+      roles: [RoleName.DIRECTOR],
       permissions: ['currency_rates:manage'],
     };
 
-    expect(guard.canActivate(createContext(head))).toBe(true);
+    expect(guard.canActivate(createContext(director))).toBe(true);
   });
 });

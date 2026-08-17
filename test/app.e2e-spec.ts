@@ -28,6 +28,11 @@ import { AppModule } from './../src/app.module';
 import { TestIntegrationsModule } from './../src/integrations/test/test-integrations.module';
 import { seedPanels, seedFixtureCnyUsdRate } from './../prisma/seed/panels';
 import { seedCalculatorProduct } from './../prisma/seed/calculator-product';
+import { synchronizeRbac } from './../src/auth/rbac/synchronize-rbac';
+import {
+  ROLE_PERMISSION_SLUGS,
+  TARGET_ROLE_NAMES,
+} from './../src/auth/rbac/permission-matrix';
 import { IdempotencyService } from './../src/integrations/telegram/services/idempotency.service';
 import { TelegramAdminHandlerService } from './../src/integrations/telegram/services/telegram-admin-handler.service';
 import { TelegramLeadFactory } from './../src/integrations/telegram/services/telegram-lead-factory.service';
@@ -75,10 +80,17 @@ type DuplicateResponse = {
 
 type TestContext = {
   adminToken: string;
+  directorToken: string;
   headToken: string;
   managerToken: string;
+  accountantToken: string;
+  storekeeperToken: string;
+  installerToken: string;
   headId: string;
   managerId: string;
+  accountantId: string;
+  directorId: string;
+  installerId: string;
   clientId: string;
   contactId: string;
   projectObjectId: string;
@@ -95,72 +107,6 @@ const ACCESS_SECRET = 'test-access-secret-key-min-32-chars';
 const REFRESH_SECRET = 'test-refresh-secret-key-min-32-chars';
 
 jest.setTimeout(120_000);
-
-const permissionSlugs = [
-  'auth:me',
-  'users:read',
-  'users:create',
-  'users:manage',
-  'products:read',
-  'products:create',
-  'products:update',
-  'products:delete',
-  'products:manage_prices',
-  'products:read_purchase_price',
-  'clients:read',
-  'clients:read_all',
-  'clients:create',
-  'clients:update',
-  'clients:delete',
-  'leads:read',
-  'leads:read_all',
-  'leads:create',
-  'leads:update',
-  'leads:delete',
-  'leads:qualify',
-  'leads:commercial_qualify',
-  'leads:assign',
-  'tasks:read',
-  'tasks:read_all',
-  'tasks:create',
-  'tasks:update',
-  'tasks:delete',
-  'deals:read',
-  'deals:read_all',
-  'deals:create',
-  'deals:update',
-  'deals:delete',
-  'deals:create_offer',
-  'deals:approve_offer',
-  'deals:stage_exception',
-  'deals:override_terminal',
-  'orders:read',
-  'orders:create',
-  'orders:cancel',
-  'payments:create',
-  'payments:confirm',
-  'deliveries:create',
-  'inventory:read',
-  'inventory:manage',
-  'files:upload',
-  'files:read',
-  'audit:read',
-  'reports:read',
-  'admin:queues',
-  'panel_catalog:read',
-  'panel_catalog:manage',
-  'calculations:read',
-  'calculations:read_all',
-  'calculations:create',
-  'calculations:update',
-  'calculations:delete',
-  'quotes:read',
-  'quotes:read_all',
-  'quotes:create',
-  'quotes:update',
-  'quotes:approve',
-  'currency_rates:manage',
-] as const;
 
 describe('CRM HPL acceptance criteria (e2e)', () => {
   let app: INestApplication<App>;
@@ -1610,7 +1556,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const firstPayment = await createPayment(order.id, firstAmount);
     const firstConfirmation = await request(server)
       .patch(`/orders/payments/${firstPayment.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
     const partiallyPaidOrder = bodyAs<OrderResponse>(firstConfirmation);
@@ -1625,7 +1571,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const secondPayment = await createPayment(order.id, secondAmount);
     const secondConfirmation = await request(server)
       .patch(`/orders/payments/${secondPayment.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
     const paidOrder = bodyAs<OrderResponse>(secondConfirmation);
@@ -1648,14 +1594,14 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const firstPayment = await createPayment(order.id, totalAmount - 20);
     await request(server)
       .patch(`/orders/payments/${firstPayment.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
 
     const secondPayment = await createPayment(order.id, totalAmount / 2);
     await request(server)
       .patch(`/orders/payments/${secondPayment.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(409);
 
@@ -1789,7 +1735,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
 
@@ -1877,7 +1823,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(409);
 
@@ -1934,7 +1880,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const payment = await createPayment(order.id, half);
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
 
@@ -2118,7 +2064,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .patch(`/orders/payments/${overpay.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(409);
 
@@ -2250,7 +2196,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const receiptResponse = await request(server)
       .post('/inventory/expected-receipts')
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.storekeeperToken))
       .send({
         supplierId: supplier.id,
         expectedDate: futureIso(1),
@@ -2263,7 +2209,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .post(`/inventory/expected-receipts/${receipt.id}/receive`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.storekeeperToken))
       .send({
         items: [{ itemId: receipt.items[0].id, receivedQuantity: 10 }],
       })
@@ -2352,21 +2298,21 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
 
     // Повторный confirm уже обработанного платежа → 409
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(409);
 
     // CONFIRMED → REJECTED задним числом запрещён → 409
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.REJECTED })
       .expect(409);
 
@@ -3399,7 +3345,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(new Prisma.Decimal(body.clientPricePerM2).toString()).toBe('20');
   });
 
-  it('forbids Manager from managing CurrencyRate', async () => {
+  it('forbids Manager from managing CurrencyRate but allows reading it', async () => {
     await request(server)
       .post('/currency-rates')
       .set(authHeader(context.managerToken))
@@ -3409,13 +3355,19 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     await request(server)
       .get('/currency-rates/current')
       .set(authHeader(context.managerToken))
-      .expect(403);
+      .expect(200);
   });
 
-  it('allows Head to set and read the CNY→USD rate', async () => {
-    const created = await request(server)
+  it('allows DIRECTOR to set the CNY→USD rate and forbids HEAD manage', async () => {
+    await request(server)
       .post('/currency-rates')
       .set(authHeader(context.headToken))
+      .send({ rate: '0.11' })
+      .expect(403);
+
+    const created = await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.directorToken))
       .send({ rate: '0.11' })
       .expect(201);
 
@@ -3432,9 +3384,678 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .post('/currency-rates')
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.directorToken))
       .send({ rate: '0.1' })
       .expect(201);
+  });
+
+  it('BP4 forbids ADMIN and ACCOUNTANT from managing CurrencyRate', async () => {
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.adminToken))
+      .send({ rate: '0.25' })
+      .expect(403);
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.accountantToken))
+      .send({ rate: '0.25' })
+      .expect(403);
+  });
+
+  it('BP4 keeps old Calculation snapshots when DIRECTOR changes the rate', async () => {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `FX snapshot lead ${RUN_ID}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<EntityResponse>(leadResponse).id;
+    await qualifyLeadStage1(leadId);
+    await confirmLeadStage2(leadId);
+
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'exterior' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1220, heightMm: 2440 },
+    });
+    const item = {
+      panelTypeId: panelType.id,
+      panelSizeId: panelSize.id,
+      thicknessMm: 10,
+      requiredAreaM2: '15.50',
+    };
+
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.directorToken))
+      .send({ rate: '0.1' })
+      .expect(201);
+
+    const firstCalc = await request(server)
+      .post('/calculations')
+      .set(authHeader(context.managerToken))
+      .send({ leadId, items: [item] })
+      .expect(201);
+    const firstId = bodyAs<EntityResponse>(firstCalc).id;
+
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.directorToken))
+      .send({ rate: '0.2' })
+      .expect(201);
+
+    const stored = await prisma.calculationSession.findUniqueOrThrow({
+      where: { id: firstId },
+      select: { cnyUsdRate: true },
+    });
+    expect(stored.cnyUsdRate?.toString()).toBe('0.1');
+
+    const secondCalc = await request(server)
+      .post('/calculations')
+      .set(authHeader(context.managerToken))
+      .send({ leadId, items: [item] })
+      .expect(201);
+    const secondStored = await prisma.calculationSession.findUniqueOrThrow({
+      where: { id: bodyAs<EntityResponse>(secondCalc).id },
+      select: { cnyUsdRate: true },
+    });
+    expect(secondStored.cnyUsdRate?.toString()).toBe('0.2');
+
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.directorToken))
+      .send({ rate: '0.1' })
+      .expect(201);
+  });
+
+  it('BP4 forbids MANAGER/HEAD/DIRECTOR/ADMIN payment confirmation and allows ACCOUNTANT', async () => {
+    const order = await createWonOrder();
+    const payment = await createPayment(order.id, Number(order.totalAmount));
+
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.managerToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(403);
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.headToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(403);
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.directorToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(403);
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.adminToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(403);
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.accountantToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(200);
+  });
+
+  it('BP4 forbids DIRECTOR and ADMIN Stage-2 commercial qualification', async () => {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `BP4 stage2 ${RUN_ID}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<EntityResponse>(leadResponse).id;
+    await qualifyLeadStage1(leadId);
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+    const payload = {
+      supplierId: supplier.id,
+      qualityClassId: qualityClass.id,
+      decisionComment: 'BP4',
+    };
+
+    await request(server)
+      .post(`/leads/${leadId}/commercial-qualification`)
+      .set(authHeader(context.directorToken))
+      .send(payload)
+      .expect(403);
+    await request(server)
+      .post(`/leads/${leadId}/commercial-qualification`)
+      .set(authHeader(context.adminToken))
+      .send(payload)
+      .expect(403);
+    await request(server)
+      .post(`/leads/${leadId}/commercial-qualification`)
+      .set(authHeader(context.headToken))
+      .send(payload)
+      .expect(201);
+  });
+
+  it('BP4 forbids DIRECTOR and ADMIN quote approval', async () => {
+    const quoteId = await createSentPanelQuote();
+
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.directorToken))
+      .send({ status: 'approved' })
+      .expect(403);
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.adminToken))
+      .send({ status: 'approved' })
+      .expect(403);
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.headToken))
+      .send({ status: 'approved' })
+      .expect(200);
+  });
+
+  it('BP4 keeps ADMIN on technical user administration only', async () => {
+    const created = await request(server)
+      .post('/users')
+      .set(authHeader(context.adminToken))
+      .send({
+        email: `bp4-admin-user-${RUN_ID}@hpl.test`,
+        password: TEST_PASSWORD,
+        firstName: 'Tech',
+        lastName: 'Admin',
+        roleNames: [RoleName.INSTALLER],
+      })
+      .expect(201);
+    expect(bodyAs<EntityResponse>(created).id).toBeDefined();
+
+    await request(server)
+      .post('/users')
+      .set(authHeader(context.directorToken))
+      .send({
+        email: `bp4-director-user-${RUN_ID}@hpl.test`,
+        password: TEST_PASSWORD,
+        firstName: 'No',
+        lastName: 'Admin',
+        roleNames: [RoleName.MANAGER],
+      })
+      .expect(403);
+
+    await request(server)
+      .post('/leads')
+      .set(authHeader(context.adminToken))
+      .send({ title: `admin lead ${RUN_ID}`, source: 'e2e' })
+      .expect(403);
+  });
+
+  it('BP4-PE denies ADMIN assigning DIRECTOR, HEAD, or ACCOUNTANT', async () => {
+    const attempts: RoleName[] = [
+      RoleName.DIRECTOR,
+      RoleName.ACCOUNTANT,
+      RoleName.HEAD,
+    ];
+
+    for (const roleName of attempts) {
+      const response = await request(server)
+        .post('/users')
+        .set(authHeader(context.adminToken))
+        .send({
+          email: `bp4-pe-${roleName.toLowerCase()}-${RUN_ID}@hpl.test`,
+          password: TEST_PASSWORD,
+          firstName: 'Escalation',
+          lastName: roleName,
+          roleNames: [roleName],
+        })
+        .expect(403);
+
+      expect(bodyAs<{ message: string }>(response).message).toContain(
+        'protected business roles',
+      );
+    }
+
+    const minted = await prisma.user.findMany({
+      where: {
+        email: {
+          in: attempts.map(
+            (roleName) => `bp4-pe-${roleName.toLowerCase()}-${RUN_ID}@hpl.test`,
+          ),
+        },
+      },
+    });
+    expect(minted).toHaveLength(0);
+  });
+
+  it('BP4-PE still lets ADMIN create a normal technical/operational user', async () => {
+    const created = await request(server)
+      .post('/users')
+      .set(authHeader(context.adminToken))
+      .send({
+        email: `bp4-pe-manager-${RUN_ID}@hpl.test`,
+        password: TEST_PASSWORD,
+        firstName: 'Ops',
+        lastName: 'Manager',
+        roleNames: [RoleName.MANAGER],
+      })
+      .expect(201);
+
+    const userId = bodyAs<EntityResponse>(created).id;
+    const roles = await prisma.userRole.findMany({
+      where: { userId },
+      include: { role: { select: { name: true } } },
+    });
+    expect(roles.map((item) => item.role.name)).toEqual([RoleName.MANAGER]);
+  });
+
+  it('BP4-PE has no API to grant protected permissions or rewrite role matrices', async () => {
+    const me = await request(server)
+      .get('/auth/me')
+      .set(authHeader(context.adminToken))
+      .expect(200);
+    const adminId = bodyAs<{ id: string }>(me).id;
+
+    await request(server)
+      .post(`/users/${adminId}/permissions`)
+      .set(authHeader(context.adminToken))
+      .send({
+        slugs: [
+          'currency_rates:manage',
+          'payments:confirm',
+          'quotes:approve',
+          'leads:commercial_qualify',
+        ],
+      })
+      .expect(404);
+
+    await request(server)
+      .patch(`/users/${adminId}/roles`)
+      .set(authHeader(context.adminToken))
+      .send({ roleNames: [RoleName.DIRECTOR] })
+      .expect(404);
+
+    await request(server)
+      .post('/permissions')
+      .set(authHeader(context.adminToken))
+      .send({ slug: 'currency_rates:manage' })
+      .expect(404);
+
+    await request(server)
+      .patch(`/roles/${RoleName.DIRECTOR}/permissions`)
+      .set(authHeader(context.adminToken))
+      .send({ slugs: ['currency_rates:manage'] })
+      .expect(404);
+
+    const adminPerms = await prisma.userPermission.findMany({
+      where: { userId: adminId },
+    });
+    expect(adminPerms).toHaveLength(0);
+  });
+
+  it('BP4-PE keeps DIRECTOR off the user-create assignment path', async () => {
+    for (const roleName of [
+      RoleName.DIRECTOR,
+      RoleName.HEAD,
+      RoleName.ACCOUNTANT,
+      RoleName.MANAGER,
+    ]) {
+      await request(server)
+        .post('/users')
+        .set(authHeader(context.directorToken))
+        .send({
+          email: `bp4-pe-dir-${roleName.toLowerCase()}-${RUN_ID}@hpl.test`,
+          password: TEST_PASSWORD,
+          firstName: 'Director',
+          lastName: 'Assign',
+          roleNames: [roleName],
+        })
+        .expect(403);
+    }
+  });
+
+  it('BP4-PE keeps lead-pool and system users as passive zero-role records', async () => {
+    const pool = await prisma.user.findUniqueOrThrow({
+      where: { email: 'lead-pool@hpl.com' },
+      include: { roles: true, permissions: true },
+    });
+    const system = await prisma.user.findUniqueOrThrow({
+      where: { email: 'system@hpl.com' },
+      include: { roles: true, permissions: true },
+    });
+
+    expect(pool.roles).toEqual([]);
+    expect(pool.permissions).toEqual([]);
+    expect(system.roles).toEqual([]);
+    expect(system.permissions).toEqual([]);
+
+    const leadFactory = app.get(TelegramLeadFactory);
+    const lead = await leadFactory.create({
+      telegramUserId: `tg-pe-${RUN_ID}`,
+      telegramUsername: 'pe_pool',
+      formData: {
+        name: 'Pool Passive',
+        phone: `+99891${RUN_ID.slice(-7)}`,
+        message: 'Privilege-escalation pool check',
+      },
+      updateId: `pe-pool-${RUN_ID}`,
+      rawPayload: { source: 'e2e-pe' },
+    });
+
+    expect(lead.ownerId).toBe(pool.id);
+
+    const activity = await prisma.activity.findFirst({
+      where: {
+        relatedType: 'Lead',
+        relatedId: lead.id,
+        authorId: system.id,
+      },
+    });
+    expect(activity).not.toBeNull();
+  });
+
+  it('BP4-PE denies ADMIN password reset of DIRECTOR, HEAD, and ACCOUNTANT', async () => {
+    const hijackPassword = 'HijackPassword123!';
+    const targets: { id: string; email: string }[] = [
+      {
+        id: context.directorId,
+        email: `director-${RUN_ID}@hpl.test`,
+      },
+      {
+        id: context.accountantId,
+        email: `accountant-${RUN_ID}@hpl.test`,
+      },
+      {
+        id: context.headId,
+        email: `head-${RUN_ID}@hpl.test`,
+      },
+    ];
+
+    for (const target of targets) {
+      const before = await prisma.user.findUniqueOrThrow({
+        where: { id: target.id },
+        select: { passwordHash: true },
+      });
+
+      const response = await request(server)
+        .patch(`/users/${target.id}/reset-password`)
+        .set(authHeader(context.adminToken))
+        .send({ newPassword: hijackPassword })
+        .expect(403);
+
+      expect(bodyAs<{ errorCode?: string }>(response).errorCode).toBe(
+        'PROTECTED_BUSINESS_ACCOUNT',
+      );
+
+      const after = await prisma.user.findUniqueOrThrow({
+        where: { id: target.id },
+        select: { passwordHash: true },
+      });
+      expect(after.passwordHash).toBe(before.passwordHash);
+
+      await request(server)
+        .post('/auth/login')
+        .send({ email: target.email, password: TEST_PASSWORD })
+        .expect(201);
+      await request(server)
+        .post('/auth/login')
+        .send({ email: target.email, password: hijackPassword })
+        .expect(401);
+    }
+  });
+
+  it('BP4-PE still lets ADMIN reset a MANAGER password', async () => {
+    const created = await request(server)
+      .post('/users')
+      .set(authHeader(context.adminToken))
+      .send({
+        email: `bp4-pe-mgr-reset-${RUN_ID}@hpl.test`,
+        password: TEST_PASSWORD,
+        firstName: 'Reset',
+        lastName: 'Manager',
+        roleNames: [RoleName.MANAGER],
+      })
+      .expect(201);
+    const managerId = bodyAs<EntityResponse>(created).id;
+    const newPassword = 'ManagerReset123!';
+
+    await request(server)
+      .patch(`/users/${managerId}/reset-password`)
+      .set(authHeader(context.adminToken))
+      .send({ newPassword })
+      .expect(200);
+
+    await request(server)
+      .post('/auth/login')
+      .send({
+        email: `bp4-pe-mgr-reset-${RUN_ID}@hpl.test`,
+        password: TEST_PASSWORD,
+      })
+      .expect(401);
+    await request(server)
+      .post('/auth/login')
+      .send({
+        email: `bp4-pe-mgr-reset-${RUN_ID}@hpl.test`,
+        password: newPassword,
+      })
+      .expect(201);
+  });
+
+  it('BP4-PE lets ADMIN disable and enable a DIRECTOR without changing authority', async () => {
+    const directorId = context.directorId;
+    const before = await prisma.user.findUniqueOrThrow({
+      where: { id: directorId },
+      select: { passwordHash: true, isActive: true },
+    });
+    const rolesBefore = await prisma.userRole.findMany({
+      where: { userId: directorId },
+      include: { role: { select: { name: true } } },
+    });
+
+    try {
+      await request(server)
+        .patch(`/users/${directorId}/status`)
+        .set(authHeader(context.adminToken))
+        .send({ isActive: false })
+        .expect(200);
+
+      const disabled = await prisma.user.findUniqueOrThrow({
+        where: { id: directorId },
+        include: {
+          roles: { include: { role: { select: { name: true } } } },
+          permissions: true,
+        },
+      });
+      expect(disabled.isActive).toBe(false);
+      expect(disabled.passwordHash).toBe(before.passwordHash);
+      expect(disabled.permissions).toEqual([]);
+      expect(disabled.roles.map((item) => item.role.name)).toEqual(
+        rolesBefore.map((item) => item.role.name),
+      );
+
+      await request(server)
+        .post('/auth/login')
+        .send({
+          email: `director-${RUN_ID}@hpl.test`,
+          password: TEST_PASSWORD,
+        })
+        .expect(401);
+    } finally {
+      await request(server)
+        .patch(`/users/${directorId}/status`)
+        .set(authHeader(context.adminToken))
+        .send({ isActive: true })
+        .expect(200);
+    }
+
+    const restored = await prisma.user.findUniqueOrThrow({
+      where: { id: directorId },
+      select: { isActive: true, passwordHash: true },
+    });
+    expect(restored.isActive).toBe(true);
+    expect(restored.passwordHash).toBe(before.passwordHash);
+
+    await request(server)
+      .post('/auth/login')
+      .send({
+        email: `director-${RUN_ID}@hpl.test`,
+        password: TEST_PASSWORD,
+      })
+      .expect(201);
+  });
+
+  it('BP4-PE has no alternate credential-takeover API', async () => {
+    await request(server)
+      .post('/auth/change-password')
+      .set(authHeader(context.adminToken))
+      .send({
+        oldPassword: TEST_PASSWORD,
+        newPassword: 'HijackPassword123!',
+      })
+      .expect(404);
+
+    await request(server)
+      .patch(`/users/${context.directorId}`)
+      .set(authHeader(context.adminToken))
+      .send({
+        email: `taken-over-${RUN_ID}@hpl.test`,
+        password: 'HijackPassword123!',
+      })
+      .expect(404);
+
+    await request(server)
+      .post('/auth/forgot-password')
+      .set(authHeader(context.adminToken))
+      .send({ email: `director-${RUN_ID}@hpl.test` })
+      .expect(404);
+
+    await request(server)
+      .post('/users/invite')
+      .set(authHeader(context.adminToken))
+      .send({ email: `director-${RUN_ID}@hpl.test` })
+      .expect(404);
+  });
+
+  it('BP4 lets INSTALLER authenticate without inheriting business permissions', async () => {
+    const me = await request(server)
+      .get('/auth/me')
+      .set(authHeader(context.installerToken))
+      .expect(200);
+    expect(bodyAs<{ email: string }>(me).email).toBe(
+      `installer-${RUN_ID}@hpl.test`,
+    );
+
+    await request(server)
+      .post('/leads')
+      .set(authHeader(context.installerToken))
+      .send({ title: `installer lead ${RUN_ID}`, source: 'e2e' })
+      .expect(403);
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.installerToken))
+      .send({ rate: '0.3' })
+      .expect(403);
+    await request(server)
+      .post('/inventory/expected-receipts')
+      .set(authHeader(context.installerToken))
+      .send({
+        supplierId: (
+          await prisma.supplier.findUniqueOrThrow({
+            where: { code: `QA-SUP-${RUN_ID}` },
+          })
+        ).id,
+        expectedDate: futureIso(1),
+        items: [{ productId: context.productId, quantity: 1 }],
+      })
+      .expect(403);
+  });
+
+  it('BP4 seed convergence removes forbidden leftover permissions', async () => {
+    const headRole = await prisma.role.findUniqueOrThrow({
+      where: { name: RoleName.HEAD },
+      select: { id: true },
+    });
+    const adminRole = await prisma.role.findUniqueOrThrow({
+      where: { name: RoleName.ADMIN },
+      select: { id: true },
+    });
+    const extraSlugs = [
+      'currency_rates:manage',
+      'payments:confirm',
+      'quotes:approve',
+      'leads:commercial_qualify',
+    ];
+
+    for (const slug of extraSlugs) {
+      const permission = await prisma.permission.findUniqueOrThrow({
+        where: { slug },
+        select: { id: true },
+      });
+      await prisma.rolePermission.upsert({
+        where: {
+          roleId_permissionId: {
+            roleId: headRole.id,
+            permissionId: permission.id,
+          },
+        },
+        update: {},
+        create: { roleId: headRole.id, permissionId: permission.id },
+      });
+      await prisma.rolePermission.upsert({
+        where: {
+          roleId_permissionId: {
+            roleId: adminRole.id,
+            permissionId: permission.id,
+          },
+        },
+        update: {},
+        create: { roleId: adminRole.id, permissionId: permission.id },
+      });
+    }
+
+    await synchronizeRbac(prisma);
+
+    const headPerms = await prisma.rolePermission.findMany({
+      where: { roleId: headRole.id },
+      include: { permission: { select: { slug: true } } },
+    });
+    const adminPerms = await prisma.rolePermission.findMany({
+      where: { roleId: adminRole.id },
+      include: { permission: { select: { slug: true } } },
+    });
+    const headSlugs = headPerms.map((item) => item.permission.slug);
+    const adminSlugs = adminPerms.map((item) => item.permission.slug);
+
+    expect(headSlugs).not.toContain('currency_rates:manage');
+    expect(headSlugs).not.toContain('payments:confirm');
+    expect(adminSlugs).not.toContain('payments:confirm');
+    expect(adminSlugs).not.toContain('quotes:approve');
+    expect(adminSlugs).not.toContain('leads:commercial_qualify');
+    expect(adminSlugs.sort()).toEqual(
+      [...ROLE_PERMISSION_SLUGS[RoleName.ADMIN]].sort(),
+    );
+    expect(headSlugs.sort()).toEqual(
+      [...ROLE_PERMISSION_SLUGS[RoleName.HEAD]].sort(),
+    );
+  });
+
+  it('BP4 target roles exist and OBSERVER does not', async () => {
+    const roles = await prisma.role.findMany({ select: { name: true } });
+    const names = roles.map((role) => role.name).sort();
+    expect(names).toEqual([...TARGET_ROLE_NAMES].sort());
+    expect(names).not.toContain('OBSERVER');
+
+    const pool = await prisma.user.findUniqueOrThrow({
+      where: { email: 'lead-pool@hpl.com' },
+      include: { roles: { include: { role: true } } },
+    });
+    expect(pool.roles).toEqual([]);
   });
 
   it('converts one quote concurrently into exactly one deal', async () => {
@@ -3864,7 +4485,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const payment = await createPayment(orderId, Number(totalAmount));
     await request(server)
       .patch(`/orders/payments/${payment.id}/confirm`)
-      .set(authHeader(context.adminToken))
+      .set(authHeader(context.accountantToken))
       .send({ status: PaymentRecordStatus.CONFIRMED })
       .expect(200);
   }
@@ -3913,10 +4534,48 @@ async function seedAcceptanceData(
     passwordHash,
     roleName: RoleName.ADMIN,
   });
+  const director = await upsertUser(prisma, {
+    email: `director-${RUN_ID}@hpl.test`,
+    firstName: 'Acceptance',
+    lastName: 'Director',
+    passwordHash,
+    roleName: RoleName.DIRECTOR,
+  });
+  const accountant = await upsertUser(prisma, {
+    email: `accountant-${RUN_ID}@hpl.test`,
+    firstName: 'Acceptance',
+    lastName: 'Accountant',
+    passwordHash,
+    roleName: RoleName.ACCOUNTANT,
+  });
+  const storekeeper = await upsertUser(prisma, {
+    email: `storekeeper-${RUN_ID}@hpl.test`,
+    firstName: 'Acceptance',
+    lastName: 'Storekeeper',
+    passwordHash,
+    roleName: RoleName.STOREKEEPER,
+  });
+  const installer = await upsertUser(prisma, {
+    email: `installer-${RUN_ID}@hpl.test`,
+    firstName: 'Acceptance',
+    lastName: 'Installer',
+    passwordHash,
+    roleName: RoleName.INSTALLER,
+  });
 
   const adminTokens = await login(server, `admin-${RUN_ID}@hpl.test`);
+  const directorTokens = await login(server, `director-${RUN_ID}@hpl.test`);
   const headTokens = await login(server, `head-${RUN_ID}@hpl.test`);
   const managerTokens = await login(server, `manager-${RUN_ID}@hpl.test`);
+  const accountantTokens = await login(
+    server,
+    `accountant-${RUN_ID}@hpl.test`,
+  );
+  const storekeeperTokens = await login(
+    server,
+    `storekeeper-${RUN_ID}@hpl.test`,
+  );
+  const installerTokens = await login(server, `installer-${RUN_ID}@hpl.test`);
 
   const supplier = await prisma.supplier.upsert({
     where: { code: `QA-SUP-${RUN_ID}` },
@@ -4037,10 +4696,17 @@ async function seedAcceptanceData(
 
   return {
     adminToken: adminTokens.accessToken,
+    directorToken: directorTokens.accessToken,
     headToken: headTokens.accessToken,
     managerToken: managerTokens.accessToken,
+    accountantToken: accountantTokens.accessToken,
+    storekeeperToken: storekeeperTokens.accessToken,
+    installerToken: installerTokens.accessToken,
     headId: head.id,
     managerId: manager.id,
+    accountantId: accountant.id,
+    directorId: director.id,
+    installerId: installer.id,
     clientId: client.id,
     contactId: contact.id,
     projectObjectId: projectObject.id,
@@ -4060,122 +4726,17 @@ async function ensureSystemUsers(
     firstName: 'Lead',
     lastName: 'Pool',
     passwordHash,
-    roleName: RoleName.OBSERVER,
   });
   await upsertUser(prisma, {
     email: 'system@hpl.com',
     firstName: 'System',
     lastName: 'Bot',
     passwordHash,
-    roleName: RoleName.OBSERVER,
   });
 }
 
 async function seedAuthData(prisma: PrismaService): Promise<void> {
-  const roleIds = new Map<RoleName, string>();
-  const permissionIds = new Map<string, string>();
-
-  for (const roleName of Object.values(RoleName)) {
-    const role = await prisma.role.upsert({
-      where: { name: roleName },
-      update: {},
-      create: { name: roleName },
-      select: { id: true },
-    });
-    roleIds.set(roleName, role.id);
-  }
-
-  for (const slug of permissionSlugs) {
-    const permission = await prisma.permission.upsert({
-      where: { slug },
-      update: {},
-      create: { slug, description: slug },
-      select: { id: true },
-    });
-    permissionIds.set(slug, permission.id);
-  }
-
-  await assignRolePermissions(
-    prisma,
-    roleIds,
-    RoleName.ADMIN,
-    Array.from(permissionSlugs),
-  );
-  await assignRolePermissions(
-    prisma,
-    roleIds,
-    RoleName.HEAD,
-    permissionSlugs.filter((slug) => slug !== 'payments:confirm'),
-  );
-  await assignRolePermissions(prisma, roleIds, RoleName.MANAGER, [
-    'auth:me',
-    'products:read',
-    'clients:read',
-    'clients:create',
-    'clients:update',
-    'leads:read',
-    'leads:create',
-    'leads:update',
-    'leads:qualify',
-    'tasks:read',
-    'tasks:create',
-    'tasks:update',
-    'deals:read',
-    'deals:create',
-    'deals:update',
-    'deals:create_offer',
-    'orders:read',
-    'orders:create',
-    'orders:cancel',
-    'payments:create',
-    'deliveries:create',
-    'files:upload',
-    'files:read',
-    'audit:read',
-    'panel_catalog:read',
-    'panel_catalog:manage',
-    'calculations:read',
-    'calculations:create',
-    'calculations:update',
-    'calculations:delete',
-    'quotes:read',
-    'quotes:create',
-    'quotes:update',
-  ]);
-  await assignRolePermissions(prisma, roleIds, RoleName.STOREKEEPER, [
-    'products:read',
-    'orders:read',
-    'deliveries:create',
-    'inventory:read',
-    'inventory:manage',
-  ]);
-  await assignRolePermissions(
-    prisma,
-    roleIds,
-    RoleName.OBSERVER,
-    Array.from(permissionSlugs).filter((slug) => slug.endsWith(':read')),
-  );
-
-  async function assignRolePermissions(
-    prismaService: PrismaService,
-    roles: Map<RoleName, string>,
-    roleName: RoleName,
-    slugs: string[],
-  ): Promise<void> {
-    const roleId = getFromMap(roles, roleName);
-
-    for (const slug of slugs) {
-      const permissionId = getFromMap(permissionIds, slug);
-
-      await prismaService.rolePermission.upsert({
-        where: {
-          roleId_permissionId: { roleId, permissionId },
-        },
-        update: {},
-        create: { roleId, permissionId },
-      });
-    }
-  }
+  await synchronizeRbac(prisma);
 }
 
 async function upsertUser(
@@ -4185,14 +4746,10 @@ async function upsertUser(
     firstName: string;
     lastName: string;
     passwordHash: string;
-    roleName: RoleName;
+    roleName?: RoleName;
     managerId?: string;
   },
 ): Promise<{ id: string }> {
-  const role = await prisma.role.findUniqueOrThrow({
-    where: { name: input.roleName },
-    select: { id: true },
-  });
   const user = await prisma.user.upsert({
     where: { email: input.email },
     update: {
@@ -4214,12 +4771,19 @@ async function upsertUser(
   });
 
   await prisma.userRole.deleteMany({ where: { userId: user.id } });
-  await prisma.userRole.create({
-    data: {
-      userId: user.id,
-      roleId: role.id,
-    },
-  });
+
+  if (input.roleName) {
+    const role = await prisma.role.findUniqueOrThrow({
+      where: { name: input.roleName },
+      select: { id: true },
+    });
+    await prisma.userRole.create({
+      data: {
+        userId: user.id,
+        roleId: role.id,
+      },
+    });
+  }
 
   return user;
 }

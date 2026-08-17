@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
-import { OrderStatus, Prisma, RoleName } from '@prisma/client';
+import { OrderStatus, Prisma } from '@prisma/client';
 import {
+  hasUnscopedOrderVisibility,
   OrderPermissions,
   PolicyUser,
   resolveUserRole,
@@ -18,6 +19,14 @@ type OrderPolicyTarget = {
   deal: { ownerId: string };
 };
 
+const NO_MUTATIONS: OrderPermissions = {
+  canEdit: false,
+  canDelete: false,
+  canAddPayment: false,
+  canConfirmPayment: false,
+  canCreateDelivery: false,
+};
+
 @Injectable()
 export class OrderPolicyService {
   getPermissions(user: PolicyUser, order: OrderPolicyTarget): OrderPermissions {
@@ -25,23 +34,10 @@ export class OrderPolicyService {
     const isFinal = ORDER_FINAL_STATUSES.includes(order.status);
     const isOwner = order.deal.ownerId === user.id;
 
-    if (role === UserRole.ADMIN) {
+    if (role === UserRole.ACCOUNTANT) {
       return {
-        canEdit: true,
-        canDelete: true,
-        canAddPayment: true,
+        ...NO_MUTATIONS,
         canConfirmPayment: true,
-        canCreateDelivery: true,
-      };
-    }
-
-    if (role === UserRole.FINANCIER) {
-      return {
-        canEdit: false,
-        canDelete: false,
-        canAddPayment: false,
-        canConfirmPayment: true,
-        canCreateDelivery: false,
       };
     }
 
@@ -57,6 +53,14 @@ export class OrderPolicyService {
       };
     }
 
+    if (
+      role === UserRole.ADMIN ||
+      role === UserRole.DIRECTOR ||
+      role === UserRole.INSTALLER
+    ) {
+      return NO_MUTATIONS;
+    }
+
     const canMutateOwn = isOwner && !isFinal;
 
     return {
@@ -69,10 +73,7 @@ export class OrderPolicyService {
   }
 
   getScopeFilter(user: PolicyUser): Prisma.OrderWhereInput {
-    if (
-      user.roles.includes(RoleName.STOREKEEPER) ||
-      resolveUserRole(user) !== UserRole.MANAGER
-    ) {
+    if (hasUnscopedOrderVisibility(user)) {
       return {};
     }
 

@@ -6,6 +6,10 @@ import {
 } from '@nestjs/common';
 import { Permission, Prisma, RoleName, User } from '@prisma/client';
 import { hash } from 'bcryptjs';
+import {
+  assertAdministrativePasswordResetAllowed,
+  assertCreatableRoleNames,
+} from '../../auth/rbac/role-assignment.policy';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { FilterUserDto } from './dto/filter-user.dto';
@@ -77,7 +81,12 @@ type UserListResult = {
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async create(dto: RegisterUserDto): Promise<SafeUser> {
+  async create(
+    dto: RegisterUserDto,
+    actor: Pick<CurrentUser, 'roles'>,
+  ): Promise<SafeUser> {
+    assertCreatableRoleNames(actor.roles, dto.roleNames);
+
     const existingUser = await this.prisma.user.findUnique({
       where: { email: dto.email },
       select: { id: true },
@@ -203,6 +212,7 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
+    // Technical disable/enable only. Must not change roles, permissions, or credentials.
     const user = await this.prisma.user.update({
       where: { id },
       data: { isActive },
@@ -218,12 +228,26 @@ export class UsersService {
   ): Promise<SafeUser> {
     const existingUser = await this.prisma.user.findUnique({
       where: { id },
-      select: { id: true, email: true },
+      select: {
+        id: true,
+        email: true,
+        roles: {
+          select: {
+            role: {
+              select: { name: true },
+            },
+          },
+        },
+      },
     });
 
     if (!existingUser) {
       throw new NotFoundException('User not found');
     }
+
+    assertAdministrativePasswordResetAllowed(
+      existingUser.roles.map((userRole) => userRole.role.name),
+    );
 
     const passwordHash = await hash(newPassword, PASSWORD_HASH_ROUNDS);
 
@@ -261,6 +285,8 @@ export class UsersService {
     const blockedRoles = new Set<RoleName>([
       RoleName.MANAGER,
       RoleName.STOREKEEPER,
+      RoleName.ACCOUNTANT,
+      RoleName.INSTALLER,
     ]);
 
     if (currentUser.roles.some((role) => blockedRoles.has(role))) {

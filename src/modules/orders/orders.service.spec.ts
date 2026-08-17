@@ -20,6 +20,33 @@ describe('OrdersService payment confirmation', () => {
     permissions: ['orders:read', 'payments:confirm'],
   };
 
+  const admin: CurrentUser = {
+    id: 'admin-id',
+    email: 'admin@test.com',
+    teamId: null,
+    managerId: null,
+    roles: [RoleName.ADMIN],
+    permissions: ['orders:read', 'payments:confirm'],
+  };
+
+  const director: CurrentUser = {
+    id: 'director-id',
+    email: 'director@test.com',
+    teamId: null,
+    managerId: null,
+    roles: [RoleName.DIRECTOR],
+    permissions: ['orders:read', 'payments:confirm'],
+  };
+
+  const accountant: CurrentUser = {
+    id: 'accountant-id',
+    email: 'accountant@test.com',
+    teamId: null,
+    managerId: null,
+    roles: [RoleName.ACCOUNTANT],
+    permissions: ['orders:read', 'payments:confirm'],
+  };
+
   let service: OrdersService;
 
   beforeEach(() => {
@@ -33,25 +60,65 @@ describe('OrdersService payment confirmation', () => {
     );
   });
 
-  it('denies HEAD confirming a payment', async () => {
+  function mockPendingPayment(createdById = 'manager-id'): void {
     prisma.payment.findUnique.mockResolvedValue({
       id: 'payment-id',
       orderId: 'order-id',
       amount: 100,
       status: 'PENDING',
-      createdById: 'manager-id',
+      createdById,
     });
     prisma.order.findFirst.mockResolvedValue({
       id: 'order-id',
       status: OrderStatus.WAITING_PAYMENT,
       deal: { ownerId: 'manager-id' },
     });
+  }
+
+  it('denies HEAD confirming a payment', async () => {
+    mockPendingPayment();
 
     await expect(
       service.confirmPayment(
         'payment-id',
         { status: PaymentRecordStatus.CONFIRMED },
         head,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('denies ADMIN confirming a payment', async () => {
+    mockPendingPayment();
+
+    await expect(
+      service.confirmPayment(
+        'payment-id',
+        { status: PaymentRecordStatus.CONFIRMED },
+        admin,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('denies DIRECTOR confirming a payment', async () => {
+    mockPendingPayment();
+
+    await expect(
+      service.confirmPayment(
+        'payment-id',
+        { status: PaymentRecordStatus.CONFIRMED },
+        director,
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('enforces maker-checker when ACCOUNTANT created the payment', async () => {
+    mockPendingPayment(accountant.id);
+
+    await expect(
+      service.confirmPayment(
+        'payment-id',
+        { status: PaymentRecordStatus.CONFIRMED },
+        accountant,
       ),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });

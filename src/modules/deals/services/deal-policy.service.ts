@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { Deal, DealStage, Prisma } from '@prisma/client';
 import {
   DealPermissions,
+  hasUnscopedDealVisibility,
   PolicyUser,
   resolveUserRole,
   UserRole,
@@ -22,19 +23,17 @@ export class DealPolicyService {
     const isOwner = deal.ownerId === user.id;
     const isClosed = CLOSED_DEAL_STAGES.includes(deal.stage);
 
-    const canBypassStageValidation =
-      role === UserRole.ADMIN || role === UserRole.SALES_HEAD;
+    const canBypassStageValidation = role === UserRole.SALES_HEAD;
 
     let canEdit = false;
 
-    if (role === UserRole.ADMIN || role === UserRole.SALES_HEAD) {
+    if (role === UserRole.SALES_HEAD) {
       canEdit = true;
     } else if (role === UserRole.MANAGER) {
       canEdit = isOwner;
     }
 
     const canDelete =
-      role === UserRole.ADMIN ||
       role === UserRole.SALES_HEAD ||
       (role === UserRole.MANAGER && isOwner);
 
@@ -52,11 +51,11 @@ export class DealPolicyService {
   }
 
   getScopeFilter(user: PolicyUser): Prisma.DealWhereInput {
-    if (resolveUserRole(user) === UserRole.MANAGER) {
-      return { ownerId: user.id };
+    if (hasUnscopedDealVisibility(user)) {
+      return {};
     }
 
-    return {};
+    return { ownerId: user.id };
   }
 
   canReadDeal(user: PolicyUser, deal: Pick<Deal, 'ownerId'>): boolean {

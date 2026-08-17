@@ -23,6 +23,12 @@ describe('DealPolicyService commercial lock', () => {
     permissions: ['deals:update'],
   };
 
+  const director: PolicyUser = {
+    id: 'director-id',
+    roles: [RoleName.DIRECTOR],
+    permissions: ['deals:read', 'deals:read_all'],
+  };
+
   it('allows owner to mutate commercial fields on an open deal', () => {
     const perms = policy.getPermissions(manager, {
       ownerId: manager.id,
@@ -53,16 +59,16 @@ describe('DealPolicyService commercial lock', () => {
     expect(perms.canMutateCommercial).toBe(false);
   });
 
-  it('does not grant OBSERVER global deal visibility from deals:read_all alone', () => {
-    const observer: PolicyUser = {
-      id: 'observer-id',
-      roles: [RoleName.OBSERVER],
+  it('does not grant INSTALLER global deal visibility from deals:read_all alone', () => {
+    const installer: PolicyUser = {
+      id: 'installer-id',
+      roles: [RoleName.INSTALLER],
       permissions: ['deals:read', 'deals:read_all'],
     };
     const deal = { ownerId: manager.id, stage: DealStage.QUALIFICATION };
 
-    expect(policy.canReadDeal(observer, deal)).toBe(false);
-    expect(policy.getScopeFilter(observer)).toEqual({ ownerId: observer.id });
+    expect(policy.canReadDeal(installer, deal)).toBe(false);
+    expect(policy.getScopeFilter(installer)).toEqual({ ownerId: installer.id });
   });
 
   it('scopes a manager without deals:read_all to owned deals', () => {
@@ -72,12 +78,20 @@ describe('DealPolicyService commercial lock', () => {
     expect(policy.getScopeFilter(manager)).toEqual({ ownerId: manager.id });
   });
 
-  it('locks commercial fields after WON for HEAD and ADMIN', () => {
+  it('gives DIRECTOR unscoped read without mutation rights', () => {
+    const deal = { ownerId: manager.id, stage: DealStage.QUALIFICATION };
+
+    expect(policy.canReadDeal(director, deal)).toBe(true);
+    expect(policy.getScopeFilter(director)).toEqual({});
+    expect(policy.getPermissions(director, deal).canEdit).toBe(false);
+  });
+
+  it('locks commercial fields after WON for HEAD and does not let ADMIN mutate', () => {
     const deal = { ownerId: manager.id, stage: DealStage.WON };
 
     expect(policy.getPermissions(head, deal).canEdit).toBe(true);
     expect(policy.getPermissions(head, deal).canMutateCommercial).toBe(false);
-    expect(policy.getPermissions(admin, deal).canEdit).toBe(true);
+    expect(policy.getPermissions(admin, deal).canEdit).toBe(false);
     expect(policy.getPermissions(admin, deal).canMutateCommercial).toBe(false);
   });
 });

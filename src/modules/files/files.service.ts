@@ -5,7 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { File, RoleName } from '@prisma/client';
+import { File } from '@prisma/client';
 import { fileTypeFromBuffer } from 'file-type';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -29,6 +29,7 @@ export const ALLOWED_MIME_TYPES: Record<string, string> = {
 const READ_ALL_PERMISSIONS: Partial<Record<FileRelatedType, string>> = {
   [FileRelatedType.CLIENT]: 'clients:read_all',
   [FileRelatedType.DEAL]: 'deals:read_all',
+  [FileRelatedType.ORDER]: 'deals:read_all',
   [FileRelatedType.TASK]: 'tasks:read_all',
 };
 
@@ -164,13 +165,6 @@ export class FilesService {
     relatedId: string,
     user: CurrentUser,
   ): Promise<void> {
-    if (
-      user.roles.includes(RoleName.ADMIN) ||
-      user.roles.includes(RoleName.HEAD)
-    ) {
-      return;
-    }
-
     const readAllPermission = READ_ALL_PERMISSIONS[relatedType];
     if (readAllPermission && user.permissions.includes(readAllPermission)) {
       return;

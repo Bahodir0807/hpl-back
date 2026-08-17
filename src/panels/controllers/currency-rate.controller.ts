@@ -17,6 +17,7 @@ import {
   HPL_SELLING_CURRENCY,
   HPL_SOURCE_CURRENCY,
   CURRENCY_RATES_MANAGE_PERMISSION,
+  CURRENCY_RATES_READ_PERMISSION,
 } from '../pricing/hpl-pricing.constants';
 import { CurrencyRateService } from '../services/currency-rate.service';
 
@@ -28,7 +29,7 @@ export class CurrencyRateController {
   constructor(private readonly currencyRateService: CurrencyRateService) {}
 
   @Get('current')
-  @RequirePermissions(CURRENCY_RATES_MANAGE_PERMISSION)
+  @RequirePermissions(CURRENCY_RATES_READ_PERMISSION)
   @ApiOperation({ summary: 'Get the active CNY → USD rate' })
   getCurrent() {
     return this.currencyRateService.getActiveCnyUsdRate().then((rate) => ({

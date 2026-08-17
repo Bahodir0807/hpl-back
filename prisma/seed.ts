@@ -22,6 +22,7 @@ import { hash } from 'bcryptjs';
 import { seedServiceAccounts } from './seed/service-accounts';
 import { seedPanels, seedFixtureCnyUsdRate } from './seed/panels';
 import { seedCalculatorProduct } from './seed/calculator-product';
+import { synchronizeRbac } from '../src/auth/rbac/synchronize-rbac';
 
 let prisma: PrismaClient;
 
@@ -87,142 +88,6 @@ function resolvePgConnectionString(connectionString: string): string {
 
   return databaseUrl;
 }
-
-const permissionDefinitions = [
-  ['auth:me', 'Read own profile'],
-  ['users:read', 'Read users'],
-  ['users:create', 'Create users'],
-  ['users:write', 'Update users'],
-  ['users:manage', 'Manage user status'],
-  ['references:read', 'Read reference data'],
-  ['references:create', 'Create reference data'],
-  ['references:update', 'Update reference data'],
-  ['references:delete', 'Delete reference data'],
-  ['products:read', 'Read products'],
-  ['products:create', 'Create products'],
-  ['products:update', 'Update products'],
-  ['products:delete', 'Delete products'],
-  ['products:manage_prices', 'Manage product prices'],
-  ['products:read_purchase_price', 'Read purchase prices and margins'],
-  ['clients:read', 'Read clients'],
-  ['clients:read_all', 'Read all clients'],
-  ['clients:create', 'Create clients'],
-  ['clients:update', 'Update clients'],
-  ['clients:delete', 'Delete clients'],
-  ['leads:read', 'Read leads'],
-  ['leads:read_all', 'Read all leads'],
-  ['leads:create', 'Create leads'],
-  ['leads:update', 'Update leads'],
-  ['leads:delete', 'Delete leads'],
-  ['leads:qualify', 'Qualify leads'],
-  ['leads:commercial_qualify', 'Confirm Stage-2 commercial qualification'],
-  ['leads:assign', 'Assign leads'],
-  ['tasks:read', 'Read tasks'],
-  ['tasks:read_all', 'Read all tasks'],
-  ['tasks:create', 'Create tasks'],
-  ['tasks:update', 'Update tasks'],
-  ['tasks:delete', 'Delete tasks'],
-  ['deals:read', 'Read deals'],
-  ['deals:read_all', 'Read all deals'],
-  ['deals:create', 'Create deals'],
-  ['deals:update', 'Update deals'],
-  ['deals:delete', 'Delete deals'],
-  ['deals:create_offer', 'Create deal offers'],
-  ['deals:approve_offer', 'Approve deal offers'],
-  ['deals:stage_exception', 'Approve deal stage exceptions'],
-  ['deals:override_terminal', 'Override terminal deal stage'],
-  ['orders:read', 'Read orders'],
-  ['orders:create', 'Create orders'],
-  ['orders:cancel', 'Cancel orders'],
-  ['payments:create', 'Create payments'],
-  ['payments:confirm', 'Confirm payments'],
-  ['deliveries:create', 'Create deliveries'],
-  ['inventory:read', 'Read inventory'],
-  ['inventory:manage', 'Manage inventory'],
-  ['files:upload', 'Upload files'],
-  ['files:read', 'Download and list files'],
-  ['reports:read', 'Read reports'],
-  ['audit:read', 'Read audit timeline'],
-  ['admin:queues', 'Access Bull queue dashboard'],
-  ['panel_catalog:read', 'Read panel catalog and calculator reference data'],
-  ['panel_catalog:manage', 'Manage panel color catalog'],
-  ['calculations:read', 'Read own calculations'],
-  ['calculations:read_all', 'Read all calculations'],
-  ['calculations:create', 'Create calculations'],
-  ['calculations:update', 'Update draft calculations'],
-  ['calculations:delete', 'Delete calculations'],
-  ['quotes:read', 'Read own panel quotes'],
-  ['quotes:read_all', 'Read all panel quotes'],
-  ['quotes:create', 'Create panel quotes from calculations'],
-  ['quotes:update', 'Update panel quote status'],
-  ['quotes:approve', 'Approve panel quotes (privileged commercial approval)'],
-  ['currency_rates:manage', 'Manage the centralized CNY to USD rate'],
-] as const;
-
-const readPermissions = permissionDefinitions
-  .map(([slug]) => slug)
-  .filter(
-    (slug) =>
-      slug.endsWith(':read') ||
-      slug.endsWith(':read_all') ||
-      slug === 'auth:me' ||
-      slug === 'audit:read' ||
-      slug === 'panel_catalog:read',
-  );
-
-const rolePermissionSlugs: Record<RoleName, string[]> = {
-  [RoleName.ADMIN]: permissionDefinitions.map(([slug]) => slug),
-  [RoleName.HEAD]: permissionDefinitions
-    .map(([slug]) => slug)
-    .filter((slug) => slug !== 'payments:confirm'),
-  [RoleName.MANAGER]: [
-    'auth:me',
-    'references:read',
-    'products:read',
-    'clients:read',
-    'clients:create',
-    'clients:update',
-    'leads:read',
-    'leads:create',
-    'leads:update',
-    'leads:qualify',
-    'tasks:read',
-    'tasks:create',
-    'tasks:update',
-    'deals:read',
-    'deals:create',
-    'deals:update',
-    'deals:create_offer',
-    'orders:read',
-    'orders:create',
-    'orders:cancel',
-    'payments:create',
-    'deliveries:create',
-    'files:upload',
-    'files:read',
-    'reports:read',
-    'audit:read',
-    'panel_catalog:read',
-    'panel_catalog:manage',
-    'calculations:read',
-    'calculations:create',
-    'calculations:update',
-    'calculations:delete',
-    'quotes:read',
-    'quotes:create',
-    'quotes:update',
-  ],
-  [RoleName.STOREKEEPER]: [
-    'auth:me',
-    'references:read',
-    'products:read',
-    'orders:read',
-    'deliveries:create',
-    'inventory:read',
-    'inventory:manage',
-  ],
-  [RoleName.OBSERVER]: readPermissions,
-};
 
 const suppliers = [
   {
@@ -397,64 +262,7 @@ async function clearDatabase(): Promise<void> {
 }
 
 async function seedRolesAndPermissions(): Promise<Map<RoleName, { id: string }>> {
-  const roles = new Map<RoleName, { id: string }>();
-  const permissions = new Map<string, { id: string }>();
-
-  for (const roleName of Object.values(RoleName)) {
-    const role = await prisma.role.upsert({
-      where: { name: roleName },
-      update: { description: `${roleName} role` },
-      create: {
-        name: roleName,
-        description: `${roleName} role`,
-      },
-      select: { id: true },
-    });
-    roles.set(roleName, role);
-  }
-
-  for (const [slug, description] of permissionDefinitions) {
-    const permission = await prisma.permission.upsert({
-      where: { slug },
-      update: { description },
-      create: { slug, description },
-      select: { id: true },
-    });
-    permissions.set(slug, permission);
-  }
-
-  for (const [roleName, slugs] of Object.entries(rolePermissionSlugs) as [
-    RoleName,
-    string[],
-  ][]) {
-    const role = roles.get(roleName);
-    if (!role) {
-      throw new Error(`Role not seeded: ${roleName}`);
-    }
-
-    for (const slug of slugs) {
-      const permission = permissions.get(slug);
-      if (!permission) {
-        throw new Error(`Permission not seeded: ${slug}`);
-      }
-
-      await prisma.rolePermission.upsert({
-        where: {
-          roleId_permissionId: {
-            roleId: role.id,
-            permissionId: permission.id,
-          },
-        },
-        update: {},
-        create: {
-          roleId: role.id,
-          permissionId: permission.id,
-        },
-      });
-    }
-  }
-
-  return roles;
+  return synchronizeRbac(prisma);
 }
 
 async function createUser(input: {
@@ -463,7 +271,7 @@ async function createUser(input: {
   lastName: string;
   phone: string;
   passwordHash: string;
-  roleId: string;
+  roleId?: string;
   teamId?: string;
   managerId?: string;
 }): Promise<{ id: string }> {
@@ -477,9 +285,13 @@ async function createUser(input: {
       isActive: true,
       teamId: input.teamId,
       managerId: input.managerId,
-      roles: {
-        create: { roleId: input.roleId },
-      },
+      ...(input.roleId
+        ? {
+            roles: {
+              create: { roleId: input.roleId },
+            },
+          }
+        : {}),
     },
     select: { id: true },
   });
@@ -559,7 +371,6 @@ async function main(): Promise<void> {
     lastName: 'Pool',
     phone: '+7 (000) 000-00-00',
     passwordHash: noLoginPasswordHash,
-    roleId: roles.get(RoleName.OBSERVER)!.id,
   });
 
   const systemUser = await createUser({
@@ -568,7 +379,6 @@ async function main(): Promise<void> {
     lastName: 'Bot',
     phone: '+7 (000) 000-00-01',
     passwordHash: noLoginPasswordHash,
-    roleId: roles.get(RoleName.OBSERVER)!.id,
   });
 
   const head = await createUser({
@@ -615,6 +425,33 @@ async function main(): Promise<void> {
     phone: '+7 (495) 100-00-05',
     passwordHash,
     roleId: roles.get(RoleName.STOREKEEPER)!.id,
+  });
+
+  await createUser({
+    email: 'director@hpl.com',
+    firstName: 'Ирина',
+    lastName: 'Лебедева',
+    phone: '+7 (495) 100-00-06',
+    passwordHash,
+    roleId: roles.get(RoleName.DIRECTOR)!.id,
+  });
+
+  await createUser({
+    email: 'accountant@hpl.com',
+    firstName: 'Ольга',
+    lastName: 'Новикова',
+    phone: '+7 (495) 100-00-07',
+    passwordHash,
+    roleId: roles.get(RoleName.ACCOUNTANT)!.id,
+  });
+
+  await createUser({
+    email: 'installer@hpl.com',
+    firstName: 'Павел',
+    lastName: 'Кузнецов',
+    phone: '+7 (495) 100-00-08',
+    passwordHash,
+    roleId: roles.get(RoleName.INSTALLER)!.id,
   });
 
   const supplierByCode = new Map<string, { id: string }>();
@@ -1348,12 +1185,18 @@ async function main(): Promise<void> {
   await seedCalculatorProduct(prisma);
 
   if (!isProduction) {
-    const admin = await prisma.user.findUnique({
-      where: { email: 'admin@hpl.com' },
+    const director = await prisma.user.findUnique({
+      where: { email: 'director@hpl.com' },
       select: { id: true },
     });
-    if (admin) {
-      await seedFixtureCnyUsdRate(prisma, admin.id);
+    const rateAuthor =
+      director ??
+      (await prisma.user.findUnique({
+        where: { email: 'admin@hpl.com' },
+        select: { id: true },
+      }));
+    if (rateAuthor) {
+      await seedFixtureCnyUsdRate(prisma, rateAuthor.id);
     }
   }
 

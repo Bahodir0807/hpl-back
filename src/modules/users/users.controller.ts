@@ -34,7 +34,7 @@ export class UsersController {
   @ApiOperation({ summary: 'Create employee user' })
   create(@Body() dto: RegisterUserDto, @CurrentUser() user: CurrentUserType) {
     this.usersService.assertUserModuleAccess(user);
-    return this.usersService.create(dto);
+    return this.usersService.create(dto, user);
   }
 
   @Get()

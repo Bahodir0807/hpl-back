@@ -22,15 +22,15 @@ describe('OrderPolicyService scope', () => {
     });
   });
 
-  it('does not grant OBSERVER global order visibility from deals:read_all alone', () => {
-    const observer: PolicyUser = {
-      id: 'observer-id',
-      roles: [RoleName.OBSERVER],
+  it('does not grant INSTALLER global order visibility from deals:read_all alone', () => {
+    const installer: PolicyUser = {
+      id: 'installer-id',
+      roles: [RoleName.INSTALLER],
       permissions: ['orders:read', 'deals:read_all'],
     };
 
-    expect(policy.getScopeFilter(observer)).toEqual({
-      deal: { ownerId: observer.id },
+    expect(policy.getScopeFilter(installer)).toEqual({
+      deal: { ownerId: installer.id },
     });
   });
 
@@ -44,13 +44,39 @@ describe('OrderPolicyService scope', () => {
     expect(policy.getPermissions(head, order).canConfirmPayment).toBe(false);
   });
 
-  it('allows ADMIN to confirm payments', () => {
+  it('denies ADMIN payment confirmation', () => {
     const admin: PolicyUser = {
       id: 'admin-id',
       roles: [RoleName.ADMIN],
       permissions: ['payments:confirm'],
     };
 
-    expect(policy.getPermissions(admin, order).canConfirmPayment).toBe(true);
+    expect(policy.getPermissions(admin, order).canConfirmPayment).toBe(false);
+  });
+
+  it('denies DIRECTOR payment confirmation', () => {
+    const director: PolicyUser = {
+      id: 'director-id',
+      roles: [RoleName.DIRECTOR],
+      permissions: ['payments:confirm'],
+    };
+
+    expect(policy.getPermissions(director, order).canConfirmPayment).toBe(
+      false,
+    );
+  });
+
+  it('allows ACCOUNTANT to confirm payments', () => {
+    const accountant: PolicyUser = {
+      id: 'accountant-id',
+      roles: [RoleName.ACCOUNTANT],
+      permissions: ['payments:confirm'],
+    };
+
+    expect(policy.getPermissions(accountant, order).canConfirmPayment).toBe(
+      true,
+    );
+    expect(policy.getPermissions(accountant, order).canAddPayment).toBe(false);
+    expect(policy.getScopeFilter(accountant)).toEqual({});
   });
 });

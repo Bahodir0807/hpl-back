@@ -8,7 +8,6 @@ import {
   ActivityType,
   AuditLog,
   Prisma,
-  RoleName,
 } from '@prisma/client';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import { PrismaService } from '../prisma/prisma.service';
@@ -94,13 +93,6 @@ export class AuditService {
     relatedId: string,
     user: CurrentUser,
   ): Promise<void> {
-    if (
-      user.roles.includes(RoleName.ADMIN) ||
-      user.roles.includes(RoleName.HEAD)
-    ) {
-      return;
-    }
-
     switch (relatedType) {
       case 'Lead': {
         const lead = await this.prisma.lead.findFirst({
