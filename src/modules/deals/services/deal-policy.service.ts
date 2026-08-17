@@ -1,11 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { Deal, DealStage, Prisma } from '@prisma/client';
+import { Deal, DealStage, Prisma, RoleName } from '@prisma/client';
 import {
   DealPermissions,
+  hasRole,
   hasUnscopedDealVisibility,
   PolicyUser,
-  resolveUserRole,
-  UserRole,
 } from '../../../common/enums/role.enum';
 
 const CLOSED_DEAL_STAGES: DealStage[] = [DealStage.WON, DealStage.LOST];
@@ -19,24 +18,14 @@ export class DealPolicyService {
     user: PolicyUser,
     deal: Pick<Deal, 'ownerId' | 'stage'>,
   ): DealPermissions {
-    const role = resolveUserRole(user);
     const isOwner = deal.ownerId === user.id;
     const isClosed = CLOSED_DEAL_STAGES.includes(deal.stage);
+    const isHead = hasRole(user, RoleName.HEAD);
+    const isManager = hasRole(user, RoleName.MANAGER);
 
-    const canBypassStageValidation = role === UserRole.SALES_HEAD;
-
-    let canEdit = false;
-
-    if (role === UserRole.SALES_HEAD) {
-      canEdit = true;
-    } else if (role === UserRole.MANAGER) {
-      canEdit = isOwner;
-    }
-
-    const canDelete =
-      role === UserRole.SALES_HEAD ||
-      (role === UserRole.MANAGER && isOwner);
-
+    const canBypassStageValidation = isHead;
+    const canEdit = isHead || (isManager && isOwner);
+    const canDelete = canEdit;
     const canChangeStage = canEdit && !isClosed;
     // WON/LOST freeze agreed value. Operational Deal fields stay on canEdit.
     const canMutateCommercial = canEdit && !isClosed;

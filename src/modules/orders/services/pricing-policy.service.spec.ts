@@ -70,4 +70,48 @@ describe('PricingPolicyService manager discount', () => {
       ]),
     ).not.toThrow();
   });
+
+  it('keeps the manager discount ban when ADMIN is also assigned', () => {
+    const managerAdmin: PolicyUser = {
+      id: 'manager-admin-id',
+      roles: [RoleName.MANAGER, RoleName.ADMIN],
+      permissions: ['deals:update'],
+    };
+
+    expect(() =>
+      policy.assertManagerCannotAssignDiscount(managerAdmin, [{ discount: 5 }]),
+    ).toThrow(MANAGER_DISCOUNT_FORBIDDEN_MESSAGE);
+    expect(() =>
+      policy.validateItemPrices(managerAdmin, [
+        {
+          productId: 'p1',
+          price: 95,
+          basePrice: 100,
+          purchasePrice: 60,
+        },
+      ]),
+    ).toThrow('Макс. 0%');
+  });
+
+  it('keeps HEAD 15% discount cap when ADMIN is also assigned', () => {
+    const headAdmin: PolicyUser = {
+      id: 'head-admin-id',
+      roles: [RoleName.HEAD, RoleName.ADMIN],
+      permissions: ['deals:update'],
+    };
+
+    expect(() =>
+      policy.assertManagerCannotAssignDiscount(headAdmin, [{ discount: 10 }]),
+    ).not.toThrow();
+    expect(() =>
+      policy.validateItemPrices(headAdmin, [
+        {
+          productId: 'p1',
+          price: 90,
+          basePrice: 100,
+          purchasePrice: 60,
+        },
+      ]),
+    ).not.toThrow();
+  });
 });

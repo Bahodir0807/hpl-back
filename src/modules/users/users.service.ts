@@ -10,6 +10,7 @@ import {
   assertAdministrativePasswordResetAllowed,
   assertCreatableRoleNames,
 } from '../../auth/rbac/role-assignment.policy';
+import { hasUserModuleAccess } from '../../common/enums/role.enum';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { FilterUserDto } from './dto/filter-user.dto';
@@ -282,14 +283,7 @@ export class UsersService {
   }
 
   assertUserModuleAccess(currentUser: Pick<CurrentUser, 'roles'>): void {
-    const blockedRoles = new Set<RoleName>([
-      RoleName.MANAGER,
-      RoleName.STOREKEEPER,
-      RoleName.ACCOUNTANT,
-      RoleName.INSTALLER,
-    ]);
-
-    if (currentUser.roles.some((role) => blockedRoles.has(role))) {
+    if (!hasUserModuleAccess(currentUser)) {
       throw new ForbiddenException('Access denied');
     }
   }

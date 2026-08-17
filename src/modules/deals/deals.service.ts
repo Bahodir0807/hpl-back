@@ -11,6 +11,7 @@ import {
   ActivityType,
   Prisma,
   ProductPriceType,
+  RoleName,
   TaskPriority,
   TaskStatus,
   TaskType,
@@ -19,9 +20,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { SupplierOrdersService } from '../supplier-orders/supplier-orders.service';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import {
+  hasRole,
   POLICY_FORBIDDEN_MESSAGE,
-  resolveUserRole,
-  UserRole,
 } from '../../common/enums/role.enum';
 import {
   COMMERCIAL_FIELDS_LOCKED_MESSAGE,
@@ -789,7 +789,8 @@ export class DealsService {
     const now = new Date();
     const calculatedItems: CalculatedDealItem[] = [];
     const productIds = [...new Set(items.map((item) => item.productId))];
-    const stripManagerDiscount = resolveUserRole(user) === UserRole.MANAGER;
+    const stripManagerDiscount =
+      hasRole(user, RoleName.MANAGER) && !hasRole(user, RoleName.HEAD);
 
     // 2 запроса на всю пачку позиций вместо 2 × N
     const products = await tx.product.findMany({
@@ -1046,9 +1047,7 @@ export class DealsService {
       return user.id;
     }
 
-    const role = resolveUserRole(user);
-
-    if (role === UserRole.SALES_HEAD) {
+    if (hasRole(user, RoleName.HEAD)) {
       return requestedOwnerId;
     }
 

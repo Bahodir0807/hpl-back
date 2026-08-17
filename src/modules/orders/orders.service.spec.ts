@@ -9,6 +9,7 @@ describe('OrdersService payment confirmation', () => {
   const prisma = {
     payment: { findUnique: jest.fn() },
     order: { findFirst: jest.fn() },
+    $transaction: jest.fn(),
   };
 
   const head: CurrentUser = {
@@ -121,5 +122,27 @@ describe('OrdersService payment confirmation', () => {
         accountant,
       ),
     ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('does not treat ACCOUNTANT+ADMIN as ADMIN for payment policy', async () => {
+    mockPendingPayment();
+    const accountantAdmin: CurrentUser = {
+      ...accountant,
+      id: 'accountant-admin-id',
+      roles: [RoleName.ACCOUNTANT, RoleName.ADMIN],
+      permissions: ['orders:read', 'payments:confirm', 'users:create'],
+    };
+
+    prisma.$transaction = jest.fn(async () => {
+      throw new Error('GF1_POLICY_PASSED');
+    });
+
+    await expect(
+      service.confirmPayment(
+        'payment-id',
+        { status: PaymentRecordStatus.CONFIRMED },
+        accountantAdmin,
+      ),
+    ).rejects.toThrow('GF1_POLICY_PASSED');
   });
 });

@@ -401,6 +401,77 @@ describe('QuotesService', () => {
     });
   });
 
+  it('does not grant quote approval to DIRECTOR+ADMIN without quotes:approve', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.SENT,
+      validUntil: new Date(Date.now() + 86_400_000),
+      items: [],
+    });
+
+    const directorAdmin: CurrentUser = {
+      id: 'director-admin-id',
+      email: 'director-admin@test.com',
+      teamId: null,
+      managerId: null,
+      roles: ['DIRECTOR', 'ADMIN'],
+      permissions: [
+        'quotes:read',
+        'quotes:read_all',
+        'quotes:update',
+        'users:create',
+      ],
+    };
+
+    await expect(
+      service.updateStatus(
+        'quote-id',
+        { status: QUOTE_STATUS.APPROVED },
+        directorAdmin,
+      ),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'QUOTE_APPROVAL_FORBIDDEN',
+      }),
+    });
+  });
+
+  it('keeps HEAD quote approval when ADMIN is also assigned', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.SENT,
+      validUntil: new Date(Date.now() + 86_400_000),
+      rejectionReason: null,
+      items: [],
+    });
+    prisma.panelQuote.update.mockResolvedValue({
+      id: 'quote-id',
+      status: QUOTE_STATUS.APPROVED,
+      managerId: 'manager-id',
+      leadId: 'lead-id',
+      items: [],
+    });
+    prisma.notification.create.mockResolvedValue({});
+
+    const headAdmin: CurrentUser = {
+      ...head,
+      id: 'head-admin-id',
+      roles: ['HEAD', 'ADMIN'],
+      permissions: [...head.permissions, 'users:create'],
+    };
+
+    const result = await service.updateStatus(
+      'quote-id',
+      { status: QUOTE_STATUS.APPROVED },
+      headAdmin,
+    );
+    expect(result.status).toBe(QUOTE_STATUS.APPROVED);
+  });
+
   it('allows authorized role to approve a sent quote', async () => {
     prisma.panelQuote.findUnique.mockResolvedValue({
       id: 'quote-id',

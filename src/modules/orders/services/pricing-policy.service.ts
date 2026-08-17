@@ -1,9 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
-import {
-  PolicyUser,
-  resolveUserRole,
-  UserRole,
-} from '../../../common/enums/role.enum';
+import { RoleName } from '@prisma/client';
+import { hasRole, PolicyUser } from '../../../common/enums/role.enum';
 
 export type PricingValidationItem = {
   productId: string;
@@ -21,7 +18,7 @@ export class PricingPolicyService {
     user: PolicyUser,
     items: Array<{ discount?: number }>,
   ): void {
-    if (resolveUserRole(user) !== UserRole.MANAGER) {
+    if (hasRole(user, RoleName.HEAD) || !hasRole(user, RoleName.MANAGER)) {
       return;
     }
 
@@ -34,7 +31,7 @@ export class PricingPolicyService {
     user: PolicyUser,
     items: PricingValidationItem[],
   ): void {
-    const role = resolveUserRole(user);
+    const maxDiscountPercent = hasRole(user, RoleName.HEAD) ? 15 : 0;
 
     for (const item of items) {
       if (item.price < item.purchasePrice) {
@@ -43,12 +40,11 @@ export class PricingPolicyService {
         );
       }
 
-      const maxDiscountPercent = role === UserRole.SALES_HEAD ? 15 : 0;
       const minAllowedPrice = item.basePrice * (1 - maxDiscountPercent / 100);
 
       if (item.price < minAllowedPrice) {
         throw new BadRequestException(
-          `Скидка превышает допустимый лимит для роли ${role} (Макс. ${maxDiscountPercent}%)`,
+          `Скидка превышает допустимый лимит (Макс. ${maxDiscountPercent}%)`,
         );
       }
     }

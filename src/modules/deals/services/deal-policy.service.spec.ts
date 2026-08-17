@@ -94,4 +94,50 @@ describe('DealPolicyService commercial lock', () => {
     expect(policy.getPermissions(admin, deal).canEdit).toBe(false);
     expect(policy.getPermissions(admin, deal).canMutateCommercial).toBe(false);
   });
+
+  it('keeps DIRECTOR unscoped read when ADMIN is also assigned', () => {
+    const directorAdmin: PolicyUser = {
+      id: 'director-admin-id',
+      roles: [RoleName.DIRECTOR, RoleName.ADMIN],
+      permissions: ['deals:read', 'deals:read_all'],
+    };
+    const foreignDeal = { ownerId: manager.id, stage: DealStage.QUALIFICATION };
+
+    expect(policy.canReadDeal(directorAdmin, foreignDeal)).toBe(true);
+    expect(policy.getScopeFilter(directorAdmin)).toEqual({});
+    expect(policy.getPermissions(directorAdmin, foreignDeal).canEdit).toBe(false);
+  });
+
+  it('keeps HEAD mutation and unscoped read when ADMIN is also assigned', () => {
+    const headAdmin: PolicyUser = {
+      id: 'head-admin-id',
+      roles: [RoleName.HEAD, RoleName.ADMIN],
+      permissions: ['deals:update'],
+    };
+    const foreignDeal = { ownerId: manager.id, stage: DealStage.QUALIFICATION };
+
+    expect(policy.canReadDeal(headAdmin, foreignDeal)).toBe(true);
+    expect(policy.getScopeFilter(headAdmin)).toEqual({});
+    expect(policy.getPermissions(headAdmin, foreignDeal).canEdit).toBe(true);
+    expect(policy.getPermissions(headAdmin, foreignDeal).canBypassStageValidation).toBe(
+      true,
+    );
+  });
+
+  it('keeps MANAGER owner-scoped when ADMIN is also assigned', () => {
+    const managerAdmin: PolicyUser = {
+      id: 'manager-admin-id',
+      roles: [RoleName.MANAGER, RoleName.ADMIN],
+      permissions: ['deals:update'],
+    };
+    const ownDeal = { ownerId: managerAdmin.id, stage: DealStage.QUALIFICATION };
+    const foreignDeal = { ownerId: manager.id, stage: DealStage.QUALIFICATION };
+
+    expect(policy.canReadDeal(managerAdmin, foreignDeal)).toBe(false);
+    expect(policy.getScopeFilter(managerAdmin)).toEqual({
+      ownerId: managerAdmin.id,
+    });
+    expect(policy.getPermissions(managerAdmin, ownDeal).canEdit).toBe(true);
+    expect(policy.getPermissions(managerAdmin, foreignDeal).canEdit).toBe(false);
+  });
 });

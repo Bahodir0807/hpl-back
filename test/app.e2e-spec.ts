@@ -3942,6 +3942,348 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(404);
   });
 
+  it('GF1 DIRECTOR+ADMIN keeps Director visibility and FX without HEAD/ACCOUNTANT powers', async () => {
+    const actor = await loginDualRole('director-admin', [
+      RoleName.DIRECTOR,
+      RoleName.ADMIN,
+    ]);
+    const foreignDeal = await createDeal(prisma, context);
+    const foreignOrder = await createWonOrder();
+
+    const dealCard = await request(server)
+      .get(`/deals/${foreignDeal.id}`)
+      .set(authHeader(actor.token))
+      .expect(200);
+    expect(bodyAs<{ ownerId: string }>(dealCard).ownerId).toBe(context.managerId);
+
+    const storedDeal = await prisma.deal.findUniqueOrThrow({
+      where: { id: foreignDeal.id },
+      select: { id: true, ownerId: true, title: true },
+    });
+    expect(storedDeal.ownerId).toBe(context.managerId);
+
+    const deals = await request(server)
+      .get('/deals')
+      .query({ search: storedDeal.title, ownerId: context.managerId })
+      .set(authHeader(actor.token))
+      .expect(200);
+    expect(
+      bodyAs<{ items: { id: string; ownerId: string }[] }>(deals).items.some(
+        (item) =>
+          item.id === storedDeal.id && item.ownerId === context.managerId,
+      ),
+    ).toBe(true);
+
+    const orderCard = await request(server)
+      .get(`/orders/${foreignOrder.id}`)
+      .set(authHeader(actor.token))
+      .expect(200);
+    expect(bodyAs<EntityResponse>(orderCard).id).toBe(foreignOrder.id);
+
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(actor.token))
+      .send({ rate: '0.1' })
+      .expect(201);
+
+    const leadId = await createQualifiedLead(`gf1-dir-admin ${RUN_ID}`);
+    const stage2 = await commercialPayload();
+    await request(server)
+      .post(`/leads/${leadId}/commercial-qualification`)
+      .set(authHeader(actor.token))
+      .send(stage2)
+      .expect(403);
+
+    const quoteId = await createSentPanelQuote();
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(actor.token))
+      .send({ status: 'approved' })
+      .expect(403);
+
+    const payment = await createPayment(
+      foreignOrder.id,
+      Number(foreignOrder.totalAmount),
+    );
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(actor.token))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(403);
+
+    const created = await request(server)
+      .post('/users')
+      .set(authHeader(actor.token))
+      .send({
+        email: `gf1-dir-admin-user-${RUN_ID}@hpl.test`,
+        password: TEST_PASSWORD,
+        firstName: 'Tech',
+        lastName: 'FromDirAdmin',
+        roleNames: [RoleName.INSTALLER],
+      })
+      .expect(201);
+    expect(bodyAs<EntityResponse>(created).id).toBeDefined();
+  });
+
+  it('GF1 HEAD+ADMIN keeps HEAD deal/order authority plus technical admin', async () => {
+    const actor = await loginDualRole('head-admin', [
+      RoleName.HEAD,
+      RoleName.ADMIN,
+    ]);
+    const foreignDeal = await createDeal(prisma, context);
+    const foreignOrder = await createWonOrder();
+
+    const dealCard = await request(server)
+      .get(`/deals/${foreignDeal.id}`)
+      .set(authHeader(actor.token))
+      .expect(200);
+    expect(bodyAs<{ ownerId: string }>(dealCard).ownerId).toBe(context.managerId);
+
+    const title = `GF1 HEAD+ADMIN ${RUN_ID}`;
+    const updated = await request(server)
+      .patch(`/deals/${foreignDeal.id}`)
+      .set(authHeader(actor.token))
+      .send({ title })
+      .expect(200);
+    expect(bodyAs<{ title: string }>(updated).title).toBe(title);
+
+    await request(server)
+      .get(`/orders/${foreignOrder.id}`)
+      .set(authHeader(actor.token))
+      .expect(200);
+
+    const leadId = await createQualifiedLead(`gf1-head-admin ${RUN_ID}`);
+    await request(server)
+      .post(`/leads/${leadId}/commercial-qualification`)
+      .set(authHeader(actor.token))
+      .send(await commercialPayload())
+      .expect(201);
+
+    const quoteId = await createSentPanelQuote();
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(actor.token))
+      .send({ status: 'approved' })
+      .expect(200);
+
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(actor.token))
+      .send({ rate: '0.15' })
+      .expect(403);
+
+    const payment = await createPayment(
+      foreignOrder.id,
+      Number(foreignOrder.totalAmount),
+    );
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(actor.token))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(403);
+
+    await request(server)
+      .post('/users')
+      .set(authHeader(actor.token))
+      .send({
+        email: `gf1-head-admin-user-${RUN_ID}@hpl.test`,
+        password: TEST_PASSWORD,
+        firstName: 'Tech',
+        lastName: 'FromHeadAdmin',
+        roleNames: [RoleName.INSTALLER],
+      })
+      .expect(201);
+  });
+
+  it('GF1 ACCOUNTANT+ADMIN can confirm payment and use technical admin', async () => {
+    const actor = await loginDualRole('accountant-admin', [
+      RoleName.ACCOUNTANT,
+      RoleName.ADMIN,
+    ]);
+    const foreignDeal = await createDeal(prisma, context);
+    const foreignOrder = await createWonOrder();
+    const payment = await createPayment(
+      foreignOrder.id,
+      Number(foreignOrder.totalAmount),
+    );
+
+    await request(server)
+      .get(`/deals/${foreignDeal.id}`)
+      .set(authHeader(actor.token))
+      .expect(200);
+    await request(server)
+      .get(`/orders/${foreignOrder.id}`)
+      .set(authHeader(actor.token))
+      .expect(200);
+
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(actor.token))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(200);
+
+    await request(server)
+      .post('/users')
+      .set(authHeader(actor.token))
+      .send({
+        email: `gf1-acc-admin-user-${RUN_ID}@hpl.test`,
+        password: TEST_PASSWORD,
+        firstName: 'Tech',
+        lastName: 'FromAccAdmin',
+        roleNames: [RoleName.INSTALLER],
+      })
+      .expect(201);
+
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(actor.token))
+      .send({ rate: '0.15' })
+      .expect(403);
+
+    const leadId = await createQualifiedLead(`gf1-acc-admin ${RUN_ID}`);
+    await request(server)
+      .post(`/leads/${leadId}/commercial-qualification`)
+      .set(authHeader(actor.token))
+      .send(await commercialPayload())
+      .expect(403);
+
+    const quoteId = await createSentPanelQuote();
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(actor.token))
+      .send({ status: 'approved' })
+      .expect(403);
+  });
+
+  it('GF1 ADMIN-only stays technical and cannot read another owner deal/order', async () => {
+    const foreignDeal = await createDeal(prisma, context);
+    const foreignOrder = await createWonOrder();
+
+    await request(server)
+      .get(`/deals/${foreignDeal.id}`)
+      .set(authHeader(context.adminToken))
+      .expect(403);
+    await request(server)
+      .get(`/orders/${foreignOrder.id}`)
+      .set(authHeader(context.adminToken))
+      .expect(403);
+    await request(server)
+      .patch(`/deals/${foreignDeal.id}`)
+      .set(authHeader(context.adminToken))
+      .send({ title: 'admin hijack' })
+      .expect(403);
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.adminToken))
+      .send({ rate: '0.15' })
+      .expect(403);
+
+    const leadId = await createQualifiedLead(`gf1-admin-only ${RUN_ID}`);
+    await request(server)
+      .post(`/leads/${leadId}/commercial-qualification`)
+      .set(authHeader(context.adminToken))
+      .send(await commercialPayload())
+      .expect(403);
+
+    const quoteId = await createSentPanelQuote();
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.adminToken))
+      .send({ status: 'approved' })
+      .expect(403);
+
+    const payment = await createPayment(
+      foreignOrder.id,
+      Number(foreignOrder.totalAmount),
+    );
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(context.adminToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(403);
+
+    await request(server)
+      .post('/users')
+      .set(authHeader(context.adminToken))
+      .send({
+        email: `gf1-admin-only-user-${RUN_ID}@hpl.test`,
+        password: TEST_PASSWORD,
+        firstName: 'Tech',
+        lastName: 'AdminOnly',
+        roleNames: [RoleName.INSTALLER],
+      })
+      .expect(201);
+  });
+
+  it('GF1 MANAGER+ADMIN stays owner-scoped and does not gain HEAD/ACCOUNTANT/DIRECTOR authority', async () => {
+    const actor = await loginDualRole('manager-admin', [
+      RoleName.MANAGER,
+      RoleName.ADMIN,
+    ]);
+    const foreignDeal = await createDeal(prisma, context);
+    const ownDeal = await request(server)
+      .post('/deals')
+      .set(authHeader(actor.token))
+      .send({
+        title: `GF1 own deal ${RUN_ID}`,
+        clientId: context.clientId,
+        items: [skuItemPayload({ quantitySheets: 1, quantityM2: 1 })],
+      })
+      .expect(201);
+
+    await request(server)
+      .get(`/deals/${foreignDeal.id}`)
+      .set(authHeader(actor.token))
+      .expect(403);
+    await request(server)
+      .get(`/deals/${bodyAs<EntityResponse>(ownDeal).id}`)
+      .set(authHeader(actor.token))
+      .expect(200);
+
+    await request(server)
+      .post('/users')
+      .set(authHeader(actor.token))
+      .send({
+        email: `gf1-mgr-admin-user-${RUN_ID}@hpl.test`,
+        password: TEST_PASSWORD,
+        firstName: 'Tech',
+        lastName: 'FromMgrAdmin',
+        roleNames: [RoleName.INSTALLER],
+      })
+      .expect(201);
+
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(actor.token))
+      .send({ rate: '0.15' })
+      .expect(403);
+
+    const leadId = await createQualifiedLead(`gf1-mgr-admin ${RUN_ID}`);
+    await request(server)
+      .post(`/leads/${leadId}/commercial-qualification`)
+      .set(authHeader(actor.token))
+      .send(await commercialPayload())
+      .expect(403);
+
+    const quoteId = await createSentPanelQuote();
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(actor.token))
+      .send({ status: 'approved' })
+      .expect(403);
+
+    const foreignOrder = await createWonOrder();
+    const payment = await createPayment(
+      foreignOrder.id,
+      Number(foreignOrder.totalAmount),
+    );
+    await request(server)
+      .patch(`/orders/payments/${payment.id}/confirm`)
+      .set(authHeader(actor.token))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(403);
+  });
+
   it('BP4 lets INSTALLER authenticate without inheriting business permissions', async () => {
     const me = await request(server)
       .get('/auth/me')
@@ -4310,6 +4652,53 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       })
       .expect(403);
   });
+
+  async function loginDualRole(
+    label: string,
+    roleNames: RoleName[],
+  ): Promise<{ email: string; token: string }> {
+    const email = `gf1-${label}-${RUN_ID}@hpl.test`;
+    const passwordHash = await hash(TEST_PASSWORD, 12);
+    await upsertUserWithRoles(prisma, {
+      email,
+      firstName: 'GF1',
+      lastName: label,
+      passwordHash,
+      roleNames,
+    });
+    const tokens = await login(server, email);
+    return { email, token: tokens.accessToken };
+  }
+
+  async function commercialPayload() {
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+
+    return {
+      supplierId: supplier.id,
+      qualityClassId: qualityClass.id,
+      decisionComment: 'GF1',
+    };
+  }
+
+  async function createQualifiedLead(title: string): Promise<string> {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<EntityResponse>(leadResponse).id;
+    await qualifyLeadStage1(leadId);
+    return leadId;
+  }
 
   async function qualifyLeadStage1(leadId: string): Promise<void> {
     await request(server)
@@ -4784,6 +5173,51 @@ async function upsertUser(
       },
     });
   }
+
+  return user;
+}
+
+async function upsertUserWithRoles(
+  prisma: PrismaService,
+  input: {
+    email: string;
+    firstName: string;
+    lastName: string;
+    passwordHash: string;
+    roleNames: RoleName[];
+  },
+): Promise<{ id: string }> {
+  const user = await prisma.user.upsert({
+    where: { email: input.email },
+    update: {
+      passwordHash: input.passwordHash,
+      firstName: input.firstName,
+      lastName: input.lastName,
+      isActive: true,
+    },
+    create: {
+      email: input.email,
+      passwordHash: input.passwordHash,
+      firstName: input.firstName,
+      lastName: input.lastName,
+      isActive: true,
+    },
+    select: { id: true },
+  });
+
+  await prisma.userRole.deleteMany({ where: { userId: user.id } });
+
+  const roles = await prisma.role.findMany({
+    where: { name: { in: input.roleNames } },
+    select: { id: true, name: true },
+  });
+
+  await prisma.userRole.createMany({
+    data: roles.map((role) => ({
+      userId: user.id,
+      roleId: role.id,
+    })),
+  });
 
   return user;
 }
