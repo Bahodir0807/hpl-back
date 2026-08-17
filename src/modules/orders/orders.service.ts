@@ -22,7 +22,6 @@ import {
 } from '@prisma/client';
 import { InventoryService } from '../inventory/inventory.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { SupplierOrdersService } from '../supplier-orders/supplier-orders.service';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import {
   POLICY_FORBIDDEN_MESSAGE,
@@ -115,7 +114,6 @@ export class OrdersService {
     private readonly inventoryService: InventoryService,
     private readonly orderPolicy: OrderPolicyService,
     private readonly pricingPolicy: PricingPolicyService,
-    private readonly supplierOrdersService: SupplierOrdersService,
   ) {}
 
   async createFromDeal(
@@ -187,19 +185,7 @@ export class OrdersService {
         },
       });
 
-      if (isPanelCalculatorDeal) {
-        if (!deal.supplierId) {
-          throw new BadRequestException(
-            'Deal has no supplier for panel calculator order',
-          );
-        }
-
-        await this.supplierOrdersService.createFromDeal(
-          deal.id,
-          deal.supplierId,
-          tx,
-        );
-      } else {
+      if (!isPanelCalculatorDeal) {
         try {
           await this.inventoryService.reserveStock(
             order.id,

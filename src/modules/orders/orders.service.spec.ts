@@ -57,7 +57,6 @@ describe('OrdersService payment confirmation', () => {
       {} as never,
       new OrderPolicyService(),
       new PricingPolicyService(),
-      {} as never,
     );
   });
 

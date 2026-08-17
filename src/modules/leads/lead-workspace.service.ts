@@ -26,7 +26,7 @@ const leadWorkspaceInclude = Prisma.validator<Prisma.LeadInclude>()({
       id: true,
       title: true,
       stage: true,
-      supplierOrder: { select: { id: true, status: true } },
+      supplierOrders: { select: { id: true, status: true } },
     },
   },
   qualification: {

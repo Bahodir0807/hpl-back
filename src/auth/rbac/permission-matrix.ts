@@ -68,6 +68,8 @@ export const PERMISSION_DEFINITIONS = [
   ['quotes:create', 'Create panel quotes from calculations'],
   ['quotes:update', 'Update panel quote status'],
   ['quotes:approve', 'Approve panel quotes (privileged commercial approval)'],
+  ['quotes:client_accept', 'Record customer acceptance of an approved quote'],
+  ['supplier_orders:manage', 'Create and operate client Deal supplier orders'],
   ['currency_rates:read', 'Read the active CNY to USD rate'],
   ['currency_rates:manage', 'Manage the centralized CNY to USD rate'],
 ] as const;
@@ -121,6 +123,7 @@ const DIRECTOR_PERMISSIONS: PermissionSlug[] = [
   'inventory:read',
   'currency_rates:read',
   'currency_rates:manage',
+  'supplier_orders:manage',
 ];
 
 const HEAD_PERMISSIONS: PermissionSlug[] = [
@@ -187,6 +190,7 @@ const HEAD_PERMISSIONS: PermissionSlug[] = [
   'quotes:update',
   'quotes:approve',
   'currency_rates:read',
+  'supplier_orders:manage',
 ];
 
 const MANAGER_PERMISSIONS: PermissionSlug[] = [
@@ -224,6 +228,7 @@ const MANAGER_PERMISSIONS: PermissionSlug[] = [
   'quotes:read',
   'quotes:create',
   'quotes:update',
+  'quotes:client_accept',
   'currency_rates:read',
 ];
 
@@ -267,8 +272,10 @@ export const ROLE_PERMISSION_SLUGS: Record<RoleName, readonly PermissionSlug[]> 
 export const BUSINESS_MUTATION_PERMISSIONS = [
   'payments:confirm',
   'quotes:approve',
+  'quotes:client_accept',
   'leads:commercial_qualify',
   'currency_rates:manage',
+  'supplier_orders:manage',
 ] as const;
 
 export function roleHasPermission(

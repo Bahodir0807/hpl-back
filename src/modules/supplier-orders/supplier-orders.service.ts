@@ -1,14 +1,18 @@
 import {
   BadRequestException,
+  ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
   ActivityType,
   Prisma,
+  RoleName,
   SupplierOrder,
   SupplierOrderStatus,
 } from '@prisma/client';
+import { QUOTE_STATUS } from '../../quotes/quote.constants';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import { DealPolicyService } from '../deals/services/deal-policy.service';
 import {
@@ -16,13 +20,35 @@ import {
   isClientShipmentSupplierStatus,
 } from '../orders/services/shipment-payment.policy';
 import { PrismaService } from '../prisma/prisma.service';
+import { CreateSupplierOrderDto } from './dto/create-supplier-order.dto';
+import { UpdateSupplierOrderDatesDto } from './dto/update-supplier-order-dates.dto';
+import {
+  READY_CONFIRMABLE_STATUSES,
+  READINESS_REMINDER_STOP_STATUSES,
+  SUPPLIER_ORDER_PERMISSIONS,
+  SUPPLIER_ORDER_REMINDER_KIND,
+  SUPPLIER_ORDER_REMINDER_TYPE,
+  SUPPLIER_ORDER_STATUS_TRANSITIONS,
+  type SupplierOrderReminderKind,
+} from './supplier-order.constants';
 
-type DbClient = Prisma.TransactionClient | PrismaService;
+const SUPPLIER_ORDER_RELATED_TYPE = 'SupplierOrder';
+const CLIENT_SHIPMENT_FORBIDDEN_MESSAGE =
+  'Supplier shipment is allowed only for HEAD or DIRECTOR';
 
-const TERMINAL_SUPPLIER_ORDER_STATUSES: SupplierOrderStatus[] = [
-  SupplierOrderStatus.DELIVERED,
-  SupplierOrderStatus.CANCELLED,
-];
+type SupplierOrderWithSupplier = Prisma.SupplierOrderGetPayload<{
+  include: {
+    supplier: {
+      select: { id: true; code: true; name: true };
+    };
+  };
+}>;
+
+const supplierOrderInclude = Prisma.validator<Prisma.SupplierOrderInclude>()({
+  supplier: {
+    select: { id: true, code: true, name: true },
+  },
+});
 
 @Injectable()
 export class SupplierOrdersService {
@@ -31,70 +57,133 @@ export class SupplierOrdersService {
     private readonly dealPolicy: DealPolicyService,
   ) {}
 
-  async createFromDeal(
+  async createForDeal(
     dealId: string,
-    supplierId: string,
-    tx?: Prisma.TransactionClient,
-  ): Promise<SupplierOrder> {
-    const db: DbClient = tx ?? this.prisma;
+    dto: CreateSupplierOrderDto,
+    user: CurrentUser,
+  ): Promise<SupplierOrderWithSupplier> {
+    this.assertManageAllowed(user);
+    this.assertTimelineDates({
+      orderedAt: dto.orderedAt,
+      expectedReadyAt: dto.expectedReadyAt,
+      expectedShipmentAt: dto.expectedShipmentAt,
+      expectedArrivalAt: dto.expectedArrivalAt,
+    });
 
-    const deal = await db.deal.findFirst({
+    const deal = await this.prisma.deal.findFirst({
       where: { id: dealId, deletedAt: null },
-      include: {
+      select: {
+        id: true,
+        ownerId: true,
         panelQuotes: {
-          select: { deliveryCost: true },
-          take: 1,
+          select: {
+            id: true,
+            status: true,
+            clientAcceptedAt: true,
+          },
           orderBy: { createdAt: 'desc' },
         },
         order: { select: { deliveryAddress: true } },
       },
     });
 
-    if (!deal) {
+    if (!deal || !this.dealPolicy.canReadDeal(user, deal)) {
       throw new NotFoundException('Deal not found');
     }
 
-    if (!supplierId) {
-      throw new BadRequestException(
-        'Deal has no supplier for panel calculator order',
-      );
+    this.assertHplDealReadyForSupplierOrder(deal.panelQuotes);
+
+    const supplier = await this.prisma.supplier.findUnique({
+      where: { id: dto.supplierId },
+      select: { id: true },
+    });
+
+    if (!supplier) {
+      throw new NotFoundException('Supplier not found');
     }
 
-    try {
-      return await db.supplierOrder.create({
+    const acceptedQuote = deal.panelQuotes.find(
+      (quote) => quote.clientAcceptedAt !== null,
+    );
+
+    return this.prisma.$transaction(async (tx) => {
+      const created = await tx.supplierOrder.create({
         data: {
           dealId,
-          supplierId,
-          status: SupplierOrderStatus.DRAFT,
-          deliveryCost: deal.panelQuotes[0]?.deliveryCost,
+          supplierId: supplier.id,
+          status: SupplierOrderStatus.SENT_TO_PRODUCTION,
+          orderedAt: dto.orderedAt,
+          expectedReadyAt: dto.expectedReadyAt,
+          expectedShipmentAt: dto.expectedShipmentAt,
+          expectedArrivalAt: dto.expectedArrivalAt,
+          comment: dto.comment?.trim() || null,
+          createdById: user.id,
           deliveryAddress: deal.order?.deliveryAddress,
+          deliveryCost: null,
+        },
+        include: supplierOrderInclude,
+      });
+
+      await tx.activity.create({
+        data: {
+          authorId: user.id,
+          relatedType: 'Deal',
+          relatedId: dealId,
+          type: ActivityType.NOTE,
+          content: 'Supplier order created',
+          metadata: {
+            action: 'supplier_order_created',
+            supplierOrderId: created.id,
+            supplierId: supplier.id,
+            quoteId: acceptedQuote?.id,
+          },
         },
       });
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
-      ) {
-        const existing = await db.supplierOrder.findUnique({
-          where: { dealId },
-        });
 
-        if (existing) {
-          return existing;
-        }
-      }
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'SUPPLIER_ORDER_CREATED',
+          entityType: 'SupplierOrder',
+          entityId: created.id,
+          newValue: {
+            dealId,
+            supplierId: supplier.id,
+            status: created.status,
+            orderedAt: dto.orderedAt.toISOString(),
+            expectedReadyAt: dto.expectedReadyAt.toISOString(),
+          },
+        },
+      });
 
-      throw error;
-    }
+      return created;
+    });
   }
 
-  async updateStatus(
-    id: string,
-    status: SupplierOrderStatus,
+  async findByDealId(
+    dealId: string,
     user: CurrentUser,
-  ): Promise<SupplierOrder> {
+  ): Promise<SupplierOrderWithSupplier[]> {
+    await this.assertDealAccessOrNotFound(
+      dealId,
+      user,
+      'Deal not found',
+    );
+
+    return this.prisma.supplierOrder.findMany({
+      where: { dealId },
+      include: supplierOrderInclude,
+      orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async findOne(
+    id: string,
+    user: CurrentUser,
+  ): Promise<SupplierOrderWithSupplier> {
     const supplierOrder = await this.prisma.supplierOrder.findUnique({
       where: { id },
+      include: supplierOrderInclude,
     });
 
     if (!supplierOrder) {
@@ -107,12 +196,227 @@ export class SupplierOrdersService {
       'Supplier order not found',
     );
 
+    return supplierOrder;
+  }
+
+  async updateDates(
+    id: string,
+    dto: UpdateSupplierOrderDatesDto,
+    user: CurrentUser,
+  ): Promise<SupplierOrderWithSupplier> {
+    this.assertManageAllowed(user);
+
+    const supplierOrder = await this.requireAccessibleOrder(id, user);
+
     if (
-      TERMINAL_SUPPLIER_ORDER_STATUSES.includes(supplierOrder.status) &&
-      supplierOrder.status !== status
+      supplierOrder.status === SupplierOrderStatus.DELIVERED ||
+      supplierOrder.status === SupplierOrderStatus.CANCELLED
     ) {
       throw new BadRequestException(
-        `Cannot change supplier order in status ${supplierOrder.status}`,
+        `Cannot change planned dates in status ${supplierOrder.status}`,
+      );
+    }
+
+    const nextDates = {
+      orderedAt: supplierOrder.orderedAt,
+      expectedReadyAt: dto.expectedReadyAt ?? supplierOrder.expectedReadyAt,
+      expectedShipmentAt:
+        dto.expectedShipmentAt ?? supplierOrder.expectedShipmentAt,
+      expectedArrivalAt:
+        dto.expectedArrivalAt ?? supplierOrder.expectedArrivalAt,
+    };
+    this.assertTimelineDates(nextDates);
+
+    const dateChanged =
+      (dto.expectedReadyAt !== undefined &&
+        !sameInstant(dto.expectedReadyAt, supplierOrder.expectedReadyAt)) ||
+      (dto.expectedShipmentAt !== undefined &&
+        !sameInstant(
+          dto.expectedShipmentAt,
+          supplierOrder.expectedShipmentAt,
+        )) ||
+      (dto.expectedArrivalAt !== undefined &&
+        !sameInstant(dto.expectedArrivalAt, supplierOrder.expectedArrivalAt));
+    const commentChanged =
+      dto.comment !== undefined &&
+      (dto.comment.trim() || null) !== supplierOrder.comment;
+
+    if (!dateChanged && !commentChanged) {
+      return this.prisma.supplierOrder.findUniqueOrThrow({
+        where: { id },
+        include: supplierOrderInclude,
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const updated = await tx.supplierOrder.update({
+        where: { id },
+        data: {
+          expectedReadyAt: nextDates.expectedReadyAt,
+          expectedShipmentAt: nextDates.expectedShipmentAt,
+          expectedArrivalAt: nextDates.expectedArrivalAt,
+          ...(dto.comment !== undefined
+            ? { comment: dto.comment.trim() || null }
+            : {}),
+        },
+        include: supplierOrderInclude,
+      });
+
+      if (dateChanged) {
+        await tx.activity.create({
+          data: {
+            authorId: user.id,
+            relatedType: 'Deal',
+            relatedId: supplierOrder.dealId,
+            type: ActivityType.NOTE,
+            content: 'Supplier order planned dates changed',
+            metadata: {
+              action: 'supplier_order_dates_changed',
+              supplierOrderId: id,
+            },
+          },
+        });
+
+        await tx.auditLog.create({
+          data: {
+            userId: user.id,
+            action: 'SUPPLIER_ORDER_DATES_CHANGED',
+            entityType: 'SupplierOrder',
+            entityId: id,
+            oldValue: {
+              expectedReadyAt: toIso(supplierOrder.expectedReadyAt),
+              expectedShipmentAt: toIso(supplierOrder.expectedShipmentAt),
+              expectedArrivalAt: toIso(supplierOrder.expectedArrivalAt),
+            },
+            newValue: {
+              expectedReadyAt: toIso(updated.expectedReadyAt),
+              expectedShipmentAt: toIso(updated.expectedShipmentAt),
+              expectedArrivalAt: toIso(updated.expectedArrivalAt),
+            },
+          },
+        });
+      }
+
+      return updated;
+    });
+  }
+
+  async confirmReady(
+    id: string,
+    user: CurrentUser,
+  ): Promise<SupplierOrderWithSupplier> {
+    this.assertManageAllowed(user);
+
+    const supplierOrder = await this.requireAccessibleOrder(id, user);
+
+    if (supplierOrder.readyConfirmedAt) {
+      return this.prisma.supplierOrder.findUniqueOrThrow({
+        where: { id },
+        include: supplierOrderInclude,
+      });
+    }
+
+    if (!READY_CONFIRMABLE_STATUSES.includes(supplierOrder.status)) {
+      throw new BadRequestException(
+        `Cannot confirm readiness in status ${supplierOrder.status}`,
+      );
+    }
+
+    const confirmedAt = new Date();
+
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.supplierOrder.updateMany({
+        where: {
+          id,
+          readyConfirmedAt: null,
+          status: { in: READY_CONFIRMABLE_STATUSES },
+        },
+        data: {
+          status: SupplierOrderStatus.READY_FOR_SHIPMENT,
+          readyConfirmedAt: confirmedAt,
+          readyConfirmedById: user.id,
+        },
+      });
+
+      if (result.count !== 1) {
+        return null;
+      }
+
+      await tx.activity.create({
+        data: {
+          authorId: user.id,
+          relatedType: 'Deal',
+          relatedId: supplierOrder.dealId,
+          type: ActivityType.SUPPLIER_ORDER_STATUS_CHANGED,
+          content: `Supplier goods ready confirmed (${supplierOrder.status} → ${SupplierOrderStatus.READY_FOR_SHIPMENT})`,
+          metadata: {
+            action: 'supplier_order_ready_confirmed',
+            supplierOrderId: id,
+            oldStatus: supplierOrder.status,
+            newStatus: SupplierOrderStatus.READY_FOR_SHIPMENT,
+          },
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'SUPPLIER_ORDER_READY_CONFIRMED',
+          entityType: 'SupplierOrder',
+          entityId: id,
+          oldValue: {
+            status: supplierOrder.status,
+            readyConfirmedAt: null,
+            readyConfirmedById: null,
+          },
+          newValue: {
+            status: SupplierOrderStatus.READY_FOR_SHIPMENT,
+            readyConfirmedAt: confirmedAt.toISOString(),
+            readyConfirmedById: user.id,
+          },
+        },
+      });
+
+      return tx.supplierOrder.findUniqueOrThrow({
+        where: { id },
+        include: supplierOrderInclude,
+      });
+    });
+
+    if (claimed) {
+      return claimed;
+    }
+
+    const latest = await this.prisma.supplierOrder.findUnique({
+      where: { id },
+      include: supplierOrderInclude,
+    });
+
+    if (latest?.readyConfirmedAt) {
+      return latest;
+    }
+
+    throw new ConflictException('Supplier order readiness was not confirmed');
+  }
+
+  async updateStatus(
+    id: string,
+    status: SupplierOrderStatus,
+    user: CurrentUser,
+  ): Promise<SupplierOrder> {
+    this.assertManageAllowed(user);
+
+    const supplierOrder = await this.requireAccessibleOrder(id, user);
+
+    if (status === supplierOrder.status) {
+      return supplierOrder;
+    }
+
+    const allowed =
+      SUPPLIER_ORDER_STATUS_TRANSITIONS[supplierOrder.status] ?? [];
+    if (!allowed.includes(status)) {
+      throw new BadRequestException(
+        `Cannot change supplier order from ${supplierOrder.status} to ${status}`,
       );
     }
 
@@ -145,31 +449,268 @@ export class SupplierOrdersService {
         },
       });
 
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'SUPPLIER_ORDER_STATUS_CHANGED',
+          entityType: 'SupplierOrder',
+          entityId: id,
+          oldValue: { status: supplierOrder.status },
+          newValue: { status },
+        },
+      });
+
       return updated;
     });
   }
 
-  async findByDealId(
-    dealId: string,
-    user: CurrentUser,
-  ): Promise<SupplierOrder> {
-    const supplierOrder = await this.prisma.supplierOrder.findUnique({
-      where: { dealId },
-      include: {
-        supplier: {
-          select: { id: true, code: true, name: true },
-        },
+  async processReadinessReminders(now = new Date()): Promise<number> {
+    const today = startOfUtcDay(now);
+    const orders = await this.prisma.supplierOrder.findMany({
+      where: {
+        expectedReadyAt: { not: null },
+        readyConfirmedAt: null,
+        status: { notIn: READINESS_REMINDER_STOP_STATUSES },
+      },
+      select: {
+        id: true,
+        expectedReadyAt: true,
       },
     });
 
+    if (orders.length === 0) {
+      return 0;
+    }
+
+    const recipients = await this.resolveHeadDirectorUserIds();
+    if (recipients.length === 0) {
+      return 0;
+    }
+
+    let created = 0;
+    for (const order of orders) {
+      created += await this.emitReadinessRemindersForOrder(
+        order.id,
+        order.expectedReadyAt as Date,
+        today,
+        recipients,
+      );
+    }
+
+    return created;
+  }
+
+  private async emitReadinessRemindersForOrder(
+    supplierOrderId: string,
+    expectedReadyAt: Date,
+    today: Date,
+    recipientIds: string[],
+  ): Promise<number> {
+    const dueDate = startOfUtcDay(expectedReadyAt);
+    const softDate = addUtcDays(dueDate, -2);
+    let created = 0;
+
+    if (today.getTime() === softDate.getTime()) {
+      created += await this.claimAndNotify({
+        supplierOrderId,
+        kind: SUPPLIER_ORDER_REMINDER_KIND.SOFT,
+        reminderDate: today,
+        recipientIds,
+        type: SUPPLIER_ORDER_REMINDER_TYPE.SOFT,
+        title: 'Supplier production ready soon',
+        message: `Supplier order is expected ready in 2 days`,
+      });
+    }
+
+    if (today.getTime() === dueDate.getTime()) {
+      created += await this.claimAndNotify({
+        supplierOrderId,
+        kind: SUPPLIER_ORDER_REMINDER_KIND.DUE,
+        reminderDate: today,
+        recipientIds,
+        type: SUPPLIER_ORDER_REMINDER_TYPE.DUE,
+        title: 'Supplier production ready today',
+        message: `Supplier order expected ready date is today`,
+      });
+    }
+
+    if (today.getTime() > dueDate.getTime()) {
+      created += await this.claimAndNotify({
+        supplierOrderId,
+        kind: SUPPLIER_ORDER_REMINDER_KIND.OVERDUE,
+        reminderDate: today,
+        recipientIds,
+        type: SUPPLIER_ORDER_REMINDER_TYPE.OVERDUE,
+        title: 'Supplier production overdue',
+        message: `Supplier order expected ready date has passed`,
+      });
+    }
+
+    return created;
+  }
+
+  private async claimAndNotify(input: {
+    supplierOrderId: string;
+    kind: SupplierOrderReminderKind;
+    reminderDate: Date;
+    recipientIds: string[];
+    type: string;
+    title: string;
+    message: string;
+  }): Promise<number> {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.supplierOrderReminderClaim.create({
+          data: {
+            supplierOrderId: input.supplierOrderId,
+            kind: input.kind,
+            reminderDate: input.reminderDate,
+          },
+        });
+
+        await tx.notification.createMany({
+          data: input.recipientIds.map((userId) => ({
+            userId,
+            title: input.title,
+            message: input.message,
+            type: input.type,
+            relatedType: SUPPLIER_ORDER_RELATED_TYPE,
+            relatedId: input.supplierOrderId,
+          })),
+        });
+      });
+
+      return input.recipientIds.length;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        return 0;
+      }
+
+      throw error;
+    }
+  }
+
+  private async resolveHeadDirectorUserIds(): Promise<string[]> {
+    const users = await this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        roles: {
+          some: {
+            role: {
+              name: { in: [RoleName.HEAD, RoleName.DIRECTOR] },
+            },
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    return users.map((user) => user.id);
+  }
+
+  private assertManageAllowed(user: CurrentUser): void {
+    if (user.permissions.includes(SUPPLIER_ORDER_PERMISSIONS.MANAGE)) {
+      return;
+    }
+
+    throw new ForbiddenException(CLIENT_SHIPMENT_FORBIDDEN_MESSAGE);
+  }
+
+  private assertHplDealReadyForSupplierOrder(
+    quotes: Array<{
+      status: string;
+      clientAcceptedAt: Date | null;
+    }>,
+  ): void {
+    if (quotes.length === 0) {
+      throw new ConflictException(
+        'Supplier order requires an HPL Deal with an originating Quote',
+      );
+    }
+
+    const accepted = quotes.find((quote) => {
+      const internallyApproved =
+        quote.status === QUOTE_STATUS.APPROVED ||
+        quote.status === QUOTE_STATUS.CONVERTED;
+      return internallyApproved && quote.clientAcceptedAt !== null;
+    });
+
+    if (!accepted) {
+      throw new ConflictException(
+        'Supplier order requires an internally approved Quote with recorded client acceptance',
+      );
+    }
+  }
+
+  private assertTimelineDates(dates: {
+    orderedAt?: Date | null;
+    expectedReadyAt?: Date | null;
+    expectedShipmentAt?: Date | null;
+    expectedArrivalAt?: Date | null;
+  }): void {
+    const orderedAt = dates.orderedAt ?? null;
+    const expectedReadyAt = dates.expectedReadyAt ?? null;
+    const expectedShipmentAt = dates.expectedShipmentAt ?? null;
+    const expectedArrivalAt = dates.expectedArrivalAt ?? null;
+
+    if (orderedAt && expectedReadyAt && expectedReadyAt < orderedAt) {
+      throw new BadRequestException(
+        'expectedReadyAt must not precede orderedAt',
+      );
+    }
+
+    const readyOrOrdered = expectedReadyAt ?? orderedAt;
+    if (
+      readyOrOrdered &&
+      expectedShipmentAt &&
+      expectedShipmentAt < readyOrOrdered
+    ) {
+      throw new BadRequestException(
+        'expectedShipmentAt must not precede the ready or order date',
+      );
+    }
+
+    if (
+      expectedShipmentAt &&
+      expectedArrivalAt &&
+      expectedArrivalAt < expectedShipmentAt
+    ) {
+      throw new BadRequestException(
+        'expectedArrivalAt must not precede expectedShipmentAt',
+      );
+    }
+
+    if (
+      !expectedShipmentAt &&
+      readyOrOrdered &&
+      expectedArrivalAt &&
+      expectedArrivalAt < readyOrOrdered
+    ) {
+      throw new BadRequestException(
+        'expectedArrivalAt must not precede the ready or order date',
+      );
+    }
+  }
+
+  private async requireAccessibleOrder(
+    id: string,
+    user: CurrentUser,
+  ): Promise<SupplierOrder> {
+    const supplierOrder = await this.prisma.supplierOrder.findUnique({
+      where: { id },
+    });
+
     if (!supplierOrder) {
-      throw new NotFoundException('Supplier order not found for this deal');
+      throw new NotFoundException('Supplier order not found');
     }
 
     await this.assertDealAccessOrNotFound(
-      dealId,
+      supplierOrder.dealId,
       user,
-      'Supplier order not found for this deal',
+      'Supplier order not found',
     );
 
     return supplierOrder;
@@ -227,4 +768,33 @@ export class SupplierOrdersService {
       throw new NotFoundException(notFoundMessage);
     }
   }
+}
+
+function startOfUtcDay(value: Date): Date {
+  return new Date(
+    Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()),
+  );
+}
+
+function addUtcDays(value: Date, days: number): Date {
+  const next = new Date(value.getTime());
+  next.setUTCDate(next.getUTCDate() + days);
+  return next;
+}
+
+function toIso(value: Date | null): string | null {
+  return value ? value.toISOString() : null;
+}
+
+function sameInstant(
+  left: Date | null | undefined,
+  right: Date | null | undefined,
+): boolean {
+  if (!left && !right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return left.getTime() === right.getTime();
 }

@@ -64,6 +64,20 @@ export class QuotesController {
     return this.quotesService.updateStatus(id, dto, user);
   }
 
+  @Post(':id/client-accept')
+  @HttpCode(200)
+  @RequirePermissions(QUOTE_PERMISSIONS.CLIENT_ACCEPT)
+  @ApiOperation({
+    summary:
+      'Record that the customer accepted this internally approved Quote',
+  })
+  recordClientAcceptance(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.quotesService.recordClientAcceptance(id, user);
+  }
+
   @Post(':id/convert-to-deal')
   @HttpCode(201)
   @RequirePermissions(QUOTE_PERMISSIONS.UPDATE)

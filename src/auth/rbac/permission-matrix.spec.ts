@@ -105,7 +105,7 @@ describe('permission matrix', () => {
     expect(roleHasPermission(RoleName.INSTALLER, 'orders:read')).toBe(false);
   });
 
-  it('gives DIRECTOR read_all visibility without operational mutations', () => {
+  it('gives DIRECTOR read_all visibility without unrelated operational mutations', () => {
     expect(roleHasPermission(RoleName.DIRECTOR, 'leads:read_all')).toBe(true);
     expect(roleHasPermission(RoleName.DIRECTOR, 'deals:read_all')).toBe(true);
     expect(roleHasPermission(RoleName.DIRECTOR, 'quotes:read_all')).toBe(true);
@@ -114,7 +114,41 @@ describe('permission matrix', () => {
       false,
     );
     expect(roleHasPermission(RoleName.DIRECTOR, 'quotes:approve')).toBe(false);
+    expect(roleHasPermission(RoleName.DIRECTOR, 'quotes:client_accept')).toBe(
+      false,
+    );
     expect(roleHasPermission(RoleName.DIRECTOR, 'inventory:manage')).toBe(false);
     expect(roleHasPermission(RoleName.DIRECTOR, 'admin:queues')).toBe(false);
+  });
+
+  it('gives Quote client acceptance only to MANAGER', () => {
+    expect(roleHasPermission(RoleName.MANAGER, 'quotes:client_accept')).toBe(
+      true,
+    );
+
+    for (const roleName of TARGET_ROLE_NAMES) {
+      if (roleName === RoleName.MANAGER) {
+        continue;
+      }
+
+      expect(roleHasPermission(roleName, 'quotes:client_accept')).toBe(false);
+    }
+  });
+
+  it('gives SupplierOrder manage only to HEAD and DIRECTOR', () => {
+    expect(roleHasPermission(RoleName.HEAD, 'supplier_orders:manage')).toBe(
+      true,
+    );
+    expect(roleHasPermission(RoleName.DIRECTOR, 'supplier_orders:manage')).toBe(
+      true,
+    );
+
+    for (const roleName of TARGET_ROLE_NAMES) {
+      if (roleName === RoleName.HEAD || roleName === RoleName.DIRECTOR) {
+        continue;
+      }
+
+      expect(roleHasPermission(roleName, 'supplier_orders:manage')).toBe(false);
+    }
   });
 });

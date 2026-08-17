@@ -14,6 +14,7 @@ export const QUOTE_PERMISSIONS = {
   CREATE: 'quotes:create',
   UPDATE: 'quotes:update',
   APPROVE: 'quotes:approve',
+  CLIENT_ACCEPT: 'quotes:client_accept',
 } as const;
 
 export const QUOTE_STATUS_TRANSITIONS: Record<string, QuoteStatus[]> = {

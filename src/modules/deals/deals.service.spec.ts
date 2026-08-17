@@ -27,7 +27,6 @@ describe('DealsService create-time owner assignment', () => {
       prisma as never,
       new DealPolicyService(),
       new PricingPolicyService(),
-      {} as never,
     );
   });
 

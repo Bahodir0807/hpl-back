@@ -327,6 +327,99 @@ export class QuotesService {
     return updated;
   }
 
+  async recordClientAcceptance(
+    id: string,
+    user: CurrentUser,
+  ): Promise<PanelQuoteWithItems> {
+    const quote = await this.getQuoteOrThrow(id);
+    this.assertQuoteClientAcceptAccess(quote.managerId, user);
+
+    const internallyApproved =
+      quote.status === QUOTE_STATUS.APPROVED ||
+      quote.status === QUOTE_STATUS.CONVERTED;
+
+    if (!internallyApproved) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'QUOTE_NOT_APPROVED',
+        'Клиентское согласие можно зафиксировать только по внутренне согласованному КП',
+      );
+    }
+
+    if (quote.clientAcceptedAt) {
+      return quote;
+    }
+
+    const acceptedAt = new Date();
+
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      const result = await tx.panelQuote.updateMany({
+        where: {
+          id: quote.id,
+          clientAcceptedAt: null,
+          status: {
+            in: [QUOTE_STATUS.APPROVED, QUOTE_STATUS.CONVERTED],
+          },
+        },
+        data: {
+          clientAcceptedAt: acceptedAt,
+          clientAcceptedById: user.id,
+        },
+      });
+
+      if (result.count !== 1) {
+        return null;
+      }
+
+      await tx.activity.create({
+        data: {
+          type: ActivityType.NOTE,
+          relatedType: 'Lead',
+          relatedId: quote.leadId,
+          authorId: user.id,
+          metadata: {
+            action: 'quote_client_accepted',
+            quoteId: quote.id,
+          },
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'QUOTE_CLIENT_ACCEPTED',
+          entityType: 'PanelQuote',
+          entityId: quote.id,
+          oldValue: { clientAcceptedAt: null, clientAcceptedById: null },
+          newValue: {
+            clientAcceptedAt: acceptedAt.toISOString(),
+            clientAcceptedById: user.id,
+          },
+        },
+      });
+
+      return tx.panelQuote.findUniqueOrThrow({
+        where: { id: quote.id },
+        include: quoteInclude,
+      });
+    });
+
+    if (claimed) {
+      return claimed;
+    }
+
+    const latest = await this.getQuoteOrThrow(id);
+    if (latest.clientAcceptedAt) {
+      return latest;
+    }
+
+    throw new BusinessException(
+      HttpStatus.CONFLICT,
+      'QUOTE_NOT_APPROVED',
+      'Клиентское согласие можно зафиксировать только по внутренне согласованному КП',
+    );
+  }
+
   async convertToDeal(
     id: string,
     user: CurrentUser,
@@ -636,6 +729,25 @@ export class QuotesService {
       HttpStatus.FORBIDDEN,
       'FORBIDDEN',
       'У вас нет доступа к этому КП',
+    );
+  }
+
+  // Ownership / quotes:read_all is not a customer-contact permission.
+  private assertQuoteClientAcceptAccess(
+    managerId: string,
+    user: CurrentUser,
+  ): void {
+    if (
+      managerId === user.id &&
+      user.permissions.includes(QUOTE_PERMISSIONS.CLIENT_ACCEPT)
+    ) {
+      return;
+    }
+
+    throw new BusinessException(
+      HttpStatus.FORBIDDEN,
+      'QUOTE_CLIENT_ACCEPT_FORBIDDEN',
+      'Клиентское согласие фиксирует менеджер, ведущий это КП',
     );
   }
 

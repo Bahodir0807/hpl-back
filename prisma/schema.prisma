@@ -246,6 +246,9 @@ model User {
   stageExceptionApprovals DealStageHistory[]      @relation("StageExceptionApprover")
   createdCalculations     CalculationSession[]    @relation("CalculationCreator")
   panelQuotes             PanelQuote[]            @relation("QuoteManager")
+  clientAcceptedQuotes    PanelQuote[]            @relation("QuoteClientAcceptedBy")
+  createdSupplierOrders   SupplierOrder[]         @relation("SupplierOrderCreatedBy")
+  readyConfirmedSupplierOrders SupplierOrder[]    @relation("SupplierOrderReadyConfirmedBy")
   createdCurrencyRates    CurrencyRate[]          @relation("CurrencyRateCreator")
   confirmedCommercialQualifications LeadCommercialQualification[] @relation("LeadCommercialConfirmedBy")
 
@@ -813,7 +816,7 @@ model Deal {
   order             Order?
   stageHistory      DealStageHistory[]
   panelQuotes       PanelQuote[]
-  supplierOrder     SupplierOrder?
+  supplierOrders    SupplierOrder[]
 
   @@index([clientId])
   @@index([projectObjectId])
@@ -1323,22 +1326,50 @@ model PanelColor {
 }
 
 model SupplierOrder {
-  id              String              @id @default(uuid())
-  dealId          String              @unique
-  supplierId      String
-  status          SupplierOrderStatus @default(DRAFT)
-  estimatedDate   DateTime?
-  deliveryAddress String?
-  deliveryCost    Decimal?            @db.Decimal(10, 2)
-  trackingNumber  String?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
+  id                 String              @id @default(uuid())
+  dealId             String
+  supplierId         String
+  status             SupplierOrderStatus @default(DRAFT)
+  orderedAt          DateTime?
+  expectedReadyAt    DateTime?
+  expectedShipmentAt DateTime?
+  expectedArrivalAt  DateTime?
+  comment            String?
+  createdById        String?
+  readyConfirmedAt   DateTime?
+  readyConfirmedById String?
+  estimatedDate      DateTime?
+  deliveryAddress    String?
+  deliveryCost       Decimal?            @db.Decimal(10, 2)
+  trackingNumber     String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
 
-  deal     Deal     @relation(fields: [dealId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  deal             Deal     @relation(fields: [dealId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  supplier         Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdBy        User?    @relation("SupplierOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  readyConfirmedBy User?    @relation("SupplierOrderReadyConfirmedBy", fields: [readyConfirmedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  reminderClaims   SupplierOrderReminderClaim[]
 
+  @@index([dealId])
   @@index([supplierId])
   @@index([status])
+  @@index([expectedReadyAt])
+  @@index([createdById])
+  @@index([readyConfirmedById])
+}
+
+model SupplierOrderReminderClaim {
+  id              String   @id @default(uuid())
+  supplierOrderId String
+  kind            String
+  reminderDate    DateTime @db.Date
+  createdAt       DateTime @default(now())
+
+  supplierOrder SupplierOrder @relation(fields: [supplierOrderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([supplierOrderId, kind, reminderDate])
+  @@index([reminderDate])
 }
 
 // === Calculation Domain (P1) ===
@@ -1418,21 +1449,25 @@ model PanelQuote {
   cnyUsdRate          Decimal? @db.Decimal(18, 8)
   sellingCoefficient  Decimal? @db.Decimal(8, 4)
   deliveryCost    Decimal? @db.Decimal(10, 2)
-  clientComment   String?
-  rejectionReason String?
-  validUntil      DateTime
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  clientComment      String?
+  rejectionReason    String?
+  validUntil         DateTime
+  clientAcceptedAt   DateTime?
+  clientAcceptedById String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  calculation CalculationSession @relation(fields: [calculationId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  lead        Lead               @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  manager     User               @relation("QuoteManager", fields: [managerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  deal        Deal?              @relation(fields: [dealId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  items       PanelQuoteItem[]
+  calculation      CalculationSession @relation(fields: [calculationId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  lead             Lead               @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  manager          User               @relation("QuoteManager", fields: [managerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  clientAcceptedBy User?              @relation("QuoteClientAcceptedBy", fields: [clientAcceptedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  deal             Deal?              @relation(fields: [dealId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  items            PanelQuoteItem[]
 
   @@index([leadId, status])
   @@index([managerId])
   @@index([status, createdAt])
+  @@index([clientAcceptedById])
 }
 
 model PanelQuoteItem {

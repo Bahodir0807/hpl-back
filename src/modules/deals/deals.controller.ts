@@ -31,6 +31,9 @@ import { FilterDealDto } from './dto/filter-deal.dto';
 import { SetDealItemsDto } from './dto/set-deal-items.dto';
 import { UpdateDealDto } from './dto/update-deal.dto';
 import { DealsService } from './deals.service';
+import { CreateSupplierOrderDto } from '../supplier-orders/dto/create-supplier-order.dto';
+import { SUPPLIER_ORDER_PERMISSIONS } from '../supplier-orders/supplier-order.constants';
+import { SupplierOrdersService } from '../supplier-orders/supplier-orders.service';
 
 @ApiTags('Deals')
 @ApiBearerAuth()
@@ -38,7 +41,10 @@ import { DealsService } from './deals.service';
 @UseInterceptors(PurchasePriceInterceptor)
 @Controller('deals')
 export class DealsController {
-  constructor(private readonly dealsService: DealsService) {}
+  constructor(
+    private readonly dealsService: DealsService,
+    private readonly supplierOrdersService: SupplierOrdersService,
+  ) {}
 
   @Post()
   @RequirePermissions('deals:create')
@@ -76,6 +82,29 @@ export class DealsController {
     @CurrentUser() user: CurrentUserType,
   ) {
     return this.dealsService.getDeliveryStatus(id, user);
+  }
+
+  @Get(':id/supplier-orders')
+  @RequirePermissions('deals:read')
+  @ApiOperation({ summary: 'List supplier orders for a deal' })
+  @ApiResponse({ status: 200, description: 'Supplier orders returned' })
+  listSupplierOrders(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.supplierOrdersService.findByDealId(id, user);
+  }
+
+  @Post(':id/supplier-orders')
+  @RequirePermissions(SUPPLIER_ORDER_PERMISSIONS.MANAGE)
+  @ApiOperation({ summary: 'Create a supplier order for a client Deal' })
+  @ApiResponse({ status: 201, description: 'Supplier order created' })
+  createSupplierOrder(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateSupplierOrderDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.supplierOrdersService.createForDeal(id, dto, user);
   }
 
   @Get(':id')

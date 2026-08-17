@@ -18,6 +18,7 @@ describe('QuotesService', () => {
       'quotes:create',
       'quotes:read',
       'quotes:update',
+      'quotes:client_accept',
       'calculations:read',
     ],
   };
@@ -29,6 +30,7 @@ describe('QuotesService', () => {
       'quotes:read',
       'quotes:read_all',
       'quotes:update',
+      'quotes:client_accept',
       'calculations:read',
     ],
   };
@@ -736,5 +738,117 @@ describe('QuotesService', () => {
         statusCode: HttpStatus.CONFLICT,
       }),
     });
+  });
+
+  it('records client acceptance by the owning Manager after HEAD approval', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.APPROVED,
+      clientAcceptedAt: null,
+      clientAcceptedById: null,
+      items: [],
+    });
+    prisma.panelQuote.updateMany.mockResolvedValue({ count: 1 });
+    prisma.panelQuote.findUniqueOrThrow.mockResolvedValue({
+      id: 'quote-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.APPROVED,
+      clientAcceptedAt: new Date('2026-08-17T10:00:00.000Z'),
+      clientAcceptedById: 'manager-id',
+      items: [],
+    });
+
+    const result = await service.recordClientAcceptance('quote-id', manager);
+
+    expect(result.clientAcceptedById).toBe('manager-id');
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: 'QUOTE_CLIENT_ACCEPTED',
+          entityType: 'PanelQuote',
+          entityId: 'quote-id',
+          userId: 'manager-id',
+        }),
+      }),
+    );
+  });
+
+  it('rejects client acceptance when the Quote is not internally approved', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.SENT,
+      clientAcceptedAt: null,
+      items: [],
+    });
+
+    await expect(
+      service.recordClientAcceptance('quote-id', manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'QUOTE_NOT_APPROVED',
+      }),
+    });
+    expect(prisma.panelQuote.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects client acceptance by a foreign Manager', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      leadId: 'lead-id',
+      managerId: 'other-manager',
+      status: QUOTE_STATUS.APPROVED,
+      clientAcceptedAt: null,
+      items: [],
+    });
+
+    await expect(
+      service.recordClientAcceptance('quote-id', manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'QUOTE_CLIENT_ACCEPT_FORBIDDEN',
+      }),
+    });
+  });
+
+  it('does not treat HEAD quotes:read_all as customer-contact acceptance', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.APPROVED,
+      clientAcceptedAt: null,
+      items: [],
+    });
+
+    await expect(
+      service.recordClientAcceptance('quote-id', head),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'QUOTE_CLIENT_ACCEPT_FORBIDDEN',
+      }),
+    });
+  });
+
+  it('is idempotent on repeat client acceptance and does not duplicate audit', async () => {
+    const accepted = {
+      id: 'quote-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.APPROVED,
+      clientAcceptedAt: new Date('2026-08-17T10:00:00.000Z'),
+      clientAcceptedById: 'manager-id',
+      items: [],
+    };
+    prisma.panelQuote.findUnique.mockResolvedValue(accepted);
+
+    const result = await service.recordClientAcceptance('quote-id', manager);
+
+    expect(result.clientAcceptedAt).toEqual(accepted.clientAcceptedAt);
+    expect(prisma.panelQuote.updateMany).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 });

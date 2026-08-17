@@ -17,7 +17,6 @@ import {
   TaskType,
 } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
-import { SupplierOrdersService } from '../supplier-orders/supplier-orders.service';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import {
   hasRole,
@@ -67,14 +66,20 @@ const dealDetailsInclude = Prisma.validator<Prisma.DealInclude>()({
     orderBy: { createdAt: 'desc' },
   },
   order: true,
-  supplierOrder: {
+  supplierOrders: {
     select: {
       id: true,
       status: true,
       estimatedDate: true,
       trackingNumber: true,
       supplierId: true,
+      orderedAt: true,
+      expectedReadyAt: true,
+      expectedShipmentAt: true,
+      expectedArrivalAt: true,
+      readyConfirmedAt: true,
     },
+    orderBy: { createdAt: 'asc' },
   },
   panelQuotes: {
     select: { id: true },
@@ -132,7 +137,6 @@ export class DealsService {
     private readonly prisma: PrismaService,
     private readonly dealPolicy: DealPolicyService,
     private readonly pricingPolicy: PricingPolicyService,
-    private readonly supplierOrdersService: SupplierOrdersService,
   ) {}
 
   async create(
@@ -354,7 +358,6 @@ export class DealsService {
       include: {
         items: true,
         offers: true,
-        panelQuotes: { select: { id: true } },
       },
     });
 
@@ -475,23 +478,6 @@ export class DealsService {
         await this.updateDealNextActionAt(tx, id);
       }
 
-      if (
-        dto.newStage === DealStage.WON &&
-        deal.panelQuotes.length > 0
-      ) {
-        if (!deal.supplierId) {
-          throw new BadRequestException(
-            'Deal has no supplier for panel calculator order',
-          );
-        }
-
-        await this.supplierOrdersService.createFromDeal(
-          id,
-          deal.supplierId,
-          tx,
-        );
-      }
-
       const result = await tx.deal.findUnique({
         where: { id },
         include: dealDetailsInclude,
@@ -519,8 +505,9 @@ export class DealsService {
     const deal = await this.prisma.deal.findFirst({
       where: { id: dealId, deletedAt: null },
       include: {
-        supplierOrder: {
-          select: { id: true, status: true },
+        supplierOrders: {
+          select: { id: true, status: true, createdAt: true },
+          orderBy: { createdAt: 'desc' },
         },
         order: {
           select: { id: true, status: true },
@@ -534,11 +521,12 @@ export class DealsService {
 
     this.assertDealReadAccess(deal, user);
 
-    if (deal.supplierOrder) {
+    if (deal.supplierOrders.length > 0) {
+      const latest = deal.supplierOrders[0];
       return {
         source: 'SUPPLIER_ORDER',
-        status: deal.supplierOrder.status,
-        supplierOrderId: deal.supplierOrder.id,
+        status: latest.status,
+        supplierOrderId: latest.id,
         orderId: deal.order?.id ?? null,
       };
     }

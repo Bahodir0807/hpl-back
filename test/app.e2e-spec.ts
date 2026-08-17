@@ -41,6 +41,8 @@ import { InventoryService } from './../src/modules/inventory/inventory.service';
 import { SHIPMENT_PAYMENT_NOT_CONFIRMED_MESSAGE } from './../src/modules/orders/services/shipment-payment.policy';
 import { PrismaService } from './../src/modules/prisma/prisma.service';
 import { TasksCronService } from './../src/modules/tasks/tasks-cron.service';
+import { SupplierOrdersService } from './../src/modules/supplier-orders/supplier-orders.service';
+import { SUPPLIER_ORDER_REMINDER_TYPE } from './../src/modules/supplier-orders/supplier-order.constants';
 
 type AuthTokens = {
   accessToken: string;
@@ -113,6 +115,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
   let server: App;
   let prisma: PrismaService;
   let tasksCronService: TasksCronService;
+  let supplierOrdersService: SupplierOrdersService;
   let context: TestContext;
 
   beforeAll(async () => {
@@ -143,6 +146,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     server = app.getHttpServer();
     prisma = app.get(PrismaService);
     tasksCronService = app.get(TasksCronService);
+    supplierOrdersService = app.get(SupplierOrdersService);
     context = await seedAcceptanceData(prisma, server);
   });
 
@@ -1923,7 +1927,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(delivered.deliveredQuantity).toBeCloseTo(orderItem.quantity, 5);
   });
 
-  it('P0-B denies supplier-order DELIVERED when client order is UNPAID', async () => {
+  it('P0-B denies supplier-order SHIPPED when client order is UNPAID', async () => {
     const order = await createWonOrder();
     const supplier = await prisma.supplier.findUniqueOrThrow({
       where: { code: `QA-SUP-${RUN_ID}` },
@@ -1936,10 +1940,21 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       },
     });
 
-    const response = await request(server)
+    await request(server)
       .patch(`/supplier-orders/${supplierOrder.id}/status`)
       .set(authHeader(context.managerToken))
-      .send({ status: SupplierOrderStatus.DELIVERED })
+      .send({ status: SupplierOrderStatus.SHIPPED })
+      .expect(403);
+
+    await request(server)
+      .post(`/supplier-orders/${supplierOrder.id}/confirm-ready`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+
+    const response = await request(server)
+      .patch(`/supplier-orders/${supplierOrder.id}/status`)
+      .set(authHeader(context.headToken))
+      .send({ status: SupplierOrderStatus.SHIPPED })
       .expect(409);
 
     expect(response.body).toEqual(
@@ -1951,7 +1966,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const unchanged = await prisma.supplierOrder.findUniqueOrThrow({
       where: { id: supplierOrder.id },
     });
-    expect(unchanged.status).toBe(SupplierOrderStatus.DRAFT);
+    expect(unchanged.status).toBe(SupplierOrderStatus.READY_FOR_SHIPMENT);
   });
 
   it('P0-C does not write off stock for unpaid orders via inventory receive', async () => {
@@ -4652,6 +4667,521 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       })
       .expect(403);
   });
+
+  it('BP5 records client acceptance separately from HEAD Quote approval', async () => {
+    const quoteId = await createApprovedPanelQuote();
+
+    const accepted = await request(server)
+      .post(`/quotes/${quoteId}/client-accept`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    const body = bodyAs<{
+      clientAcceptedAt: string;
+      clientAcceptedById: string;
+      status: string;
+    }>(accepted);
+    expect(body.status).toBe('approved');
+    expect(body.clientAcceptedById).toBe(context.managerId);
+    expect(body.clientAcceptedAt).toBeTruthy();
+
+    const stored = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: quoteId },
+    });
+    expect(stored.clientAcceptedById).toBe(context.managerId);
+    expect(stored.clientAcceptedAt).not.toBeNull();
+
+    const audit = await prisma.auditLog.findMany({
+      where: { action: 'QUOTE_CLIENT_ACCEPTED', entityId: quoteId },
+    });
+    expect(audit).toHaveLength(1);
+    expect(audit[0].userId).toBe(context.managerId);
+  });
+
+  it('BP5 rejects client acceptance when Quote is not internally approved', async () => {
+    const quoteId = await createSentPanelQuote();
+
+    await request(server)
+      .post(`/quotes/${quoteId}/client-accept`)
+      .set(authHeader(context.managerToken))
+      .expect(409);
+
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.managerToken))
+      .send({ status: 'rejected', rejectionReason: 'Client declined' })
+      .expect(200);
+
+    await request(server)
+      .post(`/quotes/${quoteId}/client-accept`)
+      .set(authHeader(context.managerToken))
+      .expect(409);
+  });
+
+  it('BP5 forbids a foreign Manager from recording client acceptance', async () => {
+    const quoteId = await createApprovedPanelQuote();
+    const passwordHash = await hash(TEST_PASSWORD, 12);
+    await upsertUser(prisma, {
+      email: `bp5-foreign-manager-${RUN_ID}@hpl.test`,
+      firstName: 'Foreign',
+      lastName: 'Manager',
+      passwordHash,
+      roleName: RoleName.MANAGER,
+    });
+    const foreign = await login(server, `bp5-foreign-manager-${RUN_ID}@hpl.test`);
+
+    await request(server)
+      .post(`/quotes/${quoteId}/client-accept`)
+      .set(authHeader(foreign.accessToken))
+      .expect(403);
+
+    await request(server)
+      .post(`/quotes/${quoteId}/client-accept`)
+      .set(authHeader(context.headToken))
+      .expect(403);
+  });
+
+  it('BP5 client acceptance is idempotent and ignores actor/timestamp injection', async () => {
+    const quoteId = await createApprovedPanelQuote();
+    const injectedAt = '2020-01-01T00:00:00.000Z';
+
+    const first = await request(server)
+      .post(`/quotes/${quoteId}/client-accept`)
+      .set(authHeader(context.managerToken))
+      .send({
+        clientAcceptedAt: injectedAt,
+        clientAcceptedById: context.headId,
+      })
+      .expect(200);
+
+    const firstBody = bodyAs<{
+      clientAcceptedAt: string;
+      clientAcceptedById: string;
+    }>(first);
+    expect(firstBody.clientAcceptedById).toBe(context.managerId);
+    expect(firstBody.clientAcceptedAt).not.toBe(injectedAt);
+
+    await request(server)
+      .post(`/quotes/${quoteId}/client-accept`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    const audits = await prisma.auditLog.findMany({
+      where: { action: 'QUOTE_CLIENT_ACCEPTED', entityId: quoteId },
+    });
+    expect(audits).toHaveLength(1);
+  });
+
+  it('BP5 lets HEAD and DIRECTOR create SupplierOrders after client acceptance', async () => {
+    const first = await createClientAcceptedHplDeal();
+    const payload = {
+      supplierId: first.supplierId,
+      orderedAt: '2026-08-17T00:00:00.000Z',
+      expectedReadyAt: '2026-08-20T00:00:00.000Z',
+      expectedShipmentAt: '2026-08-21T00:00:00.000Z',
+      expectedArrivalAt: '2026-08-28T00:00:00.000Z',
+      comment: 'First factory batch',
+    };
+
+    const createdByHead = await request(server)
+      .post(`/deals/${first.dealId}/supplier-orders`)
+      .set(authHeader(context.headToken))
+      .send(payload)
+      .expect(201);
+    expect(bodyAs<{ createdById: string; dealId: string }>(createdByHead).createdById).toBe(
+      context.headId,
+    );
+
+    const tianran = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'tianran' },
+    });
+    const createdByDirector = await request(server)
+      .post(`/deals/${first.dealId}/supplier-orders`)
+      .set(authHeader(context.directorToken))
+      .send({
+        ...payload,
+        supplierId: tianran.id,
+        comment: 'Second factory batch',
+      })
+      .expect(201);
+    expect(
+      bodyAs<{ createdById: string }>(createdByDirector).createdById,
+    ).toBe(context.directorId);
+
+    const listed = await request(server)
+      .get(`/deals/${first.dealId}/supplier-orders`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    expect(bodyAs<EntityResponse[]>(listed)).toHaveLength(2);
+
+    const headAdmin = await loginDualRole('bp5-head-admin', [
+      RoleName.HEAD,
+      RoleName.ADMIN,
+    ]);
+    const directorAdmin = await loginDualRole('bp5-director-admin', [
+      RoleName.DIRECTOR,
+      RoleName.ADMIN,
+    ]);
+    const second = await createClientAcceptedHplDeal();
+    await request(server)
+      .post(`/deals/${second.dealId}/supplier-orders`)
+      .set(authHeader(headAdmin.token))
+      .send(payload)
+      .expect(201);
+    await request(server)
+      .post(`/deals/${second.dealId}/supplier-orders`)
+      .set(authHeader(directorAdmin.token))
+      .send({ ...payload, supplierId: tianran.id })
+      .expect(201);
+  });
+
+  it('BP5 forbids non-authority roles from creating SupplierOrders', async () => {
+    const { dealId, supplierId } = await createClientAcceptedHplDeal();
+    const payload = {
+      supplierId,
+      orderedAt: '2026-08-17T00:00:00.000Z',
+      expectedReadyAt: '2026-08-20T00:00:00.000Z',
+    };
+
+    await request(server)
+      .post(`/deals/${dealId}/supplier-orders`)
+      .set(authHeader(context.adminToken))
+      .send(payload)
+      .expect(403);
+    await request(server)
+      .post(`/deals/${dealId}/supplier-orders`)
+      .set(authHeader(context.managerToken))
+      .send(payload)
+      .expect(403);
+    await request(server)
+      .post(`/deals/${dealId}/supplier-orders`)
+      .set(authHeader(context.accountantToken))
+      .send(payload)
+      .expect(403);
+    await request(server)
+      .post(`/deals/${dealId}/supplier-orders`)
+      .set(authHeader(context.storekeeperToken))
+      .send(payload)
+      .expect(403);
+    await request(server)
+      .post(`/deals/${dealId}/supplier-orders`)
+      .set(authHeader(context.installerToken))
+      .send(payload)
+      .expect(403);
+  });
+
+  it('BP5 rejects SupplierOrder create without client acceptance and does not auto-create on WON', async () => {
+    const quoteId = await createApprovedPanelQuote();
+    const conversion = await request(server)
+      .post(`/quotes/${quoteId}/convert-to-deal`)
+      .set(authHeader(context.managerToken))
+      .expect(201);
+    const dealId = bodyAs<{ dealId: string }>(conversion).dealId;
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+
+    await request(server)
+      .post(`/deals/${dealId}/supplier-orders`)
+      .set(authHeader(context.headToken))
+      .send({
+        supplierId: supplier.id,
+        orderedAt: '2026-08-17T00:00:00.000Z',
+        expectedReadyAt: '2026-08-20T00:00:00.000Z',
+      })
+      .expect(409);
+
+    await prisma.deal.update({
+      where: { id: dealId },
+      data: { stage: DealStage.WON },
+    });
+    expect(
+      await prisma.supplierOrder.count({ where: { dealId } }),
+    ).toBe(0);
+
+    await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId })
+      .expect(201);
+    expect(
+      await prisma.supplierOrder.count({ where: { dealId } }),
+    ).toBe(0);
+  });
+
+  it('BP5 drives readiness reminders and stops them after ready confirmation', async () => {
+    const { dealId, supplierId } = await createClientAcceptedHplDeal();
+    const expectedReadyAt = new Date('2026-08-19T12:00:00.000Z');
+    const created = await request(server)
+      .post(`/deals/${dealId}/supplier-orders`)
+      .set(authHeader(context.headToken))
+      .send({
+        supplierId,
+        orderedAt: '2026-08-16T12:00:00.000Z',
+        expectedReadyAt: expectedReadyAt.toISOString(),
+      })
+      .expect(201);
+    const supplierOrderId = bodyAs<EntityResponse>(created).id;
+
+    const headAdmin = await loginDualRole('bp5-ready-head-admin', [
+      RoleName.HEAD,
+      RoleName.ADMIN,
+    ]);
+    const directorAdmin = await loginDualRole('bp5-ready-director-admin', [
+      RoleName.DIRECTOR,
+      RoleName.ADMIN,
+    ]);
+    const headAdminUser = await prisma.user.findUniqueOrThrow({
+      where: { email: headAdmin.email },
+      select: { id: true },
+    });
+    const directorAdminUser = await prisma.user.findUniqueOrThrow({
+      where: { email: directorAdmin.email },
+      select: { id: true },
+    });
+    const adminUser = await prisma.user.findUniqueOrThrow({
+      where: { email: `admin-${RUN_ID}@hpl.test` },
+      select: { id: true },
+    });
+
+    const reminderWhere = {
+      relatedType: 'SupplierOrder',
+      relatedId: supplierOrderId,
+    };
+
+    await supplierOrdersService.processReadinessReminders(
+      new Date('2026-08-17T08:00:00.000Z'),
+    );
+    await supplierOrdersService.processReadinessReminders(
+      new Date('2026-08-17T18:00:00.000Z'),
+    );
+    const soft = await prisma.notification.findMany({
+      where: { ...reminderWhere, type: SUPPLIER_ORDER_REMINDER_TYPE.SOFT },
+    });
+    const softRecipients = new Set(soft.map((item) => item.userId));
+    expect(softRecipients.has(context.headId)).toBe(true);
+    expect(softRecipients.has(context.directorId)).toBe(true);
+    expect(softRecipients.has(headAdminUser.id)).toBe(true);
+    expect(softRecipients.has(directorAdminUser.id)).toBe(true);
+    expect(softRecipients.has(context.managerId)).toBe(false);
+    expect(softRecipients.has(adminUser.id)).toBe(false);
+    expect(soft.filter((item) => item.userId === context.headId)).toHaveLength(
+      1,
+    );
+
+    await supplierOrdersService.processReadinessReminders(
+      new Date('2026-08-19T08:00:00.000Z'),
+    );
+    await supplierOrdersService.processReadinessReminders(
+      new Date('2026-08-19T18:00:00.000Z'),
+    );
+    expect(
+      await prisma.notification.count({
+        where: { ...reminderWhere, type: SUPPLIER_ORDER_REMINDER_TYPE.DUE },
+      }),
+    ).toBe(soft.length);
+
+    await supplierOrdersService.processReadinessReminders(
+      new Date('2026-08-20T08:00:00.000Z'),
+    );
+    await supplierOrdersService.processReadinessReminders(
+      new Date('2026-08-20T18:00:00.000Z'),
+    );
+    const overdueDayOne = await prisma.notification.count({
+      where: { ...reminderWhere, type: SUPPLIER_ORDER_REMINDER_TYPE.OVERDUE },
+    });
+    expect(overdueDayOne).toBe(soft.length);
+
+    await supplierOrdersService.processReadinessReminders(
+      new Date('2026-08-21T08:00:00.000Z'),
+    );
+    expect(
+      await prisma.notification.count({
+        where: { ...reminderWhere, type: SUPPLIER_ORDER_REMINDER_TYPE.OVERDUE },
+      }),
+    ).toBe(overdueDayOne + soft.length);
+
+    await request(server)
+      .post(`/supplier-orders/${supplierOrderId}/confirm-ready`)
+      .set(authHeader(context.directorToken))
+      .expect(200);
+    await request(server)
+      .post(`/supplier-orders/${supplierOrderId}/confirm-ready`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+
+    const readyAudits = await prisma.auditLog.findMany({
+      where: {
+        action: 'SUPPLIER_ORDER_READY_CONFIRMED',
+        entityId: supplierOrderId,
+      },
+    });
+    expect(readyAudits).toHaveLength(1);
+
+    const afterConfirm = await prisma.notification.count({
+      where: reminderWhere,
+    });
+    await supplierOrdersService.processReadinessReminders(
+      new Date('2026-08-22T08:00:00.000Z'),
+    );
+    expect(await prisma.notification.count({ where: reminderWhere })).toBe(
+      afterConfirm,
+    );
+
+    const followOn = await createClientAcceptedHplDeal();
+    const rescheduled = await request(server)
+      .post(`/deals/${followOn.dealId}/supplier-orders`)
+      .set(authHeader(context.headToken))
+      .send({
+        supplierId,
+        orderedAt: '2026-08-16T12:00:00.000Z',
+        expectedReadyAt: '2026-08-19T12:00:00.000Z',
+      })
+      .expect(201);
+    const rescheduledId = bodyAs<EntityResponse>(rescheduled).id;
+    await supplierOrdersService.processReadinessReminders(
+      new Date('2026-08-17T08:00:00.000Z'),
+    );
+    await request(server)
+      .patch(`/supplier-orders/${rescheduledId}/dates`)
+      .set(authHeader(context.headToken))
+      .send({ expectedReadyAt: '2026-08-25T12:00:00.000Z' })
+      .expect(200);
+    await supplierOrdersService.processReadinessReminders(
+      new Date('2026-08-17T12:00:00.000Z'),
+    );
+    expect(
+      await prisma.notification.count({
+        where: {
+          relatedType: 'SupplierOrder',
+          relatedId: rescheduledId,
+          type: SUPPLIER_ORDER_REMINDER_TYPE.SOFT,
+        },
+      }),
+    ).toBe(soft.length);
+    await supplierOrdersService.processReadinessReminders(
+      new Date('2026-08-23T08:00:00.000Z'),
+    );
+    expect(
+      await prisma.notification.count({
+        where: {
+          relatedType: 'SupplierOrder',
+          relatedId: rescheduledId,
+          type: SUPPLIER_ORDER_REMINDER_TYPE.SOFT,
+        },
+      }),
+    ).toBe(soft.length * 2);
+  });
+
+  it('BP5 keeps PAID as the shipment gate after SupplierOrder exists', async () => {
+    const { dealId, supplierId } = await createClientAcceptedHplDeal();
+    const created = await request(server)
+      .post(`/deals/${dealId}/supplier-orders`)
+      .set(authHeader(context.headToken))
+      .send({
+        supplierId,
+        orderedAt: '2026-08-17T00:00:00.000Z',
+        expectedReadyAt: '2026-08-20T00:00:00.000Z',
+      })
+      .expect(201);
+    const supplierOrderId = bodyAs<EntityResponse>(created).id;
+
+    await prisma.deal.update({
+      where: { id: dealId },
+      data: { stage: DealStage.WON },
+    });
+    const orderResponse = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId })
+      .expect(201);
+    const order = bodyAs<OrderResponse>(orderResponse);
+
+    await request(server)
+      .post(`/supplier-orders/${supplierOrderId}/confirm-ready`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+
+    await request(server)
+      .patch(`/supplier-orders/${supplierOrderId}/status`)
+      .set(authHeader(context.headToken))
+      .send({ status: SupplierOrderStatus.SHIPPED })
+      .expect(409);
+
+    const half = Number(order.totalAmount) / 2;
+    const partial = await createPayment(order.id, half);
+    await request(server)
+      .patch(`/orders/payments/${partial.id}/confirm`)
+      .set(authHeader(context.accountantToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(200);
+    await request(server)
+      .patch(`/supplier-orders/${supplierOrderId}/status`)
+      .set(authHeader(context.headToken))
+      .send({ status: SupplierOrderStatus.SHIPPED })
+      .expect(409);
+
+    const afterPartial = await prisma.order.findUniqueOrThrow({
+      where: { id: order.id },
+    });
+    const rest = await createPayment(
+      order.id,
+      Number(afterPartial.remainingAmount),
+    );
+    await request(server)
+      .patch(`/orders/payments/${rest.id}/confirm`)
+      .set(authHeader(context.accountantToken))
+      .send({ status: PaymentRecordStatus.CONFIRMED })
+      .expect(200);
+
+    await request(server)
+      .patch(`/supplier-orders/${supplierOrderId}/status`)
+      .set(authHeader(context.adminToken))
+      .send({ status: SupplierOrderStatus.SHIPPED })
+      .expect(403);
+    await request(server)
+      .patch(`/supplier-orders/${supplierOrderId}/status`)
+      .set(authHeader(context.managerToken))
+      .send({ status: SupplierOrderStatus.SHIPPED })
+      .expect(403);
+    await request(server)
+      .patch(`/supplier-orders/${supplierOrderId}/status`)
+      .set(authHeader(context.accountantToken))
+      .send({ status: SupplierOrderStatus.SHIPPED })
+      .expect(403);
+
+    await request(server)
+      .patch(`/supplier-orders/${supplierOrderId}/status`)
+      .set(authHeader(context.headToken))
+      .send({ status: SupplierOrderStatus.SHIPPED })
+      .expect(200);
+    await request(server)
+      .patch(`/supplier-orders/${supplierOrderId}/status`)
+      .set(authHeader(context.directorToken))
+      .send({ status: SupplierOrderStatus.DELIVERED })
+      .expect(200);
+  });
+
+  async function createClientAcceptedHplDeal(): Promise<{
+    quoteId: string;
+    dealId: string;
+    supplierId: string;
+  }> {
+    const quoteId = await createApprovedPanelQuote();
+    await request(server)
+      .post(`/quotes/${quoteId}/client-accept`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    const conversion = await request(server)
+      .post(`/quotes/${quoteId}/convert-to-deal`)
+      .set(authHeader(context.managerToken))
+      .expect(201);
+    const dealId = bodyAs<{ dealId: string }>(conversion).dealId;
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    return { quoteId, dealId, supplierId: supplier.id };
+  }
 
   async function loginDualRole(
     label: string,
