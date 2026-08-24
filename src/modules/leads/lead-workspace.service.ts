@@ -142,7 +142,9 @@ export class LeadWorkspaceService {
         include: {
           qualityMappings: {
             include: {
-              panelType: { select: { id: true, code: true, displayNameRu: true } },
+              panelType: {
+                select: { id: true, code: true, displayNameRu: true },
+              },
               qualityClass: { select: { id: true, code: true, nameRu: true } },
             },
             orderBy: { qualityClass: { code: 'asc' } },
@@ -173,7 +175,9 @@ export class LeadWorkspaceService {
       qualification: lead.qualification
         ? {
             ...lead.qualification,
-            requiredAreaM2: lead.qualification.requiredAreaM2?.toString() ?? null,
+            requiredAreaM2:
+              lead.qualification.requiredAreaM2?.toString() ?? null,
+            thicknessMm: lead.qualification.thicknessMm?.toString() ?? null,
             panelSize: lead.qualification.panelSize
               ? {
                   ...lead.qualification.panelSize,

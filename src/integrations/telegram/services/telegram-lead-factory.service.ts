@@ -256,7 +256,9 @@ export class TelegramLeadFactory {
   }
 
   private async getPoolUser() {
-    const email = this.configService.get('LEAD_POOL_USER_EMAIL', { infer: true });
+    const email = this.configService.get('LEAD_POOL_USER_EMAIL', {
+      infer: true,
+    });
 
     return this.prisma.user.findUniqueOrThrow({
       where: { email },
@@ -297,11 +299,7 @@ export class TelegramLeadFactory {
       'fasad',
       'фасад',
     ]);
-    const laboratoryAliases = new Set([
-      'laboratory',
-      'лабораторные',
-      'lab',
-    ]);
+    const laboratoryAliases = new Set(['laboratory', 'лабораторные', 'lab']);
 
     let application: HplApplication | null = null;
     let panelTypeCode: string | null = null;
@@ -310,10 +308,18 @@ export class TelegramLeadFactory {
       application = HplApplication.INTERIOR;
       panelTypeCode = 'interior';
     } else if (exteriorAliases.has(normalized)) {
-      application = HplApplication.EXTERIOR;
-      panelTypeCode = 'exterior';
+      application = HplApplication.EXTERIOR_WITH_UV;
+      panelTypeCode = 'exterior_with_uv';
     } else if (laboratoryAliases.has(normalized)) {
+      application = HplApplication.LABORATORY;
       panelTypeCode = 'laboratory';
+    } else if (
+      normalized === 'furniture' ||
+      normalized === 'мебельный' ||
+      normalized === 'мебель'
+    ) {
+      application = HplApplication.FURNITURE;
+      panelTypeCode = 'furniture';
     } else {
       return null;
     }

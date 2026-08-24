@@ -48,4 +48,27 @@ describe('PurchasePriceInterceptor', () => {
         done();
       });
   });
+
+  it('strips manual purchasePricePerM2Cny from calculation preview for MANAGER', (done) => {
+    interceptor
+      .intercept(
+        createContext({ permissions: ['calculations:create'] } as CurrentUser),
+        {
+          handle: () =>
+            of({
+              sheetsCount: 359,
+              purchasePricePerM2Cny: '80',
+              supplierPricePerM2: '80',
+              total: '240.00',
+            }),
+        },
+      )
+      .subscribe((payload) => {
+        expect(payload).toEqual({
+          sheetsCount: 359,
+          total: '240.00',
+        });
+        done();
+      });
+  });
 });

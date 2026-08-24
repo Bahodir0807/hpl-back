@@ -1,23 +1,24 @@
 import { Type } from 'class-transformer';
 import {
-  IsDate,
   IsNumber,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   Min,
 } from 'class-validator';
+import { QuoteClientFacingTermsDto } from './quote-client-facing-terms.dto';
 
-export class ConvertCalculationToQuoteDto {
+export class ConvertCalculationToQuoteDto extends QuoteClientFacingTermsDto {
+  /** Required when converting a manager CalculationRequest; ignored for legacy priced calculations. */
+  @IsOptional()
+  @IsUUID()
+  supplierId?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(2000)
   clientComment?: string;
-
-  @IsOptional()
-  @Type(() => Date)
-  @IsDate()
-  validUntil?: Date;
 
   @IsOptional()
   @Type(() => Number)

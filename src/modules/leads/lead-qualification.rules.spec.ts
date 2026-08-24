@@ -7,7 +7,7 @@ import {
 
 describe('Stage-1 qualification rules', () => {
   const complete = {
-    application: HplApplication.EXTERIOR,
+    application: HplApplication.EXTERIOR_WITH_UV,
     thicknessMm: 10,
     panelSizeId: 'size-1',
     customWidthMm: null,

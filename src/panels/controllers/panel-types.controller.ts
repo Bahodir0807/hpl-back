@@ -14,7 +14,11 @@ export class PanelTypesController {
 
   @Get()
   @RequirePermissions('panel_catalog:read')
-  @ApiOperation({ summary: 'List active panel types' })
+  @ApiOperation({
+    summary: 'List active panel types',
+    description:
+      'Canonical fields: id, code, displayNameRu. code is one of interior, exterior_with_uv, laboratory, furniture.',
+  })
   findAll() {
     return this.prisma.panelType.findMany({
       where: { isActive: true },

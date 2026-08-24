@@ -1,5 +1,6 @@
-import { Transform } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsDate,
   IsOptional,
   IsString,
   IsUUID,
@@ -29,9 +30,7 @@ export const FORBIDDEN_STAGE2_PRICING_KEYS = [
   name: 'noStage2PricingFields',
   async: false,
 })
-export class NoStage2PricingFieldsConstraint
-  implements ValidatorConstraintInterface
-{
+export class NoStage2PricingFieldsConstraint implements ValidatorConstraintInterface {
   validate(_: unknown, args: ValidationArguments): boolean {
     const obj = args.object as Record<string, unknown>;
     return FORBIDDEN_STAGE2_PRICING_KEYS.every((key) => obj[key] === undefined);
@@ -51,6 +50,11 @@ export class UpsertLeadCommercialQualificationDto {
 
   @IsUUID()
   qualityClassId!: string;
+
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  targetDate?: Date;
 
   @IsOptional()
   @IsString()

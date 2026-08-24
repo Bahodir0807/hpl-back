@@ -38,15 +38,14 @@ describe('role-assignment policy', () => {
     ).not.toThrow();
   });
 
-  it.each([
-    RoleName.DIRECTOR,
-    RoleName.HEAD,
-    RoleName.ACCOUNTANT,
-  ] as const)('forbids ADMIN from assigning %s', (role) => {
-    expect(() => assertCreatableRoleNames(admin, [role])).toThrow(
-      ForbiddenException,
-    );
-  });
+  it.each([RoleName.DIRECTOR, RoleName.HEAD, RoleName.ACCOUNTANT] as const)(
+    'forbids ADMIN from assigning %s',
+    (role) => {
+      expect(() => assertCreatableRoleNames(admin, [role])).toThrow(
+        ForbiddenException,
+      );
+    },
+  );
 
   it('forbids mixed payloads that include a protected business role', () => {
     expect(() =>
@@ -67,26 +66,25 @@ describe('role-assignment policy', () => {
     }
   });
 
-  it.each([
-    RoleName.DIRECTOR,
-    RoleName.HEAD,
-    RoleName.ACCOUNTANT,
-  ] as const)('forbids administrative password reset of %s', (role) => {
-    expect(() => assertAdministrativePasswordResetAllowed([role])).toThrow(
-      BusinessException,
-    );
-    try {
-      assertAdministrativePasswordResetAllowed([role]);
-    } catch (error) {
-      expect(error).toBeInstanceOf(BusinessException);
-      expect((error as BusinessException).getResponse()).toEqual(
-        expect.objectContaining({
-          errorCode: PROTECTED_BUSINESS_ACCOUNT_ERROR,
-          statusCode: 403,
-        }),
+  it.each([RoleName.DIRECTOR, RoleName.HEAD, RoleName.ACCOUNTANT] as const)(
+    'forbids administrative password reset of %s',
+    (role) => {
+      expect(() => assertAdministrativePasswordResetAllowed([role])).toThrow(
+        BusinessException,
       );
-    }
-  });
+      try {
+        assertAdministrativePasswordResetAllowed([role]);
+      } catch (error) {
+        expect(error).toBeInstanceOf(BusinessException);
+        expect((error as BusinessException).getResponse()).toEqual(
+          expect.objectContaining({
+            errorCode: PROTECTED_BUSINESS_ACCOUNT_ERROR,
+            statusCode: 403,
+          }),
+        );
+      }
+    },
+  );
 
   it('allows administrative password reset of technical/operational roles', () => {
     expect(() =>

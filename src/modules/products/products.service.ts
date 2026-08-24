@@ -139,35 +139,31 @@ export class ProductsService {
       status: ProductStatus.ACTIVE,
     };
 
-    const [
-      collectionGroups,
-      thicknessGroups,
-      surfaceGroups,
-      brandGroups,
-    ] = await Promise.all([
-      this.prisma.product.groupBy({
-        by: ['collectionId'],
-        where: { ...activeWhere, collectionId: { not: null } },
-        _count: { _all: true },
-      }),
-      this.prisma.product.groupBy({
-        by: ['thickness'],
-        where: activeWhere,
-        _count: { _all: true },
-        orderBy: { thickness: 'asc' },
-      }),
-      this.prisma.product.groupBy({
-        by: ['surface'],
-        where: { ...activeWhere, surface: { not: null } },
-        _count: { _all: true },
-        orderBy: { surface: 'asc' },
-      }),
-      this.prisma.product.groupBy({
-        by: ['brandId'],
-        where: activeWhere,
-        _count: { _all: true },
-      }),
-    ]);
+    const [collectionGroups, thicknessGroups, surfaceGroups, brandGroups] =
+      await Promise.all([
+        this.prisma.product.groupBy({
+          by: ['collectionId'],
+          where: { ...activeWhere, collectionId: { not: null } },
+          _count: { _all: true },
+        }),
+        this.prisma.product.groupBy({
+          by: ['thickness'],
+          where: activeWhere,
+          _count: { _all: true },
+          orderBy: { thickness: 'asc' },
+        }),
+        this.prisma.product.groupBy({
+          by: ['surface'],
+          where: { ...activeWhere, surface: { not: null } },
+          _count: { _all: true },
+          orderBy: { surface: 'asc' },
+        }),
+        this.prisma.product.groupBy({
+          by: ['brandId'],
+          where: activeWhere,
+          _count: { _all: true },
+        }),
+      ]);
 
     const collectionIds = collectionGroups
       .map((group) => group.collectionId)

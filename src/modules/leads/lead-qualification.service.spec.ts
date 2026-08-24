@@ -1,5 +1,9 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
-import { HplApplication } from '@prisma/client';
+import {
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import { HplApplication, LeadStatus } from '@prisma/client';
 import { UpsertLeadQualificationDto } from './dto/upsert-lead-qualification.dto';
 import { LeadQualificationService } from './lead-qualification.service';
 
@@ -18,6 +22,7 @@ describe('LeadQualificationService', () => {
     id: 'lead-a',
     ownerId: 'manager-a',
     deletedAt: null,
+    status: LeadStatus.QUALIFICATION,
   };
 
   let service: LeadQualificationService;
@@ -89,6 +94,41 @@ describe('LeadQualificationService', () => {
       service.get('missing', 'manager-a', ['leads:read']),
     ).rejects.toBeInstanceOf(NotFoundException);
   });
+
+  it.each([
+    [{ stockOnly: false }, { stockOnly: true, installationRequired: true }],
+    [
+      { installationRequired: false },
+      { stockOnly: true, installationRequired: true },
+    ],
+    [
+      { installationRequired: true },
+      { stockOnly: false, installationRequired: false },
+    ],
+  ])(
+    'rejects fulfillment-critical changes after Deal commitment',
+    async (dto, current) => {
+      const tx = {
+        lead: {
+          update: jest.fn().mockResolvedValue({}),
+          findUnique: jest.fn().mockResolvedValue({
+            dealId: 'deal-id',
+            status: LeadStatus.CONVERTED,
+          }),
+        },
+        leadQualification: {
+          findUnique: jest.fn().mockResolvedValue(current),
+        },
+        panelQuote: { findFirst: jest.fn().mockResolvedValue(null) },
+      };
+      prisma.lead.findFirst.mockResolvedValue(ownedLead);
+      prisma.$transaction.mockImplementation(async (callback) => callback(tx));
+
+      await expect(
+        service.upsert('lead-a', dto, 'manager-a', ['leads:update']),
+      ).rejects.toBeInstanceOf(ConflictException);
+    },
+  );
 
   it('rejects inactive panel types', async () => {
     const tx = {

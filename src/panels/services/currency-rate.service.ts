@@ -11,9 +11,7 @@ import {
 export class CurrencyRateService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async getActiveCnyUsdRate(
-    at: Date = new Date(),
-  ): Promise<Prisma.Decimal> {
+  async getActiveCnyUsdRate(at: Date = new Date()): Promise<Prisma.Decimal> {
     const row = await this.prisma.currencyRate.findFirst({
       where: {
         fromCurrency: HPL_SOURCE_CURRENCY,
@@ -48,6 +46,11 @@ export class CurrencyRateService {
     const effectiveFrom = input.effectiveFrom ?? new Date();
 
     return this.prisma.$transaction(async (tx) => {
+      // Prevent two concurrent writers from both leaving an open-ended rate.
+      await tx.$queryRaw<Array<{ locked: boolean }>>`
+        SELECT pg_advisory_xact_lock(hashtext('currency-rate:CNY:USD')) IS NULL AS "locked"
+      `;
+
       await tx.currencyRate.updateMany({
         where: {
           fromCurrency: HPL_SOURCE_CURRENCY,

@@ -1,4 +1,4 @@
-import { Controller, Get, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, UseGuards } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -13,6 +13,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UsersService } from '../users/users.service';
 import { ReportFilterDto } from './dto/report-filter.dto';
 import { ReportsService } from './reports.service';
+import { UpsertSalesPlanDto } from './dto/upsert-sales-plan.dto';
 
 @ApiTags('Reports')
 @ApiBearerAuth()
@@ -34,6 +35,18 @@ export class ReportsController {
   ) {
     this.usersService.assertUserModuleAccess(user);
     return this.reportsService.getFunnel(filterDto);
+  }
+
+  @Get('overview')
+  @RequirePermissions('reports:read')
+  @ApiOperation({ summary: 'Get the bounded leadership operational overview' })
+  @ApiResponse({ status: 200, description: 'Operational overview returned' })
+  getOverview(
+    @Query() filterDto: ReportFilterDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    this.usersService.assertUserModuleAccess(user);
+    return this.reportsService.getOverview(filterDto);
   }
 
   @Get('overdues')
@@ -58,5 +71,17 @@ export class ReportsController {
   ) {
     this.usersService.assertUserModuleAccess(user);
     return this.reportsService.getKpi(filterDto);
+  }
+
+  @Post('sales-plans')
+  @RequirePermissions('reports:manage_plans')
+  @ApiOperation({
+    summary: 'Director upserts a currency-aware SalesPlan snapshot',
+  })
+  upsertSalesPlan(
+    @Body() dto: UpsertSalesPlanDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.reportsService.upsertSalesPlan(dto, user.id);
   }
 }

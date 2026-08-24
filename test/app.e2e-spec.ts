@@ -8,6 +8,7 @@ import {
   ClientSegment,
   ClientType,
   DealStage,
+  FulfillmentSource,
   OrderStatus,
   PaymentRecordStatus,
   PaymentStatus,
@@ -22,6 +23,7 @@ import {
   TaskType,
 } from '@prisma/client';
 import { hash } from 'bcryptjs';
+import JSZip from 'jszip';
 import request, { Response } from 'supertest';
 import { App } from 'supertest/types';
 import { AppModule } from './../src/app.module';
@@ -203,7 +205,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(task.dueDate.getTime()).toBeLessThanOrEqual(expectedMax);
   });
 
-  it('AT-03 enforces Stage-1 qualification and does not create a Deal', async () => {
+  it('AT-03 enforces Stage-1 qualification and creates exactly one Deal', async () => {
     const createResponse = await request(server)
       .post('/leads')
       .set(authHeader(context.managerToken))
@@ -221,8 +223,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         clientId: context.clientId,
         projectObjectId: context.projectObjectId,
         needDescription: 'HPL panels for lobby',
-        estimatedAmount: 125000,
-        targetDate: futureIso(20),
       })
       .expect(400);
 
@@ -233,8 +233,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         clientId: context.clientId,
         projectObjectId: context.projectObjectId,
         needDescription: 'HPL panels for lobby',
-        estimatedAmount: 125000,
-        targetDate: futureIso(20),
         decisionMakerContact: 'Chief architect',
       })
       .expect(400);
@@ -246,8 +244,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         clientId: context.clientId,
         projectObjectId: context.projectObjectId,
         needDescription: 'HPL panels for lobby',
-        estimatedAmount: 125000,
-        targetDate: futureIso(20),
         decisionMakerContact: 'Chief architect',
         qualification: await stage1QualificationPayload(prisma, {
           installationRequired: false,
@@ -257,18 +253,18 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const qualifiedLead = bodyAs<LeadResponse>(qualifyResponse);
 
     expect(qualifiedLead.status).toBe('QUALIFIED');
-    expect(qualifiedLead.dealId).toBeNull();
+    expect(qualifiedLead.dealId).toBeTruthy();
 
     const persisted = await prisma.lead.findUniqueOrThrow({
       where: { id: lead.id },
     });
     expect(persisted.status).toBe('QUALIFIED');
-    expect(persisted.dealId).toBeNull();
+    expect(persisted.dealId).toBe(qualifiedLead.dealId);
 
     const deals = await prisma.deal.findMany({
       where: { title: `Qualification lead ${RUN_ID}` },
     });
-    expect(deals).toHaveLength(0);
+    expect(deals).toHaveLength(1);
 
     const listed = await request(server)
       .get('/leads')
@@ -308,9 +304,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(200);
 
     expect(
-      bodyAs<{ qualification: { installationRequired: boolean | null } | null }>(
-        qualification,
-      ).qualification,
+      bodyAs<{
+        qualification: { installationRequired: boolean | null } | null;
+      }>(qualification).qualification,
     ).toBeNull();
 
     const created = await prisma.lead.findUniqueOrThrow({
@@ -340,7 +336,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     await request(server)
       .patch(`/leads/${leadId}/qualification`)
       .set(authHeader(context.managerToken))
-      .send({ application: 'EXTERIOR' })
+      .send({ application: 'EXTERIOR_WITH_UV' })
       .expect(200);
 
     const unknownInstallation = await request(server)
@@ -360,8 +356,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         clientId: context.clientId,
         projectObjectId: context.projectObjectId,
         needDescription: 'HPL for facade',
-        estimatedAmount: 125000,
-        targetDate: futureIso(20),
         decisionMakerContact: 'Chief architect',
       })
       .expect(400);
@@ -383,8 +377,8 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       customerRequirements: string;
     }>(saved);
 
-    expect(savedBody.application).toBe('EXTERIOR');
-    expect(savedBody.thicknessMm).toBe(10);
+    expect(savedBody.application).toBe('EXTERIOR_WITH_UV');
+    expect(savedBody.thicknessMm).toBe('10');
     expect(savedBody.colorCode).toBe('W100');
     expect(Number(savedBody.requiredAreaM2)).toBe(15.5);
     expect(savedBody.installationRequired).toBe(true);
@@ -420,8 +414,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         clientId: context.clientId,
         projectObjectId: context.projectObjectId,
         needDescription: 'HPL for lobby',
-        estimatedAmount: 125000,
-        targetDate: futureIso(20),
         decisionMakerContact: 'Chief architect',
         qualification: await stage1QualificationPayload(prisma, {
           installationRequired: false,
@@ -438,7 +430,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       where: { id: noInstallId },
     });
     expect(noInstallLeadRow.status).toBe('QUALIFIED');
-    expect(noInstallLeadRow.dealId).toBeNull();
+    expect(noInstallLeadRow.dealId).toBeTruthy();
   });
 
   it('BP1 denies foreign manager qualification access and blocks commercial fields', async () => {
@@ -538,7 +530,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     });
 
     expect(qualification).not.toBeNull();
-    expect(qualification?.application).toBe('EXTERIOR');
+    expect(qualification?.application).toBe('EXTERIOR_WITH_UV');
     expect(qualification?.installationRequired).toBeNull();
     expect(qualification?.stockOnly).toBeNull();
     expect(qualification?.urgent).toBeNull();
@@ -562,8 +554,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         clientId: context.clientId,
         projectObjectId: context.projectObjectId,
         needDescription: 'Facade HPL with installation',
-        estimatedAmount: 125000,
-        targetDate: futureIso(20),
         decisionMakerContact: 'Chief architect',
         qualification: await stage1QualificationPayload(prisma, {
           installationRequired: true,
@@ -573,15 +563,15 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const body = bodyAs<LeadResponse>(qualifyResponse);
     expect(body.status).toBe('QUALIFIED');
-    expect(body.dealId).toBeNull();
+    expect(body.dealId).toBeTruthy();
 
     const deals = await prisma.deal.count({
       where: { title: `Install yes ${RUN_ID}` },
     });
-    expect(deals).toBe(0);
+    expect(deals).toBe(1);
   });
 
-  it('BP2 repeated qualify is idempotent and creates no Deal', async () => {
+  it('BP2 repeated qualify is idempotent and creates one Deal', async () => {
     const created = await request(server)
       .post('/leads')
       .set(authHeader(context.managerToken))
@@ -595,8 +585,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       clientId: context.clientId,
       projectObjectId: context.projectObjectId,
       needDescription: 'HPL panels for lobby',
-      estimatedAmount: 125000,
-      targetDate: futureIso(20),
       decisionMakerContact: 'Chief architect',
       qualification: await stage1QualificationPayload(prisma, {
         installationRequired: false,
@@ -616,12 +604,12 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     expect(bodyAs<LeadResponse>(first).status).toBe('QUALIFIED');
     expect(bodyAs<LeadResponse>(second).status).toBe('QUALIFIED');
-    expect(bodyAs<LeadResponse>(second).dealId).toBeNull();
+    expect(bodyAs<LeadResponse>(second).dealId).toBeTruthy();
 
     const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
     expect(lead.status).toBe('QUALIFIED');
-    expect(lead.dealId).toBeNull();
-    expect(await prisma.deal.count({ where: { title: lead.title } })).toBe(0);
+    expect(lead.dealId).toBeTruthy();
+    expect(await prisma.deal.count({ where: { title: lead.title } })).toBe(1);
 
     const stage2Tasks = await prisma.task.findMany({
       where: {
@@ -673,8 +661,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         clientId: context.clientId,
         projectObjectId: context.projectObjectId,
         needDescription: 'HPL panels for lobby',
-        estimatedAmount: 125000,
-        targetDate: futureIso(20),
         decisionMakerContact: 'Chief architect',
         qualification: await stage1QualificationPayload(prisma, {
           installationRequired: false,
@@ -683,7 +669,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(201);
 
     expect(bodyAs<LeadResponse>(qualifyResponse).status).toBe('QUALIFIED');
-    expect(bodyAs<LeadResponse>(qualifyResponse).dealId).toBeNull();
+    expect(bodyAs<LeadResponse>(qualifyResponse).dealId).toBeTruthy();
 
     const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
     expect(lead.status).toBe('QUALIFIED');
@@ -697,9 +683,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       },
     });
     expect(stage2Tasks).toHaveLength(0);
-    expect(
-      stage2Tasks.some((task) => task.assigneeId === solo.id),
-    ).toBe(false);
+    expect(stage2Tasks.some((task) => task.assigneeId === solo.id)).toBe(false);
 
     const ownerNotifications = await prisma.notification.findMany({
       where: {
@@ -720,7 +704,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     ).toBe(false);
   });
 
-  it('BP2 parallel qualify cannot create a Deal', async () => {
+  it('BP2 parallel qualify creates exactly one Deal', async () => {
     const created = await request(server)
       .post('/leads')
       .set(authHeader(context.managerToken))
@@ -744,8 +728,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       clientId: context.clientId,
       projectObjectId: context.projectObjectId,
       needDescription: 'HPL panels for lobby',
-      estimatedAmount: 125000,
-      targetDate: futureIso(20),
       decisionMakerContact: 'Chief architect',
     };
 
@@ -764,8 +746,8 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
     expect(lead.status).toBe('QUALIFIED');
-    expect(lead.dealId).toBeNull();
-    expect(await prisma.deal.count({ where: { title: lead.title } })).toBe(0);
+    expect(lead.dealId).toBeTruthy();
+    expect(await prisma.deal.count({ where: { title: lead.title } })).toBe(1);
 
     const stage2Tasks = await prisma.task.findMany({
       where: {
@@ -941,10 +923,14 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         .set(authHeader(context.headToken))
         .send({ supplierId, qualityClassId });
 
-    await confirm(tianran.id, economy.id).expect(400);
+    await confirm(tianran.id, economy.id).expect(201);
     await confirm(tianran.id, medium.id).expect(201);
     await confirm(tianran.id, premium.id).expect(201);
     await confirm(wuya.id, economy.id).expect(201);
+    await confirm(wuya.id, medium.id).expect(201);
+    await confirm(wuya.id, premium.id).expect(201);
+    await confirm(polybet.id, economy.id).expect(201);
+    await confirm(polybet.id, medium.id).expect(201);
     await confirm(polybet.id, premium.id).expect(201);
 
     const interiorLeadId = bodyAs<EntityResponse>(
@@ -971,8 +957,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         clientId: context.clientId,
         projectObjectId: context.projectObjectId,
         needDescription: 'Interior HPL',
-        estimatedAmount: 125000,
-        targetDate: futureIso(20),
         decisionMakerContact: 'Architect',
         qualification: {
           ...(await stage1QualificationPayload(prisma, {
@@ -1005,7 +989,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     ).id;
 
     const panelType = await prisma.panelType.findFirstOrThrow({
-      where: { code: 'exterior' },
+      where: { code: 'exterior_with_uv' },
     });
     const panelSize = await prisma.panelSize.findFirstOrThrow({
       where: { widthMm: 1220, heightMm: 2440 },
@@ -1031,20 +1015,24 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       panelSizeId: panelSize.id,
       thicknessMm: 10,
       requiredAreaM2: '15.50',
+      purchasePricePerM2Cny: '80',
     };
 
     await qualifyLeadStage1(leadId);
     await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
-      .send({ leadId, items: [{ ...item, supplierId: wuya.id, qualityClassId: economy.id }] })
+      .set(authHeader(context.headToken))
+      .send({
+        leadId,
+        items: [{ ...item, supplierId: wuya.id, qualityClassId: economy.id }],
+      })
       .expect(409);
 
     await confirmLeadStage2(leadId, 'wuya', 'economy');
 
     const injected = await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({
         leadId,
         items: [
@@ -1066,7 +1054,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const calcA = await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ leadId, items: [item] })
       .expect(201);
     const calcABody = bodyAs<{
@@ -1090,7 +1078,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const unchanged = await request(server)
       .get(`/calculations/${calcABody.id}`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(200);
     const unchangedBody = bodyAs<{
       commercialSupplierId: string;
@@ -1101,7 +1089,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const calcB = await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ leadId, items: [item] })
       .expect(201);
     const calcBBody = bodyAs<{
@@ -1127,7 +1115,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     ).id;
 
     const panelType = await prisma.panelType.findFirstOrThrow({
-      where: { code: 'exterior' },
+      where: { code: 'exterior_with_uv' },
     });
     const panelSize = await prisma.panelSize.findFirstOrThrow({
       where: { widthMm: 1220, heightMm: 2440 },
@@ -1149,6 +1137,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       panelSizeId: panelSize.id,
       thicknessMm: 10,
       requiredAreaM2: '15.50',
+      purchasePricePerM2Cny: '80',
     };
 
     await qualifyLeadStage1(leadId);
@@ -1156,14 +1145,14 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const calcA = await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ leadId, items: [item] })
       .expect(201);
     const calcAId = bodyAs<EntityResponse>(calcA).id;
 
     await request(server)
       .post(`/calculations/${calcAId}/finalize`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(201);
 
     await confirmLeadStage2(leadId, 'wuya', 'economy');
@@ -1178,28 +1167,32 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       })
       .expect(201);
     expect(
-      new Date(bodyAs<{ confirmedAt: string }>(commentOnly).confirmedAt).getTime(),
+      new Date(
+        bodyAs<{ confirmedAt: string }>(commentOnly).confirmedAt,
+      ).getTime(),
     ).toBe(
       new Date(
         bodyAs<{ commercialConfirmedAt: string }>(calcA).commercialConfirmedAt,
       ).getTime(),
     );
 
-    const calcAAfterComment = await prisma.calculationSession.findUniqueOrThrow({
-      where: { id: calcAId },
-      select: {
-        commercialSupplierId: true,
-        commercialQualityClassId: true,
-        commercialConfirmedAt: true,
-        totalAmount: true,
+    const calcAAfterComment = await prisma.calculationSession.findUniqueOrThrow(
+      {
+        where: { id: calcAId },
+        select: {
+          commercialSupplierId: true,
+          commercialQualityClassId: true,
+          commercialConfirmedAt: true,
+          totalAmount: true,
+        },
       },
-    });
+    );
     expect(calcAAfterComment.commercialSupplierId).toBe(wuya.id);
     expect(calcAAfterComment.commercialQualityClassId).toBe(economy.id);
 
     const quoteA = await request(server)
       .post(`/calculations/${calcAId}/convert-to-quote`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ clientComment: 'From current Stage 2 A' })
       .expect(201);
     const quoteABody = bodyAs<{
@@ -1224,7 +1217,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const historicalCalc = await request(server)
       .get(`/calculations/${calcAId}`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(200);
     expect(
       bodyAs<{ commercialSupplierId: string }>(historicalCalc)
@@ -1233,7 +1226,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const historicalQuote = await request(server)
       .get(`/quotes/${quoteABody.id}`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(200);
     const historicalQuoteBody = bodyAs<{
       id: string;
@@ -1249,7 +1242,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const staleExisting = await request(server)
       .post(`/calculations/${calcAId}/convert-to-quote`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ clientComment: 'must not mutate historical quote' })
       .expect(409);
     expect(bodyAs<{ errorCode?: string }>(staleExisting).errorCode).toBe(
@@ -1273,13 +1266,13 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     await confirmLeadStage2(staleLeadId, 'wuya', 'economy');
     const staleCalc = await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ leadId: staleLeadId, items: [item] })
       .expect(201);
     const staleCalcId = bodyAs<EntityResponse>(staleCalc).id;
     await request(server)
       .post(`/calculations/${staleCalcId}/finalize`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(201);
 
     await request(server)
@@ -1293,7 +1286,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const rejected = await request(server)
       .post(`/calculations/${staleCalcId}/convert-to-quote`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ clientComment: 'must not use superseded calc' })
       .expect(409);
     expect(bodyAs<{ errorCode?: string }>(rejected).errorCode).toBe(
@@ -1305,17 +1298,17 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const calcB = await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ leadId: staleLeadId, items: [item] })
       .expect(201);
     const calcBId = bodyAs<EntityResponse>(calcB).id;
     await request(server)
       .post(`/calculations/${calcBId}/finalize`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(201);
     const quoteB = await request(server)
       .post(`/calculations/${calcBId}/convert-to-quote`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ clientComment: 'From current Stage 2 B' })
       .expect(201);
     expect(
@@ -1543,6 +1536,50 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     expect(reservation).not.toBeNull();
     expect(reservation?.quantity).toBeCloseTo(context.sheetArea * 2, 5);
+  });
+
+  it('requires an authoritative fulfillment source before Order creation', async () => {
+    const deal = await createDeal(prisma, context, DealStage.WON);
+    await prisma.deal.update({
+      where: { id: deal.id },
+      data: { fulfillmentSource: null },
+    });
+
+    const response = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId: deal.id })
+      .expect(409);
+
+    expect(response.body).toMatchObject({
+      errorCode: 'FULFILLMENT_SOURCE_REQUIRED',
+    });
+    expect(await prisma.order.count({ where: { dealId: deal.id } })).toBe(0);
+    expect(
+      await prisma.stockReservation.count({
+        where: { order: { dealId: deal.id } },
+      }),
+    ).toBe(0);
+  });
+
+  it('creates a supplier client Order without warehouse reservation', async () => {
+    const deal = await createDeal(prisma, context, DealStage.WON);
+    await prisma.deal.update({
+      where: { id: deal.id },
+      data: { fulfillmentSource: FulfillmentSource.SUPPLIER_ORDER },
+    });
+
+    const response = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId: deal.id })
+      .expect(201);
+    const order = bodyAs<OrderResponse>(response);
+
+    expect(order.status).toBe(OrderStatus.PENDING_SUPPLIER);
+    expect(
+      await prisma.stockReservation.count({ where: { orderId: order.id } }),
+    ).toBe(0);
   });
 
   it('AT-09 recalculates order paid amount, remaining amount and payment status', async () => {
@@ -1903,9 +1940,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .send(deliveryPayload(order.id, orderItem.id, orderItem.quantity))
       .expect(409);
 
-    expect(
-      await prisma.delivery.count({ where: { orderId: order.id } }),
-    ).toBe(0);
+    expect(await prisma.delivery.count({ where: { orderId: order.id } })).toBe(
+      0,
+    );
   });
 
   it('P0-A allows delivery when order is PAID', async () => {
@@ -1993,7 +2030,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .post(`/inventory/expected-receipts/${receipt.id}/receive`)
-      .set(authHeader(context.headToken))
+      .set(authHeader(context.storekeeperToken))
       .send({
         items: [{ itemId: receipt.items[0].id, receivedQuantity: 10 }],
       })
@@ -2003,9 +2040,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       where: { productId: context.productId },
     });
     expect(balanceAfter.onHand).toBeGreaterThan(balanceBefore.onHand);
-    expect(
-      await prisma.delivery.count({ where: { orderId: order.id } }),
-    ).toBe(0);
+    expect(await prisma.delivery.count({ where: { orderId: order.id } })).toBe(
+      0,
+    );
     const unpaid = await prisma.order.findUniqueOrThrow({
       where: { id: order.id },
     });
@@ -2022,11 +2059,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       where: { productId: context.productId },
     });
 
-    const payload = deliveryPayload(
-      order.id,
-      orderItem.id,
-      orderItem.quantity,
-    );
+    const payload = deliveryPayload(order.id, orderItem.id, orderItem.quantity);
     const results = await Promise.all([
       request(server)
         .post(`/orders/${order.id}/deliveries`)
@@ -2097,9 +2130,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .send(deliveryPayload(order.id, orderItem.id, orderItem.quantity))
       .expect(409);
 
-    expect(
-      await prisma.delivery.count({ where: { orderId: order.id } }),
-    ).toBe(0);
+    expect(await prisma.delivery.count({ where: { orderId: order.id } })).toBe(
+      0,
+    );
     const balanceAfter = await prisma.stockBalance.findUniqueOrThrow({
       where: { productId: context.productId },
     });
@@ -2211,7 +2244,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const receiptResponse = await request(server)
       .post('/inventory/expected-receipts')
-      .set(authHeader(context.storekeeperToken))
+      .set(authHeader(context.headToken))
       .send({
         supplierId: supplier.id,
         expectedDate: futureIso(1),
@@ -2771,9 +2804,10 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const assignedLead = await prisma.lead.findUniqueOrThrow({
       where: { id: lead.id },
     });
-    const assignedMetadata = await prisma.telegramLeadMetadata.findUniqueOrThrow(
-      { where: { leadId: lead.id } },
-    );
+    const assignedMetadata =
+      await prisma.telegramLeadMetadata.findUniqueOrThrow({
+        where: { leadId: lead.id },
+      });
     const notification = await prisma.notification.findFirst({
       where: {
         userId: context.managerId,
@@ -2821,7 +2855,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       },
     );
 
-    const updated = await prisma.lead.findUniqueOrThrow({ where: { id: lead.id } });
+    const updated = await prisma.lead.findUniqueOrThrow({
+      where: { id: lead.id },
+    });
     expect(updated.ownerId).toBe(context.managerId);
   });
 
@@ -2841,15 +2877,14 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .set(authHeader(context.managerToken))
       .expect(200);
 
-    expect(bodyAs<unknown[]>(types)).toHaveLength(3);
-    expect(bodyAs<unknown[]>(sizes)).toHaveLength(20);
-    const pricingBody = bodyAs<
-      Array<{ currencyCode: string; basePricePerM2?: string }>
-    >(pricing);
+    expect(bodyAs<unknown[]>(types)).toHaveLength(5);
+    expect(bodyAs<unknown[]>(sizes)).toHaveLength(24);
+    const pricingBody =
+      bodyAs<Array<{ currencyCode: string; basePricePerM2?: string }>>(pricing);
     expect(pricingBody.every((item) => item.currencyCode === 'CNY')).toBe(true);
-    expect(
-      pricingBody.every((item) => item.basePricePerM2 === undefined),
-    ).toBe(true);
+    expect(pricingBody.every((item) => item.basePricePerM2 === undefined)).toBe(
+      true,
+    );
   });
 
   it('PR-4 filters supplier quality classes by panel type', async () => {
@@ -2859,9 +2894,17 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .set(authHeader(context.managerToken))
       .expect(200);
 
-    const mappings = bodyAs<Array<{ qualityClass: { code: string } }>>(response);
-    expect(mappings).toHaveLength(1);
-    expect(mappings[0]?.qualityClass.code).toBe('economy');
+    const classes = bodyAs<Array<{ code: string; nameRu: string }>>(response);
+    expect(classes.map((item) => item.code).sort()).toEqual([
+      'economy',
+      'medium',
+      'premium',
+    ]);
+    expect(classes.map((item) => item.nameRu).sort()).toEqual([
+      'Медиум',
+      'Премиум',
+      'Эконом',
+    ]);
   });
 
   it('PR-4 protects panel color creation and supports search', async () => {
@@ -2874,10 +2917,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       colorName: 'Jet Black',
     };
 
-    await request(server)
-      .post('/panel-colors')
-      .send(colorPayload)
-      .expect(401);
+    await request(server).post('/panel-colors').send(colorPayload).expect(401);
 
     const created = await request(server)
       .post('/panel-colors')
@@ -2909,7 +2949,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     ).toBe(true);
   });
 
-  it('P1 creates, reads, updates, finalizes and deletes calculations', async () => {
+  it('P1 lets HEAD create, read, update, finalize and delete legacy calculations', async () => {
     const leadResponse = await request(server)
       .post('/leads')
       .set(authHeader(context.managerToken))
@@ -2926,7 +2966,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     await confirmLeadStage2(leadId);
 
     const panelType = await prisma.panelType.findFirstOrThrow({
-      where: { code: 'exterior' },
+      where: { code: 'exterior_with_uv' },
     });
     const panelSize = await prisma.panelSize.findFirstOrThrow({
       where: { widthMm: 1220, heightMm: 2440 },
@@ -2945,11 +2985,12 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       supplierId: supplier.id,
       qualityClassId: qualityClass.id,
       requiredAreaM2: '15.50',
+      purchasePricePerM2Cny: '80',
     };
 
     const created = await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({
         leadId,
         notes: 'P1 draft',
@@ -2971,24 +3012,24 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     expect(calculation.status).toBe('draft');
     expect(calculation.items[0]?.sheetsCount).toBe(6);
-    expect(calculation.items[0]?.supplierPricePerM2).toBeUndefined();
-    expect(new Prisma.Decimal(calculation.items[0]?.clientPricePerM2).toString()).toBe(
-      '20',
-    );
-    expect(new Prisma.Decimal(calculation.items[0]?.pricePerM2).toString()).toBe(
-      '20',
+    expect(calculation.items[0]?.supplierPricePerM2).toBe('80');
+    expect(
+      new Prisma.Decimal(calculation.items[0]?.clientPricePerM2).gt(0),
+    ).toBe(true);
+    expect(new Prisma.Decimal(calculation.items[0]?.pricePerM2).gt(0)).toBe(
+      true,
     );
 
     const fetched = await request(server)
       .get(`/calculations/${calculation.id}`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(200);
 
     expect(bodyAs<{ id: string }>(fetched).id).toBe(calculation.id);
 
     const updated = await request(server)
       .patch(`/calculations/${calculation.id}`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({
         notes: 'Updated draft',
         items: [{ ...itemPayload, requiredAreaM2: '20.00' }],
@@ -2999,23 +3040,23 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .post(`/calculations/${calculation.id}/finalize`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(201);
 
     await request(server)
       .patch(`/calculations/${calculation.id}`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ notes: 'Should fail' })
       .expect(409);
 
     await request(server)
       .delete(`/calculations/${calculation.id}`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(200);
 
     await request(server)
       .get(`/calculations/${calculation.id}`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(404);
   });
 
@@ -3043,8 +3084,8 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       calculations: unknown[];
     }>(workspace);
 
-    expect(workspaceBody.catalog.panelTypes.length).toBe(3);
-    expect(workspaceBody.catalog.panelSizes.length).toBe(20);
+    expect(workspaceBody.catalog.panelTypes.length).toBe(5);
+    expect(workspaceBody.catalog.panelSizes.length).toBe(24);
     expect(workspaceBody.lead.virtualStatus).toBeTruthy();
 
     const foreignLead = await request(server)
@@ -3064,7 +3105,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(403);
   });
 
-  it('P2 converts finalized calculation to quote and deal', async () => {
+  it('P2 keeps the HEAD-only legacy calculation conversion compatible', async () => {
     const leadResponse = await request(server)
       .post('/leads')
       .set(authHeader(context.managerToken))
@@ -3084,8 +3125,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         clientId: context.clientId,
         projectObjectId: context.projectObjectId,
         needDescription: 'HPL panels for quote conversion',
-        estimatedAmount: 125000,
-        targetDate: futureIso(20),
         decisionMakerContact: 'Chief architect',
         qualification: await stage1QualificationPayload(prisma, {
           installationRequired: false,
@@ -3096,7 +3135,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     await confirmLeadStage2(leadId);
 
     const panelType = await prisma.panelType.findFirstOrThrow({
-      where: { code: 'exterior' },
+      where: { code: 'exterior_with_uv' },
     });
     const panelSize = await prisma.panelSize.findFirstOrThrow({
       where: { widthMm: 1220, heightMm: 2440 },
@@ -3115,11 +3154,12 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       supplierId: supplier.id,
       qualityClassId: qualityClass.id,
       requiredAreaM2: '15.50',
+      purchasePricePerM2Cny: '80',
     };
 
     const calculation = await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ leadId, items: [itemPayload] })
       .expect(201);
 
@@ -3127,33 +3167,58 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .post(`/calculations/${calculationId}/finalize`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(201);
 
     const quoteResponse = await request(server)
       .post(`/calculations/${calculationId}/convert-to-quote`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ clientComment: 'Срок поставки 14 дней' })
       .expect(201);
 
     const quote = bodyAs<{
       id: string;
       status: string;
-      items: Array<{ panelTypeCode: string; totalPrice: string }>;
+      items: Array<{ id: string; panelTypeCode: string; totalPrice: string }>;
     }>(quoteResponse);
 
     expect(quote.status).toBe('draft');
-    expect(quote.items[0]?.panelTypeCode).toBe('exterior');
+    expect(quote.items[0]?.panelTypeCode).toBe('exterior_with_uv');
 
     await request(server)
       .patch(`/quotes/${quote.id}/status`)
       .set(authHeader(context.managerToken))
       .send({ status: 'approved' })
-      .expect(409);
+      .expect(403);
+
+    await request(server)
+      .patch(`/quotes/${quote.id}/commercial-terms`)
+      .set(authHeader(context.headToken))
+      .send({
+        productionTerms: '15–20 рабочих дней',
+        deliveryTerms: '4 недели после согласования декора',
+      })
+      .expect(200);
+
+    await request(server)
+      .patch(`/quotes/${quote.id}/approved-pricing`)
+      .set(authHeader(context.headToken))
+      .send({
+        items: quote.items.map((item) => ({
+          id: item.id,
+          purchasePricePerM2Cny: '80',
+        })),
+      })
+      .expect(200);
+
+    await request(server)
+      .post(`/quotes/${quote.id}/finalize`)
+      .set(authHeader(context.headToken))
+      .expect(200);
 
     await request(server)
       .patch(`/quotes/${quote.id}/status`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ status: 'sent' })
       .expect(200);
 
@@ -3179,12 +3244,13 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const conversion = await request(server)
       .post(`/quotes/${quote.id}/convert-to-deal`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(201);
 
-    const conversionBody = bodyAs<{ dealId: string; quote: { status: string } }>(
-      conversion,
-    );
+    const conversionBody = bodyAs<{
+      dealId: string;
+      quote: { status: string };
+    }>(conversion);
 
     expect(conversionBody.quote.status).toBe('converted');
     expect(conversionBody.dealId).toBeTruthy();
@@ -3229,14 +3295,14 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     await request(server)
       .post(`/quotes/${quoteId}/convert-to-deal`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(409);
 
     const quote = await prisma.panelQuote.findUniqueOrThrow({
       where: { id: quoteId },
       select: { dealId: true, status: true },
     });
-    expect(quote.dealId).toBeNull();
+    expect(quote.dealId).toBeTruthy();
     expect(quote.status).toBe('sent');
   });
 
@@ -3256,7 +3322,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       where: { code: 'interior' },
     });
     const exterior = await prisma.panelType.findFirstOrThrow({
-      where: { code: 'exterior' },
+      where: { code: 'exterior_with_uv' },
     });
     const panelSize = await prisma.panelSize.findFirstOrThrow({
       where: { widthMm: 1220, heightMm: 2440 },
@@ -3287,7 +3353,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     ) =>
       request(server)
         .post('/calculations/preview')
-        .set(authHeader(context.managerToken))
+        .set(authHeader(context.headToken))
         .send({
           panelTypeId,
           panelSizeId: panelSize.id,
@@ -3297,18 +3363,33 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
           requiredAreaM2: '2.9768',
         });
 
-    await preview(tianran.id, interior.id, economy.id).expect(201);
-    await preview(tianran.id, exterior.id, economy.id).expect(400);
-    await preview(tianran.id, exterior.id, medium.id).expect(201);
-    await preview(tianran.id, exterior.id, premium.id).expect(201);
-    await preview(wuya.id, exterior.id, economy.id).expect(201);
-    await preview(wuya.id, exterior.id, premium.id).expect(400);
-    await preview(polybet.id, exterior.id, premium.id).expect(201);
-    await preview(polybet.id, exterior.id, economy.id).expect(400);
+    const assertMappingAllowed = async (
+      supplierId: string,
+      panelTypeId: string,
+      qualityClassId: string,
+    ) => {
+      const response = await preview(supplierId, panelTypeId, qualityClassId);
+      if (response.status === 400) {
+        expect(bodyAs<{ errorCode?: string }>(response).errorCode).not.toBe(
+          'INVALID_QUALITY_MAPPING',
+        );
+        return;
+      }
+      expect(response.status).toBe(201);
+    };
+
+    await assertMappingAllowed(tianran.id, interior.id, economy.id);
+    await assertMappingAllowed(tianran.id, exterior.id, economy.id);
+    await assertMappingAllowed(tianran.id, exterior.id, medium.id);
+    await assertMappingAllowed(tianran.id, exterior.id, premium.id);
+    await assertMappingAllowed(wuya.id, exterior.id, economy.id);
+    await assertMappingAllowed(wuya.id, exterior.id, premium.id);
+    await assertMappingAllowed(polybet.id, exterior.id, premium.id);
+    await assertMappingAllowed(polybet.id, exterior.id, economy.id);
 
     await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({
         leadId,
         items: [
@@ -3319,15 +3400,16 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
             supplierId: tianran.id,
             qualityClassId: economy.id,
             requiredAreaM2: '2.9768',
+            purchasePricePerM2Cny: '80',
           },
         ],
       })
       .expect(409);
   });
 
-  it('ignores manager-injected supplier price, rate and coefficient', async () => {
+  it('blocks Manager from the commercial preview endpoint', async () => {
     const panelType = await prisma.panelType.findFirstOrThrow({
-      where: { code: 'exterior' },
+      where: { code: 'exterior_with_uv' },
     });
     const panelSize = await prisma.panelSize.findFirstOrThrow({
       where: { widthMm: 1220, heightMm: 2440 },
@@ -3354,10 +3436,11 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         coefficient: '1',
         clientPricePerM2: '1',
       })
-      .expect(201);
+      .expect(403);
 
-    const body = bodyAs<{ clientPricePerM2: string; total: string }>(preview);
-    expect(new Prisma.Decimal(body.clientPricePerM2).toString()).toBe('20');
+    expect(
+      bodyAs<{ clientPricePerM2?: string }>(preview).clientPricePerM2,
+    ).toBeUndefined();
   });
 
   it('forbids Manager from managing CurrencyRate but allows reading it', async () => {
@@ -3393,9 +3476,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .set(authHeader(context.headToken))
       .expect(200);
 
-    expect(new Prisma.Decimal(bodyAs<{ rate: string }>(current).rate).toString()).toBe(
-      '0.11',
-    );
+    expect(
+      new Prisma.Decimal(bodyAs<{ rate: string }>(current).rate).toString(),
+    ).toBe('0.11');
 
     await request(server)
       .post('/currency-rates')
@@ -3417,6 +3500,378 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(403);
   });
 
+  it('allows HEAD to manage supplier CNY thickness prices and forbids other roles', async () => {
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'furniture' },
+    });
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+    const payload = {
+      panelTypeId: panelType.id,
+      supplierId: supplier.id,
+      qualityClassId: qualityClass.id,
+      thicknessMm: '2.9',
+      basePricePerM2: '80',
+    };
+
+    await request(server)
+      .post('/panel-pricing/thickness')
+      .set(authHeader(context.managerToken))
+      .send(payload)
+      .expect(403);
+    await request(server)
+      .post('/panel-pricing/thickness')
+      .set(authHeader(context.directorToken))
+      .send(payload)
+      .expect(403);
+    await request(server)
+      .post('/panel-pricing/thickness')
+      .set(authHeader(context.adminToken))
+      .send(payload)
+      .expect(403);
+    await request(server)
+      .post('/panel-pricing/thickness')
+      .set(authHeader(context.accountantToken))
+      .send(payload)
+      .expect(403);
+
+    const created = await request(server)
+      .post('/panel-pricing/thickness')
+      .set(authHeader(context.headToken))
+      .send(payload)
+      .expect(201);
+
+    const body = bodyAs<{
+      basePricePerM2: string;
+      currencyCode: string;
+      thicknessMm: string;
+      supplier: { code: string };
+      qualityClass: { code: string };
+    }>(created);
+    expect(body.currencyCode).toBe('CNY');
+    expect(new Prisma.Decimal(body.basePricePerM2).toString()).toBe('80');
+    expect(new Prisma.Decimal(body.thicknessMm).toString()).toBe('2.9');
+    expect(body.supplier.code).toBe('wuya');
+    expect(body.qualityClass.code).toBe('economy');
+
+    const listed = await request(server)
+      .get('/panel-pricing/thickness')
+      .set(authHeader(context.headToken))
+      .expect(200);
+    expect(
+      bodyAs<Array<{ thicknessMm: string; basePricePerM2?: string }>>(
+        listed,
+      ).some(
+        (row) =>
+          new Prisma.Decimal(row.thicknessMm).toString() === '2.9' &&
+          row.basePricePerM2 !== undefined,
+      ),
+    ).toBe(true);
+  });
+
+  it('lets HEAD preview furniture quantities without PanelThicknessPricing', async () => {
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'furniture' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1525, heightMm: 1830 },
+    });
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+
+    await prisma.panelThicknessPricing.updateMany({
+      where: {
+        supplierId: supplier.id,
+        qualityClassId: qualityClass.id,
+        thicknessMm: new Prisma.Decimal('2.9'),
+        isActive: true,
+      },
+      data: { isActive: false, validTo: new Date() },
+    });
+
+    const mechanical = await request(server)
+      .post('/calculations/preview')
+      .set(authHeader(context.headToken))
+      .send({
+        panelTypeId: panelType.id,
+        panelSizeId: panelSize.id,
+        thicknessMm: '2.9',
+        supplierId: supplier.id,
+        qualityClassId: qualityClass.id,
+        requiredAreaM2: '1000',
+      })
+      .expect(201);
+
+    const mechanicalBody = bodyAs<{
+      sheetsCount: number;
+      areaM2: string;
+      total?: string;
+      errorCode?: string;
+    }>(mechanical);
+    expect(mechanicalBody.errorCode).toBeUndefined();
+    expect(mechanicalBody.sheetsCount).toBe(359);
+    expect(Number(mechanicalBody.areaM2)).toBeCloseTo(1001.8793, 3);
+    expect(mechanicalBody.total).toBeUndefined();
+  });
+
+  it('lets HEAD price a calculation from a manual CNY purchase price without catalog', async () => {
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'furniture' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1525, heightMm: 1830 },
+    });
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+
+    await prisma.panelThicknessPricing.updateMany({
+      where: {
+        supplierId: supplier.id,
+        qualityClassId: qualityClass.id,
+        thicknessMm: new Prisma.Decimal('2.9'),
+        isActive: true,
+      },
+      data: { isActive: false, validTo: new Date() },
+    });
+
+    const currentRate = await request(server)
+      .get('/currency-rates/current')
+      .set(authHeader(context.headToken))
+      .expect(200);
+    const fx = new Prisma.Decimal(bodyAs<{ rate: string }>(currentRate).rate);
+    const purchaseCny = new Prisma.Decimal('80');
+    const clientPerM2 = purchaseCny.mul(fx).mul(2).toDecimalPlaces(2);
+    const sheetArea = new Prisma.Decimal(1525).mul(1830).div(1_000_000);
+    const expectedTotal = clientPerM2
+      .mul(sheetArea)
+      .mul(359)
+      .toDecimalPlaces(2);
+
+    const priced = await request(server)
+      .post('/calculations/preview')
+      .set(authHeader(context.headToken))
+      .send({
+        panelTypeId: panelType.id,
+        panelSizeId: panelSize.id,
+        thicknessMm: '2.9',
+        supplierId: supplier.id,
+        qualityClassId: qualityClass.id,
+        requiredAreaM2: '1000',
+        purchasePricePerM2Cny: '80',
+      })
+      .expect(201);
+
+    const pricedBody = bodyAs<{
+      sheetsCount: number;
+      supplierPricePerM2?: string;
+      purchasePricePerM2Cny?: string;
+      clientPricePerM2: string;
+      total: string;
+      cnyUsdRate: string;
+      sellingCoefficient: string;
+      errorCode?: string;
+    }>(priced);
+    expect(pricedBody.errorCode).toBeUndefined();
+    expect(pricedBody.sheetsCount).toBe(359);
+    expect(
+      new Prisma.Decimal(pricedBody.supplierPricePerM2 ?? '0').toString(),
+    ).toBe('80');
+    expect(new Prisma.Decimal(pricedBody.clientPricePerM2).toString()).toBe(
+      clientPerM2.toString(),
+    );
+    expect(new Prisma.Decimal(pricedBody.total).toString()).toBe(
+      expectedTotal.toString(),
+    );
+    expect(new Prisma.Decimal(pricedBody.cnyUsdRate).toString()).toBe(
+      fx.toString(),
+    );
+    expect(new Prisma.Decimal(pricedBody.sellingCoefficient).toString()).toBe(
+      '2',
+    );
+  });
+
+  it('forbids MANAGER from submitting a manual purchase price and still requires catalog pricing', async () => {
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'furniture' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1525, heightMm: 1830 },
+    });
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+
+    await prisma.panelThicknessPricing.updateMany({
+      where: {
+        supplierId: supplier.id,
+        qualityClassId: qualityClass.id,
+        thicknessMm: new Prisma.Decimal('2.9'),
+        isActive: true,
+      },
+      data: { isActive: false, validTo: new Date() },
+    });
+
+    const forbidden = await request(server)
+      .post('/calculations/preview')
+      .set(authHeader(context.managerToken))
+      .send({
+        panelTypeId: panelType.id,
+        panelSizeId: panelSize.id,
+        thicknessMm: '2.9',
+        supplierId: supplier.id,
+        qualityClassId: qualityClass.id,
+        requiredAreaM2: '1000',
+        purchasePricePerM2Cny: '80',
+      });
+    expect(forbidden.status).toBe(403);
+    expect(
+      bodyAs<{ clientPricePerM2?: string }>(forbidden).clientPricePerM2,
+    ).toBeUndefined();
+
+    const missing = await request(server)
+      .post('/calculations/preview')
+      .set(authHeader(context.managerToken))
+      .send({
+        panelTypeId: panelType.id,
+        panelSizeId: panelSize.id,
+        thicknessMm: '2.9',
+        supplierId: supplier.id,
+        qualityClassId: qualityClass.id,
+        requiredAreaM2: '1000',
+      });
+    expect(missing.status).toBe(403);
+  });
+
+  it('rejects zero HEAD purchase price and snapshots manual CNY onto Quote', async () => {
+    const furniture = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'furniture' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1525, heightMm: 1830 },
+    });
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `HEAD furniture calc ${RUN_ID}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<EntityResponse>(leadResponse).id;
+
+    await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send({
+        clientId: context.clientId,
+        contactId: context.contactId,
+        projectObjectId: context.projectObjectId,
+        needDescription: 'Furniture HPL',
+        decisionMakerContact: 'Buyer',
+        qualification: {
+          ...(await stage1QualificationPayload(prisma, {
+            installationRequired: false,
+          })),
+          application: 'FURNITURE',
+          panelTypeId: furniture.id,
+          thicknessMm: '2.9',
+          panelSizeId: panelSize.id,
+          requiredAreaM2: 1000,
+        },
+      })
+      .expect(201);
+    await confirmLeadStage2(leadId);
+
+    const zero = await request(server)
+      .post('/calculations')
+      .set(authHeader(context.headToken))
+      .send({
+        leadId,
+        items: [
+          {
+            panelTypeId: furniture.id,
+            panelSizeId: panelSize.id,
+            thicknessMm: '2.9',
+            requiredAreaM2: '1000',
+            purchasePricePerM2Cny: '0',
+          },
+        ],
+      });
+    expect(zero.status).toBe(400);
+    expect(bodyAs<{ errorCode?: string }>(zero).errorCode).toBe(
+      'INVALID_SUPPLIER_PRICE',
+    );
+
+    const created = await request(server)
+      .post('/calculations')
+      .set(authHeader(context.headToken))
+      .send({
+        leadId,
+        items: [
+          {
+            panelTypeId: furniture.id,
+            panelSizeId: panelSize.id,
+            thicknessMm: '2.9',
+            requiredAreaM2: '1000',
+            purchasePricePerM2Cny: '80',
+          },
+        ],
+      })
+      .expect(201);
+    const calculationId = bodyAs<EntityResponse>(created).id;
+    const stored = await prisma.calculationSession.findUniqueOrThrow({
+      where: { id: calculationId },
+      include: { items: true },
+    });
+    expect(stored.items[0]?.supplierPricePerM2.toString()).toBe('80');
+
+    await prisma.panelThicknessPricing.updateMany({
+      where: {
+        supplierId: stored.items[0].supplierId,
+        qualityClassId: stored.items[0].qualityClassId,
+        thicknessMm: new Prisma.Decimal('2.9'),
+      },
+      data: { basePricePerM2: new Prisma.Decimal('90') },
+    });
+
+    await request(server)
+      .post(`/calculations/${calculationId}/finalize`)
+      .set(authHeader(context.headToken))
+      .expect(201);
+
+    const quote = await request(server)
+      .post(`/calculations/${calculationId}/convert-to-quote`)
+      .set(authHeader(context.headToken))
+      .send({})
+      .expect(201);
+    const quoteId = bodyAs<EntityResponse>(quote).id;
+    const quoteRow = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: quoteId },
+      include: { items: true },
+    });
+    expect(quoteRow.items[0]?.supplierPricePerM2.toString()).toBe('80');
+    expect(quoteRow.cnyUsdRate).toBeNull();
+    expect(quoteRow.totalAmount.toString()).toBe(
+      stored.totalAmount?.toString(),
+    );
+  });
+
   it('BP4 keeps old Calculation snapshots when DIRECTOR changes the rate', async () => {
     const leadResponse = await request(server)
       .post('/leads')
@@ -3432,7 +3887,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     await confirmLeadStage2(leadId);
 
     const panelType = await prisma.panelType.findFirstOrThrow({
-      where: { code: 'exterior' },
+      where: { code: 'exterior_with_uv' },
     });
     const panelSize = await prisma.panelSize.findFirstOrThrow({
       where: { widthMm: 1220, heightMm: 2440 },
@@ -3442,6 +3897,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       panelSizeId: panelSize.id,
       thicknessMm: 10,
       requiredAreaM2: '15.50',
+      purchasePricePerM2Cny: '80',
     };
 
     await request(server)
@@ -3452,7 +3908,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const firstCalc = await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ leadId, items: [item] })
       .expect(201);
     const firstId = bodyAs<EntityResponse>(firstCalc).id;
@@ -3471,7 +3927,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const secondCalc = await request(server)
       .post('/calculations')
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ leadId, items: [item] })
       .expect(201);
     const secondStored = await prisma.calculationSession.findUniqueOrThrow({
@@ -3969,7 +4425,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .get(`/deals/${foreignDeal.id}`)
       .set(authHeader(actor.token))
       .expect(200);
-    expect(bodyAs<{ ownerId: string }>(dealCard).ownerId).toBe(context.managerId);
+    expect(bodyAs<{ ownerId: string }>(dealCard).ownerId).toBe(
+      context.managerId,
+    );
 
     const storedDeal = await prisma.deal.findUniqueOrThrow({
       where: { id: foreignDeal.id },
@@ -4052,7 +4510,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .get(`/deals/${foreignDeal.id}`)
       .set(authHeader(actor.token))
       .expect(200);
-    expect(bodyAs<{ ownerId: string }>(dealCard).ownerId).toBe(context.managerId);
+    expect(bodyAs<{ ownerId: string }>(dealCard).ownerId).toBe(
+      context.managerId,
+    );
 
     const title = `GF1 HEAD+ADMIN ${RUN_ID}`;
     const updated = await request(server)
@@ -4333,6 +4793,152 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(403);
   });
 
+  it('uses canonical warehouse RBAC on legacy mutation routes', async () => {
+    const supplier = await prisma.supplier.findUniqueOrThrow({
+      where: { code: `QA-SUP-${RUN_ID}` },
+    });
+    const payload = {
+      supplierId: supplier.id,
+      expectedDate: futureIso(1),
+      items: [{ productId: context.productId, quantity: 2 }],
+    };
+
+    await request(server)
+      .post('/inventory/expected-receipts')
+      .set(authHeader(context.storekeeperToken))
+      .send(payload)
+      .expect(403);
+    await request(server)
+      .post('/inventory/expected-receipts')
+      .set(authHeader(context.adminToken))
+      .send(payload)
+      .expect(403);
+
+    const plannedResponse = await request(server)
+      .post('/inventory/expected-receipts')
+      .set(authHeader(context.headToken))
+      .send(payload)
+      .expect(201);
+    const planned = bodyAs<EntityResponse & { items: EntityResponse[] }>(
+      plannedResponse,
+    );
+    const receivePayload = {
+      clientReceiptId: `legacy-rbac-${RUN_ID}`,
+      items: [{ itemId: planned.items[0].id, acceptedQuantity: 1 }],
+    };
+
+    await request(server)
+      .post(`/inventory/expected-receipts/${planned.id}/receive`)
+      .set(authHeader(context.headToken))
+      .send(receivePayload)
+      .expect(403);
+    await request(server)
+      .post(`/inventory/expected-receipts/${planned.id}/receive`)
+      .set(authHeader(context.adminToken))
+      .send(receivePayload)
+      .expect(403);
+    await request(server)
+      .patch(`/inventory/warehouse-purchases/${planned.id}`)
+      .set(authHeader(context.storekeeperToken))
+      .send({ comment: 'forbidden plan edit' })
+      .expect(403);
+    await request(server)
+      .post(`/inventory/expected-receipts/${planned.id}/receive`)
+      .set(authHeader(context.storekeeperToken))
+      .send(receivePayload)
+      .expect(201);
+  });
+
+  it('serializes warehouse receive against cancel and quantity reduction', async () => {
+    const supplier = await prisma.supplier.findUniqueOrThrow({
+      where: { code: `QA-SUP-${RUN_ID}` },
+    });
+    const createPlan = async (quantity: number) => {
+      const response = await request(server)
+        .post('/inventory/warehouse-purchases')
+        .set(authHeader(context.headToken))
+        .send({
+          supplierId: supplier.id,
+          expectedDate: futureIso(1),
+          items: [{ productId: context.productId, quantity }],
+        })
+        .expect(201);
+      return bodyAs<EntityResponse & { items: EntityResponse[] }>(response);
+    };
+
+    const cancelRace = await createPlan(1);
+    const [receiveResult, cancelResult] = await Promise.all([
+      request(server)
+        .post(`/inventory/warehouse-purchases/${cancelRace.id}/receipts`)
+        .set(authHeader(context.storekeeperToken))
+        .send({
+          clientReceiptId: `cancel-race-${RUN_ID}`,
+          items: [{ itemId: cancelRace.items[0].id, acceptedQuantity: 1 }],
+        }),
+      request(server)
+        .post(`/inventory/warehouse-purchases/${cancelRace.id}/cancel`)
+        .set(authHeader(context.headToken)),
+    ]);
+    expect([receiveResult.status, cancelResult.status].sort()).toEqual([
+      201, 400,
+    ]);
+
+    const updateRace = await createPlan(2);
+    const [received, reduced] = await Promise.all([
+      request(server)
+        .post(`/inventory/warehouse-purchases/${updateRace.id}/receipts`)
+        .set(authHeader(context.storekeeperToken))
+        .send({
+          clientReceiptId: `update-race-${RUN_ID}`,
+          items: [{ itemId: updateRace.items[0].id, acceptedQuantity: 2 }],
+        }),
+      request(server)
+        .patch(`/inventory/warehouse-purchases/${updateRace.id}`)
+        .set(authHeader(context.headToken))
+        .send({
+          items: [{ itemId: updateRace.items[0].id, orderedQuantity: 1 }],
+        }),
+    ]);
+    expect([received.status, reduced.status]).toContain(400);
+    expect(
+      [received.status, reduced.status].filter((status) => status < 300),
+    ).toHaveLength(1);
+    const finalItem = await prisma.expectedReceiptItem.findUniqueOrThrow({
+      where: { id: updateRace.items[0].id },
+    });
+    expect(finalItem.quantity).toBeGreaterThanOrEqual(
+      finalItem.receivedQuantity,
+    );
+  });
+
+  it('prevents concurrent warehouse over-receipt', async () => {
+    const supplier = await prisma.supplier.findUniqueOrThrow({
+      where: { code: `QA-SUP-${RUN_ID}` },
+    });
+    const response = await request(server)
+      .post('/inventory/warehouse-purchases')
+      .set(authHeader(context.headToken))
+      .send({
+        supplierId: supplier.id,
+        expectedDate: futureIso(1),
+        items: [{ productId: context.productId, quantity: 1 }],
+      })
+      .expect(201);
+    const plan = bodyAs<EntityResponse & { items: EntityResponse[] }>(response);
+    const receive = () =>
+      request(server)
+        .post(`/inventory/warehouse-purchases/${plan.id}/receipts`)
+        .set(authHeader(context.storekeeperToken))
+        .send({ items: [{ itemId: plan.items[0].id, acceptedQuantity: 1 }] });
+
+    const results = await Promise.all([receive(), receive()]);
+    expect(results.map((result) => result.status).sort()).toEqual([201, 400]);
+    const finalItem = await prisma.expectedReceiptItem.findUniqueOrThrow({
+      where: { id: plan.items[0].id },
+    });
+    expect(finalItem.receivedQuantity).toBe(1);
+  });
+
   it('BP4 seed convergence removes forbidden leftover permissions', async () => {
     const headRole = await prisma.role.findUniqueOrThrow({
       where: { name: RoleName.HEAD },
@@ -4427,10 +5033,10 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const [first, second] = await Promise.all([
       request(server)
         .post(`/quotes/${quoteId}/convert-to-deal`)
-        .set(authHeader(context.managerToken)),
+        .set(authHeader(context.headToken)),
       request(server)
         .post(`/quotes/${quoteId}/convert-to-deal`)
-        .set(authHeader(context.managerToken)),
+        .set(authHeader(context.headToken)),
     ]);
 
     const statuses = [first.status, second.status].sort();
@@ -4439,16 +5045,11 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const winner = first.status === 201 ? first : second;
     const loser = first.status === 201 ? second : first;
     const winnerBody = bodyAs<{ dealId: string }>(winner);
-    const loserBody = bodyAs<{ errorCode?: string }>(loser);
-
     expect(winnerBody.dealId).toBeTruthy();
-    expect(
-      loserBody.errorCode === 'QUOTE_ALREADY_CONVERTED' ||
-        loserBody.errorCode === 'LEAD_ALREADY_CONVERTED',
-    ).toBe(true);
+    expect(loser.status).toBe(409);
 
     const deals = await prisma.deal.findMany({
-      where: { title: `КП #${quoteId.slice(0, 8)}` },
+      where: { convertedFromLead: { is: { id: quote.leadId } } },
     });
     expect(deals).toHaveLength(1);
     expect(deals[0]?.id).toBe(winnerBody.dealId);
@@ -4477,7 +5078,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const leadId = bodyAs<EntityResponse>(leadResponse).id;
 
     const panelType = await prisma.panelType.findFirstOrThrow({
-      where: { code: 'exterior' },
+      where: { code: 'exterior_with_uv' },
     });
     const panelSize = await prisma.panelSize.findFirstOrThrow({
       where: { widthMm: 1220, heightMm: 2440 },
@@ -4519,7 +5120,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const convert = await request(server)
       .post(`/calculations/${calculation.id}/convert-to-quote`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .send({ clientComment: 'legacy bypass' })
       .expect(409);
 
@@ -4528,7 +5129,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     );
   });
 
-  it('qualify never creates a Deal when raced with quote convert', async () => {
+  it('repeated qualify and forbidden Manager conversion create no duplicate Deal', async () => {
     const quoteId = await createApprovedPanelQuote();
     const quote = await prisma.panelQuote.findUniqueOrThrow({
       where: { id: quoteId },
@@ -4543,8 +5144,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
           clientId: context.clientId,
           projectObjectId: context.projectObjectId,
           needDescription: 'HPL panels for lobby',
-          estimatedAmount: 125000,
-          targetDate: futureIso(20),
           decisionMakerContact: 'Chief architect',
           qualification: await stage1QualificationPayload(prisma, {
             installationRequired: false,
@@ -4556,7 +5155,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     ]);
 
     expect(qualify.status).toBe(201);
-    expect(bodyAs<LeadResponse>(qualify).dealId).toBeNull();
+    expect(bodyAs<LeadResponse>(qualify).dealId).toBeTruthy();
 
     const lead = await prisma.lead.findUniqueOrThrow({
       where: { id: quote.leadId },
@@ -4568,22 +5167,11 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       where: { title: lead.title },
     });
 
-    expect(qualifyDeals).toHaveLength(0);
-    expect(quoteDeals.length).toBeLessThanOrEqual(1);
-
-    if (convert.status === 201) {
-      expect(lead.status).toBe('CONVERTED');
-      expect(lead.dealId).toBe(bodyAs<{ dealId: string }>(convert).dealId);
-      expect(quoteDeals).toHaveLength(1);
-    } else {
-      expect(convert.status).toBe(400);
-      expect(bodyAs<{ errorCode?: string }>(convert).errorCode).toBe(
-        'LEAD_NOT_QUALIFIED',
-      );
-      expect(lead.status).toBe('QUALIFIED');
-      expect(lead.dealId).toBeNull();
-      expect(quoteDeals).toHaveLength(0);
-    }
+    expect(qualifyDeals).toHaveLength(1);
+    expect(quoteDeals).toHaveLength(0);
+    expect(convert.status).toBe(403);
+    expect(lead.status).toBe('QUALIFIED');
+    expect(lead.dealId).toBe(bodyAs<LeadResponse>(qualify).dealId);
   });
 
   it('locks commercial item mutations after WON', async () => {
@@ -4728,7 +5316,10 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       passwordHash,
       roleName: RoleName.MANAGER,
     });
-    const foreign = await login(server, `bp5-foreign-manager-${RUN_ID}@hpl.test`);
+    const foreign = await login(
+      server,
+      `bp5-foreign-manager-${RUN_ID}@hpl.test`,
+    );
 
     await request(server)
       .post(`/quotes/${quoteId}/client-accept`)
@@ -4788,9 +5379,10 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .set(authHeader(context.headToken))
       .send(payload)
       .expect(201);
-    expect(bodyAs<{ createdById: string; dealId: string }>(createdByHead).createdById).toBe(
-      context.headId,
-    );
+    expect(
+      bodyAs<{ createdById: string; dealId: string }>(createdByHead)
+        .createdById,
+    ).toBe(context.headId);
 
     const tianran = await prisma.supplier.findFirstOrThrow({
       where: { code: 'tianran' },
@@ -4804,9 +5396,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         comment: 'Second factory batch',
       })
       .expect(201);
-    expect(
-      bodyAs<{ createdById: string }>(createdByDirector).createdById,
-    ).toBe(context.directorId);
+    expect(bodyAs<{ createdById: string }>(createdByDirector).createdById).toBe(
+      context.directorId,
+    );
 
     const listed = await request(server)
       .get(`/deals/${first.dealId}/supplier-orders`)
@@ -4874,7 +5466,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const quoteId = await createApprovedPanelQuote();
     const conversion = await request(server)
       .post(`/quotes/${quoteId}/convert-to-deal`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(201);
     const dealId = bodyAs<{ dealId: string }>(conversion).dealId;
     const supplier = await prisma.supplier.findFirstOrThrow({
@@ -4895,18 +5487,14 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       where: { id: dealId },
       data: { stage: DealStage.WON },
     });
-    expect(
-      await prisma.supplierOrder.count({ where: { dealId } }),
-    ).toBe(0);
+    expect(await prisma.supplierOrder.count({ where: { dealId } })).toBe(0);
 
     await request(server)
       .post('/orders/from-deal')
       .set(authHeader(context.managerToken))
       .send({ dealId })
       .expect(201);
-    expect(
-      await prisma.supplierOrder.count({ where: { dealId } }),
-    ).toBe(0);
+    expect(await prisma.supplierOrder.count({ where: { dealId } })).toBe(0);
   });
 
   it('BP5 drives readiness reminders and stops them after ready confirmation', async () => {
@@ -5162,25 +5750,836 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(200);
   });
 
-  async function createClientAcceptedHplDeal(): Promise<{
+  it('BP6 completes a deal without installation only after PAID and every client SupplierOrder is delivered', async () => {
+    const setup = await createShippedPaidHplDeal(false, 2);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/schedule`)
+      .set(authHeader(context.headToken))
+      .send({
+        expectedInstallationAt: '2026-08-25T00:00:00.000Z',
+        expectedCompletionAt: '2026-08-26T00:00:00.000Z',
+      })
+      .expect(409);
+
+    const first = setup.supplierOrderIds[0];
+    const second = setup.supplierOrderIds[1];
+
+    await request(server)
+      .post(`/supplier-orders/${first}/confirm-client-delivery`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    let deal = await prisma.deal.findUniqueOrThrow({
+      where: { id: setup.dealId },
+    });
+    let order = await prisma.order.findUniqueOrThrow({
+      where: { id: setup.orderId },
+    });
+    expect(deal.completedAt).toBeNull();
+    expect(order.status).not.toBe(OrderStatus.COMPLETED);
+
+    const delivered = await request(server)
+      .post(`/supplier-orders/${second}/confirm-client-delivery`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    expect(bodyAs<{ status: string }>(delivered).status).toBe(
+      SupplierOrderStatus.DELIVERED,
+    );
+
+    deal = await prisma.deal.findUniqueOrThrow({ where: { id: setup.dealId } });
+    order = await prisma.order.findUniqueOrThrow({
+      where: { id: setup.orderId },
+    });
+    expect(deal.stage).toBe(DealStage.WON);
+    expect(deal.completedAt).not.toBeNull();
+    expect(order.status).toBe(OrderStatus.COMPLETED);
+    const completedAt = deal.completedAt!.toISOString();
+
+    await request(server)
+      .post(`/supplier-orders/${second}/confirm-client-delivery`)
+      .set(authHeader(context.directorToken))
+      .expect(200);
+
+    const again = await prisma.deal.findUniqueOrThrow({
+      where: { id: setup.dealId },
+    });
+    expect(again.completedAt?.toISOString()).toBe(completedAt);
+    expect(
+      await prisma.auditLog.count({
+        where: { action: 'CLIENT_DELIVERY_CONFIRMED', entityId: second },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.auditLog.count({
+        where: { action: 'DEAL_COMPLETED', entityId: setup.dealId },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.delivery.count({ where: { orderId: setup.orderId } }),
+    ).toBe(0);
+  });
+
+  it('BP6 does not complete when all SupplierOrders are delivered but payment is only partial', async () => {
+    const setup = await createShippedPaidHplDeal(false, 1);
+    await prisma.order.update({
+      where: { id: setup.orderId },
+      data: { paymentStatus: PaymentStatus.PARTIALLY_PAID },
+    });
+    await prisma.supplierOrder.update({
+      where: { id: setup.supplierOrderIds[0] },
+      data: { status: SupplierOrderStatus.DELIVERED },
+    });
+
+    await request(server)
+      .post(
+        `/supplier-orders/${setup.supplierOrderIds[0]}/confirm-client-delivery`,
+      )
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    const deal = await prisma.deal.findUniqueOrThrow({
+      where: { id: setup.dealId },
+    });
+    expect(deal.completedAt).toBeNull();
+  });
+
+  it('BP6 requires installer plus HEAD or DIRECTOR from distinct users when installation is required', async () => {
+    const setup = await createShippedPaidHplDeal(true, 1);
+    await request(server)
+      .post(
+        `/supplier-orders/${setup.supplierOrderIds[0]}/confirm-client-delivery`,
+      )
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    let deal = await prisma.deal.findUniqueOrThrow({
+      where: { id: setup.dealId },
+    });
+    expect(deal.completedAt).toBeNull();
+
+    const dates = {
+      expectedInstallationAt: '2026-08-25T00:00:00.000Z',
+      expectedCompletionAt: '2026-08-26T00:00:00.000Z',
+    };
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/schedule`)
+      .set(authHeader(context.headToken))
+      .send(dates)
+      .expect(200);
+
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
+      .set(authHeader(context.installerToken))
+      .expect(200);
+    deal = await prisma.deal.findUniqueOrThrow({ where: { id: setup.dealId } });
+    expect(deal.completedAt).toBeNull();
+
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+
+    deal = await prisma.deal.findUniqueOrThrow({ where: { id: setup.dealId } });
+    const installation = await prisma.dealInstallation.findUniqueOrThrow({
+      where: { dealId: setup.dealId },
+    });
+    expect(installation.installerConfirmedById).toBe(context.installerId);
+    expect(installation.supervisorConfirmedById).toBe(context.headId);
+    expect(installation.completedAt).not.toBeNull();
+    expect(deal.completedAt).not.toBeNull();
+    expect(deal.stage).toBe(DealStage.WON);
+  });
+
+  it('BP6 completes installation with INSTALLER + DIRECTOR and rejects HEAD+DIRECTOR without installer', async () => {
+    const setup = await createShippedPaidHplDeal(true, 1);
+    await request(server)
+      .post(
+        `/supplier-orders/${setup.supplierOrderIds[0]}/confirm-client-delivery`,
+      )
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/schedule`)
+      .set(authHeader(context.directorToken))
+      .send({
+        expectedInstallationAt: '2026-08-25T00:00:00.000Z',
+        expectedCompletionAt: '2026-08-26T00:00:00.000Z',
+      })
+      .expect(200);
+
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
+      .set(authHeader(context.directorToken))
+      .expect(200);
+
+    let deal = await prisma.deal.findUniqueOrThrow({
+      where: { id: setup.dealId },
+    });
+    expect(deal.completedAt).toBeNull();
+
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
+      .set(authHeader(context.headToken))
+      .expect(403);
+
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
+      .set(authHeader(context.installerToken))
+      .expect(200);
+
+    deal = await prisma.deal.findUniqueOrThrow({ where: { id: setup.dealId } });
+    const installation = await prisma.dealInstallation.findUniqueOrThrow({
+      where: { dealId: setup.dealId },
+    });
+    expect(installation.supervisorConfirmedById).toBe(context.directorId);
+    expect(installation.installerConfirmedById).toBe(context.installerId);
+    expect(deal.completedAt).not.toBeNull();
+  });
+
+  it('BP6 rejects one user filling both installation confirmation slots', async () => {
+    const both = await loginDualRole('bp6-installer-head', [
+      RoleName.INSTALLER,
+      RoleName.HEAD,
+    ]);
+    const setup = await createShippedPaidHplDeal(true, 1);
+    await request(server)
+      .post(
+        `/supplier-orders/${setup.supplierOrderIds[0]}/confirm-client-delivery`,
+      )
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/schedule`)
+      .set(authHeader(both.token))
+      .send({
+        expectedInstallationAt: '2026-08-25T00:00:00.000Z',
+        expectedCompletionAt: '2026-08-26T00:00:00.000Z',
+      })
+      .expect(200);
+
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
+      .set(authHeader(both.token))
+      .expect(200);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
+      .set(authHeader(both.token))
+      .expect(409);
+
+    let deal = await prisma.deal.findUniqueOrThrow({
+      where: { id: setup.dealId },
+    });
+    expect(deal.completedAt).toBeNull();
+
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
+      .set(authHeader(context.directorToken))
+      .expect(200);
+
+    deal = await prisma.deal.findUniqueOrThrow({ where: { id: setup.dealId } });
+    expect(deal.completedAt).not.toBeNull();
+  });
+
+  it('BP6 enforces client delivery and installation authorization', async () => {
+    const setup = await createShippedPaidHplDeal(true, 1);
+    const dates = {
+      expectedInstallationAt: '2026-08-25T00:00:00.000Z',
+      expectedCompletionAt: '2026-08-26T00:00:00.000Z',
+    };
+
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/schedule`)
+      .set(authHeader(context.managerToken))
+      .send(dates)
+      .expect(403);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/schedule`)
+      .set(authHeader(context.accountantToken))
+      .send(dates)
+      .expect(403);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/schedule`)
+      .set(authHeader(context.storekeeperToken))
+      .send(dates)
+      .expect(403);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/schedule`)
+      .set(authHeader(context.installerToken))
+      .send(dates)
+      .expect(403);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/schedule`)
+      .set(authHeader(context.adminToken))
+      .send(dates)
+      .expect(403);
+
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/schedule`)
+      .set(authHeader(context.headToken))
+      .send(dates)
+      .expect(200);
+
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
+      .set(authHeader(context.adminToken))
+      .expect(403);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
+      .set(authHeader(context.headToken))
+      .expect(403);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
+      .set(authHeader(context.adminToken))
+      .expect(403);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
+      .set(authHeader(context.managerToken))
+      .expect(403);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
+      .set(authHeader(context.installerToken))
+      .expect(403);
+
+    const installerAdmin = await loginDualRole('bp6-installer-admin', [
+      RoleName.INSTALLER,
+      RoleName.ADMIN,
+    ]);
+    const headAdmin = await loginDualRole('bp6-head-admin', [
+      RoleName.HEAD,
+      RoleName.ADMIN,
+    ]);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
+      .set(authHeader(installerAdmin.token))
+      .expect(200);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
+      .set(authHeader(headAdmin.token))
+      .expect(200);
+    const directorAdmin = await loginDualRole('bp6-director-admin', [
+      RoleName.DIRECTOR,
+      RoleName.ADMIN,
+    ]);
+    await request(server)
+      .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
+      .set(authHeader(directorAdmin.token))
+      .expect(200);
+
+    const soId = setup.supplierOrderIds[0];
+    await request(server)
+      .post(`/supplier-orders/${soId}/confirm-client-delivery`)
+      .set(authHeader(context.adminToken))
+      .expect(403);
+    await request(server)
+      .post(`/supplier-orders/${soId}/confirm-client-delivery`)
+      .set(authHeader(context.accountantToken))
+      .expect(403);
+    await request(server)
+      .post(`/supplier-orders/${soId}/confirm-client-delivery`)
+      .set(authHeader(context.storekeeperToken))
+      .expect(403);
+    await request(server)
+      .post(`/supplier-orders/${soId}/confirm-client-delivery`)
+      .set(authHeader(context.installerToken))
+      .expect(403);
+
+    const passwordHash = await hash(TEST_PASSWORD, 12);
+    await upsertUser(prisma, {
+      email: `bp6-foreign-manager-${RUN_ID}@hpl.test`,
+      firstName: 'Foreign',
+      lastName: 'Manager',
+      passwordHash,
+      roleName: RoleName.MANAGER,
+    });
+    const foreign = await login(
+      server,
+      `bp6-foreign-manager-${RUN_ID}@hpl.test`,
+    );
+    await request(server)
+      .post(`/supplier-orders/${soId}/confirm-client-delivery`)
+      .set(authHeader(foreign.accessToken))
+      .expect(404);
+
+    await prisma.order.update({
+      where: { id: setup.orderId },
+      data: { paymentStatus: PaymentStatus.UNPAID },
+    });
+    await request(server)
+      .post(`/supplier-orders/${soId}/confirm-client-delivery`)
+      .set(authHeader(context.managerToken))
+      .expect(409);
+
+    await prisma.order.update({
+      where: { id: setup.orderId },
+      data: { paymentStatus: PaymentStatus.PAID },
+    });
+    await request(server)
+      .post(`/supplier-orders/${soId}/confirm-client-delivery`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+  });
+
+  it('closure flow preserves Quote versions, frozen FX, one Deal and client-document secrecy under races', async () => {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Closure flow ${RUN_ID}`,
+        source: 'closure-e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<EntityResponse>(leadResponse).id;
+    await qualifyLeadStage1(leadId);
+    await confirmLeadStage2(leadId);
+
+    const qualifiedLead = await prisma.lead.findUniqueOrThrow({
+      where: { id: leadId },
+      select: { dealId: true, status: true },
+    });
+    expect(qualifiedLead.status).toBe('QUALIFIED');
+    expect(qualifiedLead.dealId).toBeTruthy();
+
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'exterior_with_uv' },
+    });
+    const sizes = await prisma.panelSize.findMany({
+      where: {
+        OR: [
+          { widthMm: 1220, heightMm: 2440 },
+          { widthMm: 1220, heightMm: 3050 },
+        ],
+      },
+      orderBy: { heightMm: 'asc' },
+    });
+    expect(sizes).toHaveLength(2);
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const quality = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+    const technicalGroups = (firstArea = '12.5') => [
+      {
+        title: 'Фасад A',
+        items: [
+          {
+            panelTypeId: panelType.id,
+            panelSizeId: sizes[0].id,
+            thicknessMm: '10',
+            qualityClassId: quality.id,
+            requiredAreaM2: firstArea,
+          },
+          {
+            panelTypeId: panelType.id,
+            panelSizeId: sizes[1].id,
+            thicknessMm: '10',
+            qualityClassId: quality.id,
+            requiredAreaM2: '8.75',
+          },
+        ],
+      },
+      {
+        title: 'Фасад B',
+        items: [
+          {
+            panelTypeId: panelType.id,
+            panelSizeId: sizes[0].id,
+            thicknessMm: '10',
+            qualityClassId: quality.id,
+            requiredAreaM2: '6.25',
+          },
+        ],
+      },
+    ];
+
+    const calculationRequest = await request(server)
+      .post('/calculations/requests')
+      .set(authHeader(context.managerToken))
+      .send({ leadId, calculations: technicalGroups() })
+      .expect(201);
+    const requestId = bodyAs<EntityResponse>(calculationRequest).id;
+    await request(server)
+      .post(`/calculations/requests/${requestId}/submit`)
+      .set(authHeader(context.managerToken))
+      .expect(201);
+
+    const quoteAttempts = await Promise.all([
+      request(server)
+        .post(`/calculations/requests/${requestId}/convert-to-quote`)
+        .set(authHeader(context.headToken))
+        .send({ supplierId: supplier.id }),
+      request(server)
+        .post(`/calculations/requests/${requestId}/convert-to-quote`)
+        .set(authHeader(context.headToken))
+        .send({ supplierId: supplier.id }),
+    ]);
+    expect(quoteAttempts.map((item) => item.status).sort()).toEqual([201, 409]);
+    const v1Response = quoteAttempts.find((item) => item.status === 201)!;
+    const v1 = bodyAs<{ id: string; items: EntityResponse[] }>(v1Response);
+    expect(v1.items).toHaveLength(3);
+
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.directorToken))
+      .send({ rate: '0.123' })
+      .expect(201);
+    const approvalStatuses = await Promise.all(
+      v1.items.slice(0, 2).map((item, index) =>
+        request(server)
+          .patch(`/quotes/${v1.id}/approved-pricing`)
+          .set(authHeader(context.headToken))
+          .send({
+            items: [
+              { id: item.id, purchasePricePerM2Cny: String(80 + index * 10) },
+            ],
+          }),
+      ),
+    );
+    expect(approvalStatuses.every((item) => item.status === 200)).toBe(true);
+    await request(server)
+      .post('/currency-rates')
+      .set(authHeader(context.directorToken))
+      .send({ rate: '0.321' })
+      .expect(201);
+    await request(server)
+      .patch(`/quotes/${v1.id}/approved-pricing`)
+      .set(authHeader(context.headToken))
+      .send({ items: [{ id: v1.items[2].id, purchasePricePerM2Cny: '100' }] })
+      .expect(200);
+
+    const secret = `INTERNAL-SECRET-${RUN_ID}`;
+    const clientNote = `Client note ${RUN_ID}`;
+    await request(server)
+      .patch(`/quotes/${v1.id}/commercial-terms`)
+      .set(authHeader(context.headToken))
+      .send({
+        productionTerms: '15–20 рабочих дней после согласования',
+        deliveryTerms: 'Доставка ориентировочно за 4 недели',
+        commercialNote: clientNote,
+        internalCommercialNote: secret,
+      })
+      .expect(200);
+    const finalizedV1 = await Promise.all([
+      request(server)
+        .post(`/quotes/${v1.id}/finalize`)
+        .set(authHeader(context.headToken))
+        .send({}),
+      request(server)
+        .post(`/quotes/${v1.id}/finalize`)
+        .set(authHeader(context.headToken))
+        .send({}),
+    ]);
+    expect(finalizedV1.every((item) => item.status === 200)).toBe(true);
+
+    const v1Row = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: v1.id },
+      include: { items: true },
+    });
+    expect(v1Row.cnyUsdRate?.toString()).toBe('0.123');
+    expect(v1Row.items.every((item) => item.priceApprovedAt !== null)).toBe(
+      true,
+    );
+    expect(v1Row.pdfFileId).toBeTruthy();
+    expect(
+      await prisma.file.count({
+        where: { relatedType: 'QUOTE', relatedId: v1.id },
+      }),
+    ).toBe(1);
+
+    const docx = await request(server)
+      .get(`/quotes/${v1.id}/docx`)
+      .set(authHeader(context.headToken))
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    const archive = await JSZip.loadAsync(docx.body as Buffer);
+    const documentXml = await archive
+      .file('word/document.xml')!
+      .async('string');
+    expect(documentXml).toContain(clientNote);
+    expect(documentXml).not.toContain(secret);
+
+    await request(server)
+      .patch(`/calculations/requests/${requestId}`)
+      .set(authHeader(context.headToken))
+      .send({ calculations: technicalGroups('18.5') })
+      .expect(200);
+    const historicalGroups = await prisma.calculationSession.findMany({
+      where: { requestId },
+      select: { deletedAt: true },
+    });
+    expect(
+      historicalGroups.filter((item) => item.deletedAt !== null),
+    ).toHaveLength(2);
+    expect(
+      historicalGroups.filter((item) => item.deletedAt === null),
+    ).toHaveLength(2);
+
+    const versions = await Promise.all([
+      request(server)
+        .post(`/quotes/${v1.id}/versions`)
+        .set(authHeader(context.headToken)),
+      request(server)
+        .post(`/quotes/${v1.id}/versions`)
+        .set(authHeader(context.headToken)),
+    ]);
+    expect(versions.every((item) => item.status === 201)).toBe(true);
+    const versionIds = versions.map((item) => bodyAs<EntityResponse>(item).id);
+    expect(new Set(versionIds).size).toBe(1);
+    const v2Id = versionIds[0];
+    const v2 = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: v2Id },
+      include: { items: true },
+    });
+    expect(v2.versionNumber).toBe(2);
+    expect(v2.previousVersionId).toBe(v1.id);
+    expect(v2.cnyUsdRate).toBeNull();
+    expect(v2.pdfFileId).toBeNull();
+    expect(v2.items).toHaveLength(3);
+    expect(v2.items[0].requiredAreaM2.toString()).toBe('18.5');
+
+    await request(server)
+      .patch(`/quotes/${v2.id}/approved-pricing`)
+      .set(authHeader(context.headToken))
+      .send({
+        items: v2.items.map((item, index) => ({
+          id: item.id,
+          purchasePricePerM2Cny: String(110 + index * 10),
+        })),
+      })
+      .expect(200);
+    await request(server)
+      .post(`/quotes/${v2.id}/finalize`)
+      .set(authHeader(context.headToken))
+      .send({})
+      .expect(200);
+    await request(server)
+      .patch(`/quotes/${v2.id}/status`)
+      .set(authHeader(context.managerToken))
+      .send({ status: 'sent' })
+      .expect(200);
+    await request(server)
+      .patch(`/quotes/${v2.id}/status`)
+      .set(authHeader(context.headToken))
+      .send({ status: 'approved' })
+      .expect(200);
+    await request(server)
+      .post(`/quotes/${v2.id}/client-accept`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+
+    const acceptedLead = await prisma.lead.findUniqueOrThrow({
+      where: { id: leadId },
+    });
+    const acceptedDeal = await prisma.deal.findUniqueOrThrow({
+      where: { id: acceptedLead.dealId! },
+    });
+    expect(acceptedLead.dealId).toBe(qualifiedLead.dealId);
+    expect(acceptedLead.status).toBe('CONVERTED');
+    expect(acceptedDeal.stage).toBe(DealStage.AGREEMENT_PENDING);
+    expect(v1Row.totalAmount.toString()).toBe(
+      (
+        await prisma.panelQuote.findUniqueOrThrow({ where: { id: v1.id } })
+      ).totalAmount.toString(),
+    );
+    expect(
+      (
+        await prisma.panelQuote.findUniqueOrThrow({ where: { id: v2.id } })
+      ).cnyUsdRate?.toString(),
+    ).toBe('0.321');
+  });
+
+  it('marks KPI incomplete until DIRECTOR explicitly supplies every deal-currency rate', async () => {
+    const leadId = bodyAs<EntityResponse>(
+      await request(server)
+        .post('/leads')
+        .set(authHeader(context.managerToken))
+        .send({
+          title: `KPI currency closure ${RUN_ID}`,
+          source: 'closure-e2e',
+          clientId: context.clientId,
+        })
+        .expect(201),
+    ).id;
+    await qualifyLeadStage1(leadId);
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    await prisma.deal.update({
+      where: { id: lead.dealId! },
+      data: {
+        stage: DealStage.WON,
+        currency: 'CNY',
+        totalAmount: new Prisma.Decimal('100'),
+      },
+    });
+    await prisma.dealStageHistory.create({
+      data: {
+        dealId: lead.dealId!,
+        oldStage: DealStage.QUALIFICATION,
+        newStage: DealStage.WON,
+        changedById: context.managerId,
+      },
+    });
+
+    const plan = {
+      userId: context.managerId,
+      period: '2026-08-01T00:00:00.000Z',
+      targetAmount: '1000000',
+      currencyCode: 'UZS',
+    };
+    await request(server)
+      .post('/reports/sales-plans')
+      .set(authHeader(context.managerToken))
+      .send({
+        ...plan,
+        fxRates: [{ fromCurrency: 'USD', rateToPlanCurrency: '12500' }],
+      })
+      .expect(403);
+    await request(server)
+      .post('/reports/sales-plans')
+      .set(authHeader(context.directorToken))
+      .send({
+        ...plan,
+        fxRates: [{ fromCurrency: 'USD', rateToPlanCurrency: '12500' }],
+      })
+      .expect(201);
+
+    const filter = {
+      dateFrom: '2026-08-01T00:00:00.000Z',
+      dateTo: '2026-08-31T23:59:59.999Z',
+      managerId: context.managerId,
+    };
+    const incomplete = await request(server)
+      .get('/reports/kpi')
+      .query(filter)
+      .set(authHeader(context.directorToken))
+      .expect(200);
+    const incompleteMetric = bodyAs<{
+      managers: Array<{
+        salesPlanStatus: string;
+        missingFxCurrencies: string[];
+        salesPlanPercent: number | null;
+        totalScore: number | null;
+      }>;
+    }>(incomplete).managers[0];
+    expect(incompleteMetric.salesPlanStatus).toBe('INCOMPLETE');
+    expect(incompleteMetric.missingFxCurrencies).toContain('CNY');
+    expect(incompleteMetric.salesPlanPercent).toBeNull();
+    expect(incompleteMetric.totalScore).toBeNull();
+
+    await request(server)
+      .post('/reports/sales-plans')
+      .set(authHeader(context.directorToken))
+      .send({
+        ...plan,
+        fxRates: [
+          { fromCurrency: 'USD', rateToPlanCurrency: '12500' },
+          { fromCurrency: 'CNY', rateToPlanCurrency: '1700' },
+        ],
+      })
+      .expect(201);
+    const complete = await request(server)
+      .get('/reports/kpi')
+      .query(filter)
+      .set(authHeader(context.directorToken))
+      .expect(200);
+    const completeMetric = bodyAs<{
+      managers: Array<{
+        salesPlanStatus: string;
+        missingFxCurrencies: string[];
+        salesPlanPercent: number | null;
+        totalScore: number | null;
+      }>;
+    }>(complete).managers[0];
+    expect(completeMetric.salesPlanStatus).toBe('COMPLETE');
+    expect(completeMetric.missingFxCurrencies).toEqual([]);
+    expect(completeMetric.salesPlanPercent).not.toBeNull();
+    expect(completeMetric.totalScore).not.toBeNull();
+  });
+
+  async function createClientAcceptedHplDeal(
+    installationRequired = false,
+  ): Promise<{
     quoteId: string;
     dealId: string;
     supplierId: string;
   }> {
-    const quoteId = await createApprovedPanelQuote();
+    const quoteId = await createApprovedPanelQuote(installationRequired);
     await request(server)
       .post(`/quotes/${quoteId}/client-accept`)
       .set(authHeader(context.managerToken))
       .expect(200);
     const conversion = await request(server)
       .post(`/quotes/${quoteId}/convert-to-deal`)
-      .set(authHeader(context.managerToken))
+      .set(authHeader(context.headToken))
       .expect(201);
     const dealId = bodyAs<{ dealId: string }>(conversion).dealId;
     const supplier = await prisma.supplier.findFirstOrThrow({
       where: { code: 'wuya' },
     });
     return { quoteId, dealId, supplierId: supplier.id };
+  }
+
+  async function createShippedPaidHplDeal(
+    installationRequired = false,
+    supplierOrderCount = 1,
+  ): Promise<{
+    dealId: string;
+    orderId: string;
+    supplierOrderIds: string[];
+  }> {
+    const created = await createClientAcceptedHplDeal(installationRequired);
+    const payload = {
+      supplierId: created.supplierId,
+      orderedAt: '2026-08-17T00:00:00.000Z',
+      expectedReadyAt: '2026-08-20T00:00:00.000Z',
+    };
+    const supplierOrderIds: string[] = [];
+    for (let index = 0; index < supplierOrderCount; index += 1) {
+      const createdOrder = await request(server)
+        .post(`/deals/${created.dealId}/supplier-orders`)
+        .set(authHeader(context.headToken))
+        .send({
+          ...payload,
+          comment: `BP6 batch ${index + 1}`,
+        })
+        .expect(201);
+      supplierOrderIds.push(bodyAs<EntityResponse>(createdOrder).id);
+    }
+
+    await prisma.deal.update({
+      where: { id: created.dealId },
+      data: { stage: DealStage.WON },
+    });
+    const orderResponse = await request(server)
+      .post('/orders/from-deal')
+      .set(authHeader(context.managerToken))
+      .send({ dealId: created.dealId })
+      .expect(201);
+    const order = bodyAs<OrderResponse>(orderResponse);
+    await payOrderInFull(order.id, order.totalAmount);
+
+    for (const supplierOrderId of supplierOrderIds) {
+      await request(server)
+        .post(`/supplier-orders/${supplierOrderId}/confirm-ready`)
+        .set(authHeader(context.headToken))
+        .expect(200);
+      await request(server)
+        .patch(`/supplier-orders/${supplierOrderId}/status`)
+        .set(authHeader(context.headToken))
+        .send({ status: SupplierOrderStatus.SHIPPED })
+        .expect(200);
+    }
+
+    return {
+      dealId: created.dealId,
+      orderId: order.id,
+      supplierOrderIds,
+    };
   }
 
   async function loginDualRole(
@@ -5230,19 +6629,21 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     return leadId;
   }
 
-  async function qualifyLeadStage1(leadId: string): Promise<void> {
+  async function qualifyLeadStage1(
+    leadId: string,
+    installationRequired = false,
+  ): Promise<void> {
     await request(server)
       .post(`/leads/${leadId}/qualify`)
       .set(authHeader(context.managerToken))
       .send({
         clientId: context.clientId,
+        contactId: context.contactId,
         projectObjectId: context.projectObjectId,
         needDescription: 'HPL panels for lobby',
-        estimatedAmount: 125000,
-        targetDate: futureIso(20),
         decisionMakerContact: 'Chief architect',
         qualification: await stage1QualificationPayload(prisma, {
-          installationRequired: false,
+          installationRequired,
         }),
       })
       .expect(201);
@@ -5271,8 +6672,10 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(201);
   }
 
-  async function createApprovedPanelQuote(): Promise<string> {
-    const quoteId = await createSentPanelQuote();
+  async function createApprovedPanelQuote(
+    installationRequired = false,
+  ): Promise<string> {
+    const quoteId = await createSentPanelQuote(installationRequired);
 
     await request(server)
       .patch(`/quotes/${quoteId}/status`)
@@ -5283,7 +6686,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     return quoteId;
   }
 
-  async function createSentPanelQuote(): Promise<string> {
+  async function createSentPanelQuote(
+    installationRequired = false,
+  ): Promise<string> {
     const leadResponse = await request(server)
       .post('/leads')
       .set(authHeader(context.managerToken))
@@ -5296,11 +6701,11 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
     const leadId = bodyAs<EntityResponse>(leadResponse).id;
 
-    await qualifyLeadStage1(leadId);
+    await qualifyLeadStage1(leadId, installationRequired);
     await confirmLeadStage2(leadId);
 
     const panelType = await prisma.panelType.findFirstOrThrow({
-      where: { code: 'exterior' },
+      where: { code: 'exterior_with_uv' },
     });
     const panelSize = await prisma.panelSize.findFirstOrThrow({
       where: { widthMm: 1220, heightMm: 2440 },
@@ -5312,38 +6717,78 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       where: { code: 'economy' },
     });
 
-    const calculation = await request(server)
-      .post('/calculations')
+    const calculationRequest = await request(server)
+      .post('/calculations/requests')
       .set(authHeader(context.managerToken))
       .send({
         leadId,
-        items: [
+        notes: 'Canonical Manager technical request',
+        calculations: [
           {
-            panelTypeId: panelType.id,
-            panelSizeId: panelSize.id,
-            thicknessMm: 10,
-            supplierId: supplier.id,
-            qualityClassId: qualityClass.id,
-            requiredAreaM2: '15.50',
+            title: 'Main facade',
+            items: [
+              {
+                panelTypeId: panelType.id,
+                panelSizeId: panelSize.id,
+                thicknessMm: 10,
+                qualityClassId: qualityClass.id,
+                requiredAreaM2: '15.50',
+              },
+            ],
           },
         ],
-      })
-      .expect(201);
+      });
+    if (calculationRequest.status !== 201) {
+      throw new Error(
+        `Canonical calculation request failed: ${calculationRequest.status} ${JSON.stringify(calculationRequest.body)}`,
+      );
+    }
 
-    const calculationId = bodyAs<EntityResponse>(calculation).id;
+    const requestId = bodyAs<EntityResponse>(calculationRequest).id;
 
     await request(server)
-      .post(`/calculations/${calculationId}/finalize`)
+      .post(`/calculations/requests/${requestId}/submit`)
       .set(authHeader(context.managerToken))
       .expect(201);
 
     const quoteResponse = await request(server)
-      .post(`/calculations/${calculationId}/convert-to-quote`)
-      .set(authHeader(context.managerToken))
-      .send({ clientComment: 'E2E sent quote' })
+      .post(`/calculations/requests/${requestId}/convert-to-quote`)
+      .set(authHeader(context.headToken))
+      .send({ supplierId: supplier.id, clientComment: 'E2E sent quote' })
       .expect(201);
 
-    const quoteId = bodyAs<EntityResponse>(quoteResponse).id;
+    const quote = bodyAs<EntityResponse & { items: EntityResponse[] }>(
+      quoteResponse,
+    );
+    const quoteId = quote.id;
+
+    await request(server)
+      .patch(`/quotes/${quoteId}/approved-pricing`)
+      .set(authHeader(context.headToken))
+      .send({
+        items: quote.items.map((item, index) => ({
+          id: item.id,
+          purchasePricePerM2Cny: String(80 + index * 10),
+        })),
+      })
+      .expect(200);
+
+    await request(server)
+      .patch(`/quotes/${quoteId}/commercial-terms`)
+      .set(authHeader(context.headToken))
+      .send({
+        productionTerms: '15–20 рабочих дней',
+        deliveryTerms: 'Ориентировочно 4 недели после утверждения декора',
+        commercialNote: 'Client-facing E2E note',
+        internalCommercialNote: 'INTERNAL-ONLY-DO-NOT-SHOW',
+      })
+      .expect(200);
+
+    await request(server)
+      .post(`/quotes/${quoteId}/finalize`)
+      .set(authHeader(context.headToken))
+      .send({})
+      .expect(200);
 
     await request(server)
       .patch(`/quotes/${quoteId}/status`)
@@ -5467,7 +6912,7 @@ async function seedAcceptanceData(
     passwordHash,
     roleName: RoleName.ACCOUNTANT,
   });
-  const storekeeper = await upsertUser(prisma, {
+  await upsertUser(prisma, {
     email: `storekeeper-${RUN_ID}@hpl.test`,
     firstName: 'Acceptance',
     lastName: 'Storekeeper',
@@ -5486,10 +6931,7 @@ async function seedAcceptanceData(
   const directorTokens = await login(server, `director-${RUN_ID}@hpl.test`);
   const headTokens = await login(server, `head-${RUN_ID}@hpl.test`);
   const managerTokens = await login(server, `manager-${RUN_ID}@hpl.test`);
-  const accountantTokens = await login(
-    server,
-    `accountant-${RUN_ID}@hpl.test`,
-  );
+  const accountantTokens = await login(server, `accountant-${RUN_ID}@hpl.test`);
   const storekeeperTokens = await login(
     server,
     `storekeeper-${RUN_ID}@hpl.test`,
@@ -5789,6 +7231,7 @@ async function createDeal(
       clientId: context.clientId,
       projectObjectId: context.projectObjectId,
       ownerId: context.managerId,
+      fulfillmentSource: FulfillmentSource.WAREHOUSE_STOCK,
       stage,
       totalAmount,
       margin: totalAmount.minus(purchaseCost),
@@ -5825,14 +7268,14 @@ async function stage1QualificationPayload(
   },
 ): Promise<Record<string, unknown>> {
   const panelType = await prisma.panelType.findFirstOrThrow({
-    where: { code: 'exterior' },
+    where: { code: 'exterior_with_uv' },
   });
   const panelSize = await prisma.panelSize.findFirstOrThrow({
     where: { widthMm: 1220, heightMm: 2440 },
   });
 
   return {
-    application: 'EXTERIOR',
+    application: 'EXTERIOR_WITH_UV',
     panelTypeId: panelType.id,
     thicknessMm: 10,
     panelSizeId: panelSize.id,
@@ -5848,7 +7291,9 @@ async function stage1QualificationPayload(
 }
 
 function hashApiKeyToken(token: string, pepper: string): string {
-  return createHash('sha256').update(token + pepper).digest('hex');
+  return createHash('sha256')
+    .update(token + pepper)
+    .digest('hex');
 }
 
 async function seedServiceAccountsForE2e(
@@ -5883,14 +7328,4 @@ async function seedServiceAccountsForE2e(
   });
 
   return { apiKeyToken, apiKeyLimitedToken };
-}
-
-function getFromMap<T>(map: Map<string, T>, key: string): T {
-  const value = map.get(key);
-
-  if (!value) {
-    throw new Error(`Missing test fixture: ${key}`);
-  }
-
-  return value;
 }

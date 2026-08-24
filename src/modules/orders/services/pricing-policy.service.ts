@@ -1,4 +1,8 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { RoleName } from '@prisma/client';
 import { hasRole, PolicyUser } from '../../../common/enums/role.enum';
 
@@ -27,10 +31,7 @@ export class PricingPolicyService {
     }
   }
 
-  validateItemPrices(
-    user: PolicyUser,
-    items: PricingValidationItem[],
-  ): void {
+  validateItemPrices(user: PolicyUser, items: PricingValidationItem[]): void {
     const maxDiscountPercent = hasRole(user, RoleName.HEAD) ? 15 : 0;
 
     for (const item of items) {

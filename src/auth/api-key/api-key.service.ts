@@ -41,7 +41,9 @@ export class ApiKeyService {
       .catch(() => undefined);
   }
 
-  async rotateToken(name: string): Promise<{ token: string; tokenHash: string }> {
+  async rotateToken(
+    name: string,
+  ): Promise<{ token: string; tokenHash: string }> {
     const existing = await this.prisma.serviceAccount.findUnique({
       where: { name },
     });

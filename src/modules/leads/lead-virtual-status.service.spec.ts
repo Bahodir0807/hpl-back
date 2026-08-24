@@ -18,7 +18,10 @@ describe('LeadVirtualStatusService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new LeadVirtualStatusService(prisma as never, configService as never);
+    service = new LeadVirtualStatusService(
+      prisma as never,
+      configService as never,
+    );
     prisma.user.findUnique.mockResolvedValue({ id: 'pool-user-id' });
   });
 

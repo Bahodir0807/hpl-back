@@ -55,7 +55,7 @@ describe('PanelPriceCalculator', () => {
         where: expect.objectContaining({
           supplierId,
           qualityClassId,
-          thicknessMm: 10,
+          thicknessMm: new Prisma.Decimal('10'),
         }),
       }),
     );
@@ -88,6 +88,62 @@ describe('PanelPriceCalculator', () => {
     );
     expect(twoSqm.clientPricePerM2.toString()).toBe(
       oneSqm.clientPricePerM2.toString(),
+    );
+  });
+
+  it('uses an exact snapshot area when Quote pricing supplies areaM2', async () => {
+    const result = await calculator.calculate({
+      supplierId,
+      qualityClassId,
+      thicknessMm: 10,
+      areaM2: new Prisma.Decimal('2.9768'),
+      sheets: 2,
+      cnyUsdRate: fixtureRate,
+      purchasePricePerM2Cny: '80',
+    });
+
+    expect(result.areaM2.toString()).toBe('2.9768');
+    expect(result.pricePerSheet.toString()).toBe('47.63');
+    expect(result.total.toString()).toBe('95.26');
+  });
+
+  it('keeps legacy geometry and Quote snapshot pricing identical', async () => {
+    const legacy = await calculator.calculate({
+      ...baseInput,
+      widthMm: 1220,
+      heightMm: 2440,
+      sheets: 6,
+      purchasePricePerM2Cny: '125',
+    });
+    const quotePricing = await calculator.calculate({
+      supplierId,
+      qualityClassId,
+      thicknessMm: 10,
+      areaM2: '2.9768',
+      sheets: 6,
+      cnyUsdRate: fixtureRate,
+      purchasePricePerM2Cny: '125',
+    });
+
+    expect(quotePricing.clientPricePerM2.toString()).toBe(
+      legacy.clientPricePerM2.toString(),
+    );
+    expect(quotePricing.pricePerSheet.toString()).toBe(
+      legacy.pricePerSheet.toString(),
+    );
+    expect(quotePricing.total.toString()).toBe(legacy.total.toString());
+  });
+
+  it('does not apply an extra 1.12 VAT multiplier on the selling price', async () => {
+    const result = await calculator.calculate(baseInput);
+    const expected = fixtureCny
+      .mul(fixtureRate)
+      .mul(HPL_SELLING_COEFFICIENT)
+      .toDecimalPlaces(2);
+
+    expect(result.clientPricePerM2.toString()).toBe(expected.toString());
+    expect(result.clientPricePerM2.toString()).not.toBe(
+      expected.mul('1.12').toDecimalPlaces(2).toString(),
     );
   });
 
@@ -135,7 +191,9 @@ describe('PanelPriceCalculator', () => {
     expect(first.total).toBeInstanceOf(Prisma.Decimal);
     expect(first.clientPricePerM2).toBeInstanceOf(Prisma.Decimal);
     expect(first.total.toString()).toBe(second.total.toString());
-    expect(first.pricePerSheet.toString()).toBe(second.pricePerSheet.toString());
+    expect(first.pricePerSheet.toString()).toBe(
+      second.pricePerSheet.toString(),
+    );
   });
 
   it('rejects rate <= 0', async () => {
@@ -191,11 +249,62 @@ describe('PanelPriceCalculator', () => {
     });
   });
 
-  it('throws PRICING_NOT_FOUND when thickness pricing is missing', async () => {
+  it('throws PRICING_NOT_CONFIGURED when thickness pricing is missing', async () => {
     prisma.panelThicknessPricing.findFirst.mockResolvedValue(null);
 
     await expect(
       calculator.calculate({ ...baseInput, thicknessMm: 99 }),
-    ).rejects.toBeInstanceOf(BusinessException);
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'PRICING_NOT_CONFIGURED',
+      }),
+    });
+  });
+
+  it('uses a manual CNY purchase price and skips PanelThicknessPricing', async () => {
+    prisma.panelThicknessPricing.findFirst.mockResolvedValue(null);
+
+    const result = await calculator.calculate({
+      ...baseInput,
+      purchasePricePerM2Cny: '80',
+    });
+
+    expect(prisma.panelThicknessPricing.findFirst).not.toHaveBeenCalled();
+    expect(result.supplierPricePerM2.toString()).toBe('80');
+    expect(result.clientPricePerM2.toString()).toBe(
+      new Prisma.Decimal('80')
+        .mul(fixtureRate)
+        .mul(HPL_SELLING_COEFFICIENT)
+        .toDecimalPlaces(2)
+        .toString(),
+    );
+  });
+
+  it('does not let catalog pricing override a manual CNY purchase price', async () => {
+    prisma.panelThicknessPricing.findFirst.mockResolvedValue({
+      basePricePerM2: new Prisma.Decimal('90'),
+      currencyCode: 'CNY',
+    });
+
+    const result = await calculator.calculate({
+      ...baseInput,
+      purchasePricePerM2Cny: '80',
+    });
+
+    expect(prisma.panelThicknessPricing.findFirst).not.toHaveBeenCalled();
+    expect(result.supplierPricePerM2.toString()).toBe('80');
+  });
+
+  it('rejects a non-positive manual CNY purchase price', async () => {
+    await expect(
+      calculator.calculate({
+        ...baseInput,
+        purchasePricePerM2Cny: '0',
+      }),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'INVALID_SUPPLIER_PRICE',
+      }),
+    });
   });
 });

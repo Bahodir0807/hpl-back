@@ -1,50 +1,29 @@
 import { Prisma, PrismaClient } from '@prisma/client';
 import {
-  HPL_FIXTURE_CNY_USD_RATE,
-  HPL_FIXTURE_ECONOMY_10MM_CNY_PER_M2,
+  HPL_CANONICAL_PANEL_SIZES,
+  HPL_CUSTOM_PANEL_TYPE_CODE,
+  HPL_CUSTOM_PANEL_TYPE_DISPLAY_RU,
+  HPL_PANEL_TYPE_CODES,
+  HPL_PANEL_TYPE_DISPLAY_RU,
+  HPL_QUALITY_CLASS_CODES,
+  isCanonicalPanelSize,
+  panelSizeAreaM2,
+  panelSizeDisplayName,
+  type HplPanelTypeCode,
+} from '../../src/panels/hpl-catalog';
+import {
   HPL_SELLING_CURRENCY,
   HPL_SOURCE_CURRENCY,
+  HPL_FIXTURE_CNY_USD_RATE,
 } from '../../src/panels/pricing/hpl-pricing.constants';
 import { SEEDED_SUPPLIER_QUALITY_MAPPINGS } from '../../src/panels/pricing/hpl-quality-matrix';
 
-const panelTypes = [
-  { code: 'exterior', displayNameRu: 'Экстерьерные' },
-  { code: 'interior', displayNameRu: 'Интерьерные' },
-  { code: 'laboratory', displayNameRu: 'Лабораторные' },
-] as const;
-
-const sizeDefinitions = [
-  { widthMm: 1220, heightMm: 2440, displayName: '1220×2440', sortOrder: 1 },
-  { widthMm: 1220, heightMm: 3050, displayName: '1220×3050', sortOrder: 2 },
-  { widthMm: 1300, heightMm: 2800, displayName: '1300×2800', sortOrder: 3 },
-  { widthMm: 1300, heightMm: 3050, displayName: '1300×3050', sortOrder: 4 },
-  { widthMm: 1500, heightMm: 3000, displayName: '1500×3000', sortOrder: 5 },
-  { widthMm: 1500, heightMm: 3050, displayName: '1500×3050', sortOrder: 6 },
-  { widthMm: 1525, heightMm: 3050, displayName: '1525×3050', sortOrder: 7 },
-  { widthMm: 1525, heightMm: 3660, displayName: '1525×3660', sortOrder: 8 },
-  { widthMm: 1830, heightMm: 2440, displayName: '1830×2440', sortOrder: 9 },
-  { widthMm: 1830, heightMm: 3050, displayName: '1830×3050', sortOrder: 10 },
-  { widthMm: 1830, heightMm: 3660, displayName: '1830×3660', sortOrder: 11 },
-  { widthMm: 2000, heightMm: 3000, displayName: '2000×3000', sortOrder: 12 },
-  { widthMm: 2000, heightMm: 3050, displayName: '2000×3050', sortOrder: 13 },
-  { widthMm: 2000, heightMm: 3660, displayName: '2000×3660', sortOrder: 14 },
-  { widthMm: 2130, heightMm: 3050, displayName: '2130×3050', sortOrder: 15 },
-  { widthMm: 2130, heightMm: 3660, displayName: '2130×3660', sortOrder: 16 },
-  { widthMm: 2440, heightMm: 3050, displayName: '2440×3050', sortOrder: 17 },
-  { widthMm: 2440, heightMm: 3660, displayName: '2440×3660', sortOrder: 18 },
-  { widthMm: 2500, heightMm: 3050, displayName: '2500×3050', sortOrder: 19 },
-  { widthMm: 2500, heightMm: 3660, displayName: '2500×3660', sortOrder: 20 },
-] as const;
-
-const thicknessPricings = [
-  { thicknessMm: 6, basePricePerM2: 60 },
-  { thicknessMm: 8, basePricePerM2: 80 },
-  { thicknessMm: 10, basePricePerM2: Number(HPL_FIXTURE_ECONOMY_10MM_CNY_PER_M2) },
-  { thicknessMm: 12, basePricePerM2: 120 },
-  { thicknessMm: 16, basePricePerM2: 160 },
-  { thicknessMm: 18, basePricePerM2: 180 },
-  { thicknessMm: 20, basePricePerM2: 200 },
-] as const;
+const panelTypes: Array<{ code: HplPanelTypeCode; displayNameRu: string }> = (
+  Object.values(HPL_PANEL_TYPE_CODES) as HplPanelTypeCode[]
+).map((code) => ({
+  code,
+  displayNameRu: HPL_PANEL_TYPE_DISPLAY_RU[code],
+}));
 
 const qualityClasses = [
   { code: 'economy', nameRu: 'Эконом' },
@@ -52,24 +31,25 @@ const qualityClasses = [
   { code: 'premium', nameRu: 'Премиум' },
 ] as const;
 
-const qualityPriceMultipliers: Record<
-  (typeof qualityClasses)[number]['code'],
-  number
-> = {
-  economy: 1,
-  medium: 1.2,
-  premium: 1.5,
-};
-
 const panelSuppliers = [
   { code: 'wuya', name: 'Wuya', deliveryDays: 10, marginPercent: 15 },
   { code: 'tianran', name: 'Tianran', deliveryDays: 14, marginPercent: 15 },
   { code: 'polybet', name: 'Polybet', deliveryDays: 12, marginPercent: 15 },
 ] as const;
 
-function calcAreaM2(widthMm: number, heightMm: number): Prisma.Decimal {
-  return new Prisma.Decimal((widthMm * heightMm) / 1_000_000);
-}
+const LEGACY_EXTERIOR_CODE = 'exterior';
+const LEGACY_THICKNESS_MM_TO_DEACTIVATE = ['16'];
+
+export type ReferenceSeedReport = {
+  panelTypeCodes: string[];
+  canonicalSizeCount: number;
+  deactivatedLegacySizeCount: number;
+  deactivatedLegacyPricingCount: number;
+  qualityClassCodes: string[];
+  supplierCodes: string[];
+  mappingCount: number;
+  activeCnyUsdRate: boolean;
+};
 
 export async function seedFixtureCnyUsdRate(
   prisma: PrismaClient,
@@ -95,13 +75,97 @@ export async function seedFixtureCnyUsdRate(
   });
 }
 
-export async function seedPanels(prisma: PrismaClient): Promise<void> {
-  await prisma.panelType.createMany({
-    data: panelTypes.map((item) => ({ ...item })),
-    skipDuplicates: true,
+export async function hasActiveCnyUsdRate(
+  prisma: PrismaClient,
+): Promise<boolean> {
+  const now = new Date();
+  const row = await prisma.currencyRate.findFirst({
+    where: {
+      fromCurrency: HPL_SOURCE_CURRENCY,
+      toCurrency: HPL_SELLING_CURRENCY,
+      effectiveFrom: { lte: now },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
+    },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
+async function migrateLegacyExteriorType(prisma: PrismaClient): Promise<void> {
+  const canonical = await prisma.panelType.findUnique({
+    where: { code: HPL_PANEL_TYPE_CODES.EXTERIOR_WITH_UV },
+    select: { id: true },
+  });
+  const legacy = await prisma.panelType.findUnique({
+    where: { code: LEGACY_EXTERIOR_CODE },
+    select: { id: true },
   });
 
-  for (const size of sizeDefinitions) {
+  if (legacy && !canonical) {
+    await prisma.panelType.update({
+      where: { id: legacy.id },
+      data: {
+        code: HPL_PANEL_TYPE_CODES.EXTERIOR_WITH_UV,
+        displayNameRu:
+          HPL_PANEL_TYPE_DISPLAY_RU[HPL_PANEL_TYPE_CODES.EXTERIOR_WITH_UV],
+        isActive: true,
+      },
+    });
+    return;
+  }
+
+  if (legacy && canonical) {
+    await prisma.panelType.update({
+      where: { id: legacy.id },
+      data: { isActive: false },
+    });
+  }
+}
+
+export async function seedPanels(
+  prisma: PrismaClient,
+): Promise<Pick<
+  ReferenceSeedReport,
+  | 'panelTypeCodes'
+  | 'canonicalSizeCount'
+  | 'deactivatedLegacySizeCount'
+  | 'deactivatedLegacyPricingCount'
+  | 'qualityClassCodes'
+  | 'supplierCodes'
+  | 'mappingCount'
+>> {
+  await migrateLegacyExteriorType(prisma);
+
+  for (const panelType of panelTypes) {
+    await prisma.panelType.upsert({
+      where: { code: panelType.code },
+      update: {
+        displayNameRu: panelType.displayNameRu,
+        isActive: true,
+      },
+      create: {
+        code: panelType.code,
+        displayNameRu: panelType.displayNameRu,
+        isActive: true,
+      },
+    });
+  }
+
+  await prisma.panelType.upsert({
+    where: { code: HPL_CUSTOM_PANEL_TYPE_CODE },
+    update: {
+      displayNameRu: HPL_CUSTOM_PANEL_TYPE_DISPLAY_RU,
+      isActive: true,
+    },
+    create: {
+      code: HPL_CUSTOM_PANEL_TYPE_CODE,
+      displayNameRu: HPL_CUSTOM_PANEL_TYPE_DISPLAY_RU,
+      isActive: true,
+    },
+  });
+
+  let sortOrder = 1;
+  for (const size of HPL_CANONICAL_PANEL_SIZES) {
     await prisma.panelSize.upsert({
       where: {
         widthMm_heightMm: {
@@ -110,26 +174,50 @@ export async function seedPanels(prisma: PrismaClient): Promise<void> {
         },
       },
       update: {
-        displayName: size.displayName,
-        sortOrder: size.sortOrder,
-        areaM2: calcAreaM2(size.widthMm, size.heightMm),
+        displayName: panelSizeDisplayName(size.widthMm, size.heightMm),
+        sortOrder,
+        areaM2: panelSizeAreaM2(size.widthMm, size.heightMm),
         isActive: true,
       },
       create: {
         widthMm: size.widthMm,
         heightMm: size.heightMm,
-        displayName: size.displayName,
-        sortOrder: size.sortOrder,
-        areaM2: calcAreaM2(size.widthMm, size.heightMm),
+        displayName: panelSizeDisplayName(size.widthMm, size.heightMm),
+        sortOrder,
+        areaM2: panelSizeAreaM2(size.widthMm, size.heightMm),
         isActive: true,
       },
     });
+    sortOrder += 1;
+  }
+
+  const legacySizes = await prisma.panelSize.findMany({
+    where: { isActive: true },
+    select: { id: true, widthMm: true, heightMm: true },
+  });
+  const legacySizeIds = legacySizes
+    .filter((size) => !isCanonicalPanelSize(size.widthMm, size.heightMm))
+    .map((size) => size.id);
+  let deactivatedLegacySizeCount = 0;
+  if (legacySizeIds.length > 0) {
+    const deactivated = await prisma.panelSize.updateMany({
+      where: { id: { in: legacySizeIds } },
+      data: { isActive: false },
+    });
+    deactivatedLegacySizeCount = deactivated.count;
   }
 
   await prisma.qualityClass.createMany({
     data: qualityClasses.map((item) => ({ ...item })),
     skipDuplicates: true,
   });
+
+  for (const qualityClass of qualityClasses) {
+    await prisma.qualityClass.update({
+      where: { code: qualityClass.code },
+      data: { nameRu: qualityClass.nameRu },
+    });
+  }
 
   for (const supplier of panelSuppliers) {
     await prisma.supplier.upsert({
@@ -151,62 +239,17 @@ export async function seedPanels(prisma: PrismaClient): Promise<void> {
     });
   }
 
-  const validFrom = new Date();
-  const seededSuppliers = await prisma.supplier.findMany({
-    where: { code: { in: [...panelSuppliers.map((item) => item.code)] } },
+  const deactivatedLegacyPricing = await prisma.panelThicknessPricing.updateMany({
+    where: {
+      isActive: true,
+      thicknessMm: {
+        in: LEGACY_THICKNESS_MM_TO_DEACTIVATE.map(
+          (value) => new Prisma.Decimal(value),
+        ),
+      },
+    },
+    data: { isActive: false },
   });
-  const seededQualityClasses = await prisma.qualityClass.findMany({
-    where: { code: { in: [...qualityClasses.map((item) => item.code)] } },
-  });
-
-  for (const supplier of seededSuppliers) {
-    for (const qualityClass of seededQualityClasses) {
-      const multiplier =
-        qualityPriceMultipliers[
-          qualityClass.code as (typeof qualityClasses)[number]['code']
-        ];
-
-      for (const pricing of thicknessPricings) {
-        const basePricePerM2 = new Prisma.Decimal(pricing.basePricePerM2)
-          .mul(multiplier)
-          .toDecimalPlaces(2);
-        const existing = await prisma.panelThicknessPricing.findFirst({
-          where: {
-            supplierId: supplier.id,
-            qualityClassId: qualityClass.id,
-            thicknessMm: pricing.thicknessMm,
-            isActive: true,
-          },
-        });
-
-        if (existing) {
-          const shouldReplaceLegacyUzsFixture =
-            existing.currencyCode !== HPL_SOURCE_CURRENCY;
-          await prisma.panelThicknessPricing.update({
-            where: { id: existing.id },
-            data: {
-              ...(shouldReplaceLegacyUzsFixture
-                ? { basePricePerM2, currencyCode: HPL_SOURCE_CURRENCY }
-                : {}),
-            },
-          });
-        } else {
-          await prisma.panelThicknessPricing.create({
-            data: {
-              supplierId: supplier.id,
-              qualityClassId: qualityClass.id,
-              thicknessMm: pricing.thicknessMm,
-              basePricePerM2,
-              currencyCode: HPL_SOURCE_CURRENCY,
-              validFrom,
-              validTo: null,
-              isActive: true,
-            },
-          });
-        }
-      }
-    }
-  }
 
   const allowedKeys = new Set(
     SEEDED_SUPPLIER_QUALITY_MAPPINGS.map(
@@ -229,12 +272,26 @@ export async function seedPanels(prisma: PrismaClient): Promise<void> {
   });
 
   const staleMappingIds = existingMappings
-    .filter(
-      (mapping) =>
+    .filter((mapping) => {
+      const isKnownPanelType = Object.values(HPL_PANEL_TYPE_CODES).includes(
+        mapping.panelType.code as HplPanelTypeCode,
+      );
+      // Keep extra FURNITURE / LABORATORY rows. Those types only have an MVP
+      // working-assumption matrix; do not delete unknown existing mappings.
+      if (
+        mapping.panelType.code === HPL_PANEL_TYPE_CODES.LABORATORY ||
+        mapping.panelType.code === HPL_PANEL_TYPE_CODES.FURNITURE
+      ) {
+        return false;
+      }
+
+      return (
+        isKnownPanelType &&
         !allowedKeys.has(
           `${mapping.supplier.code}|${mapping.panelType.code}|${mapping.qualityClass.code}`,
-        ),
-    )
+        )
+      );
+    })
     .map((mapping) => mapping.id);
 
   if (staleMappingIds.length > 0) {
@@ -271,5 +328,14 @@ export async function seedPanels(prisma: PrismaClient): Promise<void> {
       },
     });
   }
-}
 
+  return {
+    panelTypeCodes: panelTypes.map((item) => item.code),
+    canonicalSizeCount: HPL_CANONICAL_PANEL_SIZES.length,
+    deactivatedLegacySizeCount,
+    deactivatedLegacyPricingCount: deactivatedLegacyPricing.count,
+    qualityClassCodes: [...HPL_QUALITY_CLASS_CODES],
+    supplierCodes: panelSuppliers.map((item) => item.code),
+    mappingCount: SEEDED_SUPPLIER_QUALITY_MAPPINGS.length,
+  };
+}

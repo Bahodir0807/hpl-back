@@ -97,3 +97,10 @@ Nest is an MIT-licensed open source project. It can grow thanks to the sponsors 
 
 Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
 # hpl-back
+# Runtime file storage
+
+Uploads and finalized Quote PDFs are stored under `FILE_STORAGE_PATH`. In
+production it is required, must be an absolute persistent directory outside
+the build output, and must be included in the server backup policy. The
+application creates the directory at startup and fails startup if it is not
+readable and writable. Development defaults to `./uploads`.

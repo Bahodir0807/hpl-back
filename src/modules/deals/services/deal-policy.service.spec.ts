@@ -105,7 +105,9 @@ describe('DealPolicyService commercial lock', () => {
 
     expect(policy.canReadDeal(directorAdmin, foreignDeal)).toBe(true);
     expect(policy.getScopeFilter(directorAdmin)).toEqual({});
-    expect(policy.getPermissions(directorAdmin, foreignDeal).canEdit).toBe(false);
+    expect(policy.getPermissions(directorAdmin, foreignDeal).canEdit).toBe(
+      false,
+    );
   });
 
   it('keeps HEAD mutation and unscoped read when ADMIN is also assigned', () => {
@@ -119,9 +121,9 @@ describe('DealPolicyService commercial lock', () => {
     expect(policy.canReadDeal(headAdmin, foreignDeal)).toBe(true);
     expect(policy.getScopeFilter(headAdmin)).toEqual({});
     expect(policy.getPermissions(headAdmin, foreignDeal).canEdit).toBe(true);
-    expect(policy.getPermissions(headAdmin, foreignDeal).canBypassStageValidation).toBe(
-      true,
-    );
+    expect(
+      policy.getPermissions(headAdmin, foreignDeal).canBypassStageValidation,
+    ).toBe(true);
   });
 
   it('keeps MANAGER owner-scoped when ADMIN is also assigned', () => {
@@ -130,7 +132,10 @@ describe('DealPolicyService commercial lock', () => {
       roles: [RoleName.MANAGER, RoleName.ADMIN],
       permissions: ['deals:update'],
     };
-    const ownDeal = { ownerId: managerAdmin.id, stage: DealStage.QUALIFICATION };
+    const ownDeal = {
+      ownerId: managerAdmin.id,
+      stage: DealStage.QUALIFICATION,
+    };
     const foreignDeal = { ownerId: manager.id, stage: DealStage.QUALIFICATION };
 
     expect(policy.canReadDeal(managerAdmin, foreignDeal)).toBe(false);
@@ -138,6 +143,8 @@ describe('DealPolicyService commercial lock', () => {
       ownerId: managerAdmin.id,
     });
     expect(policy.getPermissions(managerAdmin, ownDeal).canEdit).toBe(true);
-    expect(policy.getPermissions(managerAdmin, foreignDeal).canEdit).toBe(false);
+    expect(policy.getPermissions(managerAdmin, foreignDeal).canEdit).toBe(
+      false,
+    );
   });
 });

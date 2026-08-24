@@ -1,10 +1,11 @@
 import { BadRequestException } from '@nestjs/common';
 import { HplApplication, LeadQualification, Prisma } from '@prisma/client';
+import { hasPositiveThickness } from '../../panels/hpl-thickness';
 
 export type Stage1QualificationInput = {
   application?: HplApplication | null;
   panelTypeId?: string | null;
-  thicknessMm?: number | null;
+  thicknessMm?: Prisma.Decimal | number | string | null;
   panelSizeId?: string | null;
   customWidthMm?: number | null;
   customHeightMm?: number | null;
@@ -57,9 +58,7 @@ export function hasRequestedDimensions(
     return true;
   }
 
-  return (
-    (data.customWidthMm ?? 0) > 0 && (data.customHeightMm ?? 0) > 0
-  );
+  return (data.customWidthMm ?? 0) > 0 && (data.customHeightMm ?? 0) > 0;
 }
 
 export function hasRequestedColor(
@@ -91,7 +90,7 @@ export function assertStage1QualificationComplete(
     missingFields.push('application');
   }
 
-  if (!data.thicknessMm || data.thicknessMm <= 0) {
+  if (!hasPositiveThickness(data.thicknessMm)) {
     missingFields.push('thicknessMm');
   }
 

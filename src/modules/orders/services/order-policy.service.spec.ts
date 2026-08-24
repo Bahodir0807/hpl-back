@@ -87,9 +87,9 @@ describe('OrderPolicyService scope', () => {
       permissions: ['payments:confirm', 'users:create'],
     };
 
-    expect(policy.getPermissions(accountantAdmin, order).canConfirmPayment).toBe(
-      true,
-    );
+    expect(
+      policy.getPermissions(accountantAdmin, order).canConfirmPayment,
+    ).toBe(true);
     expect(policy.getPermissions(accountantAdmin, order).canAddPayment).toBe(
       false,
     );
@@ -144,9 +144,9 @@ describe('OrderPolicyService scope', () => {
     expect(policy.getPermissions(headAdmin, foreignOrder).canAddPayment).toBe(
       true,
     );
-    expect(policy.getPermissions(headAdmin, foreignOrder).canConfirmPayment).toBe(
-      false,
-    );
+    expect(
+      policy.getPermissions(headAdmin, foreignOrder).canConfirmPayment,
+    ).toBe(false);
   });
 
   it('keeps MANAGER+ADMIN owner-scoped without HEAD or ACCOUNTANT powers', () => {
@@ -170,11 +170,11 @@ describe('OrderPolicyService scope', () => {
     expect(policy.getPermissions(managerAdmin, ownOrder).canAddPayment).toBe(
       true,
     );
-    expect(policy.getPermissions(managerAdmin, foreignOrder).canAddPayment).toBe(
-      false,
-    );
-    expect(policy.getPermissions(managerAdmin, ownOrder).canConfirmPayment).toBe(
-      false,
-    );
+    expect(
+      policy.getPermissions(managerAdmin, foreignOrder).canAddPayment,
+    ).toBe(false);
+    expect(
+      policy.getPermissions(managerAdmin, ownOrder).canConfirmPayment,
+    ).toBe(false);
   });
 });

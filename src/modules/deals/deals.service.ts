@@ -78,9 +78,11 @@ const dealDetailsInclude = Prisma.validator<Prisma.DealInclude>()({
       expectedShipmentAt: true,
       expectedArrivalAt: true,
       readyConfirmedAt: true,
+      deliveredAt: true,
     },
     orderBy: { createdAt: 'asc' },
   },
+  installation: true,
   panelQuotes: {
     select: { id: true },
   },
@@ -109,7 +111,9 @@ type DealListItem = Prisma.DealGetPayload<{
 
 type DealListResult = {
   items: Array<
-    DealListItem & { _permissions: ReturnType<DealPolicyService['getPermissions']> }
+    DealListItem & {
+      _permissions: ReturnType<DealPolicyService['getPermissions']>;
+    }
   >;
   total: number;
   page: number;
@@ -139,10 +143,7 @@ export class DealsService {
     private readonly pricingPolicy: PricingPolicyService,
   ) {}
 
-  async create(
-    dto: CreateDealDto,
-    user: CurrentUser,
-  ): Promise<DealDetails> {
+  async create(dto: CreateDealDto, user: CurrentUser): Promise<DealDetails> {
     const ownerId = this.resolveCreateOwnerId(dto.ownerId, user);
     const initialTaskDueDate = new Date(Date.now() + FIRST_DEAL_ACTION_SLA_MS);
 
@@ -252,7 +253,11 @@ export class DealsService {
   ): Promise<DealDetailsWithPermissions> {
     const existingDeal = await this.ensureDealExists(id);
     this.assertDealReadAccess(existingDeal, user);
-    this.assertDealMutationAllowed(user, existingDeal, (perms) => perms.canEdit);
+    this.assertDealMutationAllowed(
+      user,
+      existingDeal,
+      (perms) => perms.canEdit,
+    );
 
     const updatedDeal = await this.prisma.deal.update({
       where: { id },
@@ -291,7 +296,11 @@ export class DealsService {
       });
 
       await this.validateDealItemPricing(user, tx, dto.items);
-      const calculatedItems = await this.calculateDealItems(tx, dto.items, user);
+      const calculatedItems = await this.calculateDealItems(
+        tx,
+        dto.items,
+        user,
+      );
       const totals = this.calculateTotals(calculatedItems);
 
       await tx.dealItem.deleteMany({ where: { dealId } });
@@ -611,13 +620,14 @@ export class DealsService {
     return approved;
   }
 
-  async softDelete(
-    id: string,
-    user: CurrentUser,
-  ): Promise<Deal> {
+  async softDelete(id: string, user: CurrentUser): Promise<Deal> {
     const existingDeal = await this.ensureDealExists(id);
     this.assertDealReadAccess(existingDeal, user);
-    this.assertDealMutationAllowed(user, existingDeal, (perms) => perms.canDelete);
+    this.assertDealMutationAllowed(
+      user,
+      existingDeal,
+      (perms) => perms.canDelete,
+    );
 
     return this.prisma.deal.update({
       where: { id },
@@ -733,8 +743,7 @@ export class DealsService {
 
     for (const item of items) {
       const basePrice =
-        basePriceMap.get(item.productId) ??
-        retailPriceMap.get(item.productId);
+        basePriceMap.get(item.productId) ?? retailPriceMap.get(item.productId);
       const purchasePrice = purchasePriceMap.get(item.productId);
 
       if (purchasePrice === undefined) {

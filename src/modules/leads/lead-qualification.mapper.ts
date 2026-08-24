@@ -1,4 +1,8 @@
 import { Prisma } from '@prisma/client';
+import {
+  parseThicknessMm,
+  serializeThicknessMm,
+} from '../../panels/hpl-thickness';
 import { UpsertLeadQualificationDto } from './dto/upsert-lead-qualification.dto';
 
 const QUALIFICATION_KEYS = [
@@ -23,7 +27,7 @@ type QualificationWriteKey = (typeof QUALIFICATION_KEYS)[number];
 export type LeadQualificationWriteData = {
   application?: UpsertLeadQualificationDto['application'];
   panelTypeId?: string | null;
-  thicknessMm?: number | null;
+  thicknessMm?: Prisma.Decimal | null;
   panelSizeId?: string | null;
   customWidthMm?: number | null;
   customHeightMm?: number | null;
@@ -47,8 +51,14 @@ export function mapQualificationWriteData(
       continue;
     }
 
-    const value = dto[key as QualificationWriteKey];
+    const value = dto[key];
     if (value === undefined) {
+      continue;
+    }
+
+    if (key === 'thicknessMm') {
+      data.thicknessMm =
+        value === null ? null : parseThicknessMm(value as string | null);
       continue;
     }
 
@@ -62,7 +72,7 @@ export function toCalculationRequirementPrefill(qualification: {
   application: string | null;
   panelTypeId: string | null;
   panelSizeId: string | null;
-  thicknessMm: number | null;
+  thicknessMm: Prisma.Decimal | number | string | null;
   customWidthMm: number | null;
   customHeightMm: number | null;
   colorCode: string | null;
@@ -73,7 +83,7 @@ export function toCalculationRequirementPrefill(qualification: {
   application: string | null;
   panelTypeId: string | null;
   panelSizeId: string | null;
-  thicknessMm: number | null;
+  thicknessMm: string | null;
   customWidthMm: number | null;
   customHeightMm: number | null;
   colorCode: string | null;
@@ -85,7 +95,7 @@ export function toCalculationRequirementPrefill(qualification: {
     application: qualification.application,
     panelTypeId: qualification.panelTypeId,
     panelSizeId: qualification.panelSizeId,
-    thicknessMm: qualification.thicknessMm,
+    thicknessMm: serializeThicknessMm(qualification.thicknessMm),
     customWidthMm: qualification.customWidthMm,
     customHeightMm: qualification.customHeightMm,
     colorCode: qualification.colorCode,
@@ -100,7 +110,7 @@ export function serializeLeadQualification(qualification: {
   leadId: string;
   application: string | null;
   panelTypeId: string | null;
-  thicknessMm: number | null;
+  thicknessMm: Prisma.Decimal | number | string | null;
   panelSizeId: string | null;
   customWidthMm: number | null;
   customHeightMm: number | null;
@@ -128,7 +138,7 @@ export function serializeLeadQualification(qualification: {
     leadId: qualification.leadId,
     application: qualification.application,
     panelTypeId: qualification.panelTypeId,
-    thicknessMm: qualification.thicknessMm,
+    thicknessMm: serializeThicknessMm(qualification.thicknessMm),
     panelSizeId: qualification.panelSizeId,
     customWidthMm: qualification.customWidthMm,
     customHeightMm: qualification.customHeightMm,

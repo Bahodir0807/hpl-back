@@ -2,7 +2,9 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 
 export function hashApiKeyToken(token: string, pepper: string): string {
-  return createHash('sha256').update(token + pepper).digest('hex');
+  return createHash('sha256')
+    .update(token + pepper)
+    .digest('hex');
 }
 
 export function isTokenHashMatch(
@@ -23,7 +25,9 @@ export function parseServiceAccountPermissions(
   permissions: Prisma.JsonValue,
 ): string[] {
   if (Array.isArray(permissions)) {
-    return permissions.filter((entry): entry is string => typeof entry === 'string');
+    return permissions.filter(
+      (entry): entry is string => typeof entry === 'string',
+    );
   }
 
   if (typeof permissions === 'string') {

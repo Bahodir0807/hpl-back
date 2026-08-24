@@ -14,7 +14,11 @@ export class PanelSizesController {
 
   @Get()
   @RequirePermissions('panel_catalog:read')
-  @ApiOperation({ summary: 'List active panel sizes' })
+  @ApiOperation({
+    summary: 'List active panel sizes',
+    description:
+      'Canonical fields: id, widthMm, heightMm, displayName. Active list is the confirmed 24 standard sizes.',
+  })
   findAll() {
     return this.prisma.panelSize.findMany({
       where: { isActive: true },

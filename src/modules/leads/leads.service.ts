@@ -2,17 +2,22 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
   ActivityType,
+  DealStage,
   Lead,
   LeadStatus,
   Prisma,
   TaskPriority,
   TaskType,
 } from '@prisma/client';
+import { LoseOpportunityDto } from '../../common/dto/lose-opportunity.dto';
+import { BusinessException } from '../../common/exceptions/business.exception';
+import { createHeadRecoveryTasks } from '../tasks/opportunity-recovery';
 import { PrismaService } from '../prisma/prisma.service';
 import { AssignLeadDto } from './dto/assign-lead.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
@@ -22,6 +27,7 @@ import { FilterLeadDto } from './dto/filter-lead.dto';
 import { QualifyLeadDto } from './dto/qualify-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
 import {
+  LEADS_COMMERCIAL_QUALIFY_PERMISSION,
   READ_ALL_LEADS_PERMISSION,
   STAGE2_HANDOFF_TASK_PREFIX,
 } from './lead.constants';
@@ -76,6 +82,9 @@ const leadRelationsInclude = Prisma.validator<Prisma.LeadInclude>()({
       qualityClass: { select: { id: true, code: true, nameRu: true } },
     },
   },
+  lostBy: {
+    select: { id: true, firstName: true, lastName: true },
+  },
 });
 
 type LeadWithRelations = Prisma.LeadGetPayload<{
@@ -93,8 +102,6 @@ type QualificationData = {
   clientId: string | null;
   projectObjectId: string | null;
   needDescription: string | null;
-  estimatedAmount: Prisma.Decimal | number | null;
-  targetDate: Date | null;
   decisionMakerContact: string | null;
 };
 
@@ -115,6 +122,7 @@ export class LeadsService {
       currentUserId,
       permissions,
     );
+    this.assertCommercialTimelineAuthority(dto.targetDate, permissions);
     const now = new Date();
     const dueDate = new Date(now.getTime() + FIRST_CONTACT_SLA_MS);
 
@@ -284,6 +292,7 @@ export class LeadsService {
   ): Promise<LeadWithRelations> {
     const existingLead = await this.ensureLeadExists(id);
     this.assertLeadAccess(existingLead, currentUserId, permissions);
+    this.assertCommercialTimelineAuthority(dto.targetDate, permissions);
 
     if (dto.ownerId && dto.ownerId !== existingLead.ownerId) {
       if (!permissions.includes('leads:assign')) {
@@ -330,6 +339,17 @@ export class LeadsService {
       throw new ConflictException('Unqualified lead cannot be qualified');
     }
 
+    if (lead.status === LeadStatus.LOST) {
+      throw new ConflictException('Lost lead cannot be qualified');
+    }
+
+    if (lead.status === LeadStatus.QUALIFIED && lead.dealId !== null) {
+      return this.prisma.lead.findUniqueOrThrow({
+        where: { id },
+        include: leadRelationsInclude,
+      });
+    }
+
     if (lead.status === LeadStatus.CONVERTED || lead.dealId !== null) {
       throw new ConflictException('Lead already converted to deal');
     }
@@ -345,8 +365,6 @@ export class LeadsService {
       clientId: dto.clientId,
       projectObjectId: dto.projectObjectId,
       needDescription: dto.needDescription,
-      estimatedAmount: dto.estimatedAmount,
-      targetDate: dto.targetDate,
       decisionMakerContact: dto.decisionMakerContact,
     };
 
@@ -356,6 +374,18 @@ export class LeadsService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
+        if (dto.contactId) {
+          const contact = await tx.contact.findUnique({
+            where: { id: dto.contactId },
+            select: { id: true, clientId: true },
+          });
+          if (!contact || contact.clientId !== dto.clientId) {
+            throw new BadRequestException(
+              'contactId does not belong to clientId',
+            );
+          }
+        }
+
         if (dto.qualification) {
           await this.leadQualificationService.upsertInTx(
             tx,
@@ -394,10 +424,9 @@ export class LeadsService {
           },
           data: {
             clientId: dto.clientId,
+            contactId: dto.contactId,
             projectObjectId: dto.projectObjectId,
             needDescription: dto.needDescription,
-            estimatedAmount: dto.estimatedAmount,
-            targetDate: dto.targetDate,
             decisionMakerContact: dto.decisionMakerContact,
             status: LeadStatus.QUALIFIED,
           },
@@ -406,6 +435,31 @@ export class LeadsService {
         if (claimed.count === 0) {
           throw new LeadQualifyClaimLostError();
         }
+
+        const deal = await tx.deal.create({
+          data: {
+            title: lead.title,
+            stage: DealStage.QUALIFICATION,
+            clientId: dto.clientId,
+            projectObjectId: dto.projectObjectId,
+            ownerId: lead.ownerId,
+            totalAmount: lead.estimatedAmount ?? new Prisma.Decimal(0),
+            currency: 'USD',
+            probability: 20,
+          },
+        });
+        await tx.lead.update({
+          where: { id },
+          data: { dealId: deal.id },
+        });
+        await tx.dealStageHistory.create({
+          data: {
+            dealId: deal.id,
+            oldStage: null,
+            newStage: DealStage.QUALIFICATION,
+            changedById: currentUserId,
+          },
+        });
 
         await tx.activity.create({
           data: {
@@ -507,6 +561,10 @@ export class LeadsService {
     const existingLead = await this.ensureLeadExists(id);
     this.assertLeadAccess(existingLead, currentUserId, permissions);
 
+    if (existingLead.status === LeadStatus.LOST) {
+      throw new ConflictException('Lost lead cannot be disqualified');
+    }
+
     return this.prisma.lead.update({
       where: { id },
       data: {
@@ -514,6 +572,104 @@ export class LeadsService {
         unqualificationReason: reason,
       },
       include: leadRelationsInclude,
+    });
+  }
+
+  async lose(
+    id: string,
+    dto: LoseOpportunityDto,
+    currentUserId: string,
+    permissions: string[],
+  ): Promise<LeadWithRelations> {
+    const comment = dto.comment?.trim() || null;
+    if (dto.reason === 'OTHER' && !comment) {
+      throw new BadRequestException(
+        'comment is required for OTHER loss reason',
+      );
+    }
+
+    const existingLead = await this.ensureLeadExists(id);
+    this.assertLeadAccess(existingLead, currentUserId, permissions);
+
+    if (existingLead.status === LeadStatus.CONVERTED) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'LEAD_ALREADY_CONVERTED',
+        'Converted Lead cannot be lost independently from its Deal',
+      );
+    }
+
+    if (existingLead.lostAt || existingLead.status === LeadStatus.LOST) {
+      return this.prisma.lead.findUniqueOrThrow({
+        where: { id },
+        include: leadRelationsInclude,
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const lostAt = new Date();
+      const claimed = await tx.lead.updateMany({
+        where: {
+          id,
+          deletedAt: null,
+          lostAt: null,
+          status: { notIn: [LeadStatus.CONVERTED, LeadStatus.LOST] },
+        },
+        data: {
+          status: LeadStatus.LOST,
+          lostReasonCode: dto.reason,
+          lostComment: comment,
+          lostAt,
+          lostById: currentUserId,
+        },
+      });
+
+      if (claimed.count !== 1) {
+        const latest = await tx.lead.findUnique({
+          where: { id },
+          include: leadRelationsInclude,
+        });
+        if (latest?.lostAt) return latest;
+        throw new ConflictException('Lead loss state changed concurrently');
+      }
+
+      await tx.activity.create({
+        data: {
+          type: ActivityType.STATUS_CHANGED,
+          relatedType: 'Lead',
+          relatedId: id,
+          authorId: currentUserId,
+          content: `Lead lost: ${dto.reason}`,
+          metadata: { reason: dto.reason, comment },
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: currentUserId,
+          action: 'LEAD_LOST',
+          entityType: 'Lead',
+          entityId: id,
+          oldValue: { status: existingLead.status },
+          newValue: {
+            status: LeadStatus.LOST,
+            reason: dto.reason,
+            comment,
+            lostAt: lostAt.toISOString(),
+          },
+        },
+      });
+      await createHeadRecoveryTasks(tx, {
+        entityType: 'Lead',
+        entityId: id,
+        title: existingLead.title,
+        reason: dto.reason,
+        actorId: currentUserId,
+      });
+
+      return tx.lead.findUniqueOrThrow({
+        where: { id },
+        include: leadRelationsInclude,
+      });
     });
   }
 
@@ -613,14 +769,6 @@ export class LeadsService {
       missingFields.push('needDescription');
     }
 
-    if (!data.estimatedAmount) {
-      missingFields.push('estimatedAmount');
-    }
-
-    if (!data.targetDate) {
-      missingFields.push('targetDate');
-    }
-
     if (!data.decisionMakerContact?.trim()) {
       missingFields.push('decisionMakerContact');
     }
@@ -630,6 +778,21 @@ export class LeadsService {
         message: 'Lead qualification fields are incomplete',
         missingFields,
       });
+    }
+  }
+
+  private assertCommercialTimelineAuthority(
+    targetDate: Date | undefined,
+    permissions: string[],
+  ): void {
+    if (targetDate === undefined) {
+      return;
+    }
+
+    if (!permissions.includes(LEADS_COMMERCIAL_QUALIFY_PERMISSION)) {
+      throw new ForbiddenException(
+        'leads:commercial_qualify is required to set lead targetDate',
+      );
     }
   }
 
@@ -670,10 +833,7 @@ export class LeadsService {
       include: leadRelationsInclude,
     });
 
-    if (
-      currentLead?.status === LeadStatus.QUALIFIED &&
-      currentLead.dealId === null
-    ) {
+    if (currentLead?.status === LeadStatus.QUALIFIED) {
       return currentLead;
     }
 
@@ -683,6 +843,10 @@ export class LeadsService {
 
     if (currentLead?.status === LeadStatus.UNQUALIFIED) {
       throw new ConflictException('Unqualified lead cannot be qualified');
+    }
+
+    if (currentLead?.status === LeadStatus.LOST) {
+      throw new ConflictException('Lost lead cannot be qualified');
     }
 
     throw new ConflictException('Lead could not be qualified');

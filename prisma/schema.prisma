@@ -54,6 +54,23 @@ enum LeadStatus {
   QUALIFIED
   UNQUALIFIED
   CONVERTED
+  LOST
+}
+
+enum LossReason {
+  PRICE
+  NO_STOCK
+  LEAD_TIME
+  COMPETITOR
+  QUALITY
+  SIZE
+  CLIENT_CANCELLED
+  OTHER
+}
+
+enum FulfillmentSource {
+  WAREHOUSE_STOCK
+  SUPPLIER_ORDER
 }
 
 enum CommercialQualificationStatus {
@@ -196,61 +213,86 @@ enum ActivityType {
   STATUS_CHANGED
   CALCULATION
   SUPPLIER_ORDER_STATUS_CHANGED
+  CLIENT_DELIVERY_CONFIRMED
+  INSTALLATION_UPDATED
+  DEAL_COMPLETED
+}
+
+enum InstallationStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
 }
 
 enum HplApplication {
   INTERIOR
-  EXTERIOR
+  EXTERIOR_WITH_UV
+  LABORATORY
+  FURNITURE
 }
 
 model User {
-  id           String    @id @default(uuid()) 
+  id           String    @id @default(uuid())
   email        String    @unique
   passwordHash String
   firstName    String
   lastName     String
   phone        String?
   isActive     Boolean   @default(true)
-  teamId       String?   
-  managerId    String?   
+  teamId       String?
+  managerId    String?
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  team                    Team?                   @relation("TeamUsers", fields: [teamId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  manager                 User?                   @relation("UserManagement", fields: [managerId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  subordinates            User[]                  @relation("UserManagement")
-  ledTeams                Team[]                  @relation("TeamLeader")
-  roles                   UserRole[]
-  permissions             UserPermission[]
-  sessions                Session[]
-  activityLogs            UserActivityLog[]
-  ownedClients            Client[]                @relation("ClientOwner")
-  ownedLeads              Lead[]                  @relation("LeadOwner")
-  ownedDeals              Deal[]                  @relation("DealOwner")
-  assignedTasks           Task[]                  @relation("TaskAssignee")
-  createdTasks            Task[]                  @relation("TaskCreator")
-  createdActivities       Activity[]              @relation("ActivityAuthor")
-  auditLogs               AuditLog[]              @relation("AuditLogUser")
-  uploadedFiles           File[]                  @relation("FileUploader")
-  leadAssignmentsFrom     LeadAssignmentHistory[] @relation("LeadPreviousOwner")
-  leadAssignmentsTo       LeadAssignmentHistory[] @relation("LeadNewOwner")
-  leadAssignmentsMade     LeadAssignmentHistory[] @relation("LeadAssignedBy")
-  taskReschedules         TaskRescheduleHistory[] @relation("TaskRescheduleAuthor")
-  notifications           Notification[]
-  stockAdjustments        StockAdjustment[]
-  payments                Payment[]
-  salesPlans              SalesPlan[]
-  leadPlans               LeadPlan[]
-  dealStageHistories      DealStageHistory[]
-  stageExceptionApprovals DealStageHistory[]      @relation("StageExceptionApprover")
-  createdCalculations     CalculationSession[]    @relation("CalculationCreator")
-  panelQuotes             PanelQuote[]            @relation("QuoteManager")
-  clientAcceptedQuotes    PanelQuote[]            @relation("QuoteClientAcceptedBy")
-  createdSupplierOrders   SupplierOrder[]         @relation("SupplierOrderCreatedBy")
-  readyConfirmedSupplierOrders SupplierOrder[]    @relation("SupplierOrderReadyConfirmedBy")
-  createdCurrencyRates    CurrencyRate[]          @relation("CurrencyRateCreator")
+  team                              Team?                         @relation("TeamUsers", fields: [teamId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  manager                           User?                         @relation("UserManagement", fields: [managerId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  subordinates                      User[]                        @relation("UserManagement")
+  ledTeams                          Team[]                        @relation("TeamLeader")
+  roles                             UserRole[]
+  permissions                       UserPermission[]
+  sessions                          Session[]
+  activityLogs                      UserActivityLog[]
+  ownedClients                      Client[]                      @relation("ClientOwner")
+  ownedLeads                        Lead[]                        @relation("LeadOwner")
+  ownedDeals                        Deal[]                        @relation("DealOwner")
+  assignedTasks                     Task[]                        @relation("TaskAssignee")
+  createdTasks                      Task[]                        @relation("TaskCreator")
+  createdActivities                 Activity[]                    @relation("ActivityAuthor")
+  auditLogs                         AuditLog[]                    @relation("AuditLogUser")
+  uploadedFiles                     File[]                        @relation("FileUploader")
+  leadAssignmentsFrom               LeadAssignmentHistory[]       @relation("LeadPreviousOwner")
+  leadAssignmentsTo                 LeadAssignmentHistory[]       @relation("LeadNewOwner")
+  leadAssignmentsMade               LeadAssignmentHistory[]       @relation("LeadAssignedBy")
+  taskReschedules                   TaskRescheduleHistory[]       @relation("TaskRescheduleAuthor")
+  notifications                     Notification[]
+  stockAdjustments                  StockAdjustment[]
+  payments                          Payment[]
+  salesPlans                        SalesPlan[]
+  createdSalesPlanFxRates           SalesPlanFxRate[]             @relation("SalesPlanFxRateCreator")
+  leadPlans                         LeadPlan[]
+  dealStageHistories                DealStageHistory[]
+  stageExceptionApprovals           DealStageHistory[]            @relation("StageExceptionApprover")
+  createdCalculations               CalculationSession[]          @relation("CalculationCreator")
+  createdCalculationRequests        CalculationRequest[]          @relation("CalculationRequestCreator")
+  submittedCalculationRequests      CalculationRequest[]          @relation("CalculationRequestSubmittedBy")
+  panelQuotes                       PanelQuote[]                  @relation("QuoteManager")
+  approvedQuotes                    PanelQuote[]                  @relation("QuoteApprover")
+  clientAcceptedQuotes              PanelQuote[]                  @relation("QuoteClientAcceptedBy")
+  createdSupplierOrders             SupplierOrder[]               @relation("SupplierOrderCreatedBy")
+  readyConfirmedSupplierOrders      SupplierOrder[]               @relation("SupplierOrderReadyConfirmedBy")
+  deliveredSupplierOrders           SupplierOrder[]               @relation("SupplierOrderDeliveredBy")
+  createdExpectedReceipts           ExpectedReceipt[]             @relation("ExpectedReceiptCreatedBy")
+  receivedExpectedReceipts          ExpectedReceiptEvent[]        @relation("ExpectedReceiptReceivedBy")
+  createdCurrencyRates              CurrencyRate[]                @relation("CurrencyRateCreator")
   confirmedCommercialQualifications LeadCommercialQualification[] @relation("LeadCommercialConfirmedBy")
+  assessedInstallations             DealInstallation[]            @relation("InstallationAssessedBy")
+  startedInstallations              DealInstallation[]            @relation("InstallationStartedBy")
+  installerConfirmedInstallations   DealInstallation[]            @relation("InstallationInstallerConfirmedBy")
+  supervisorConfirmedInstallations  DealInstallation[]            @relation("InstallationSupervisorConfirmedBy")
+  lostLeads                         Lead[]                        @relation("LeadLostBy")
+  lostDeals                         Deal[]                        @relation("DealLostBy")
+  managerCommercialHandoffs         Lead[]                        @relation("LeadManagerCommercialInputReadyBy")
 
   @@index([teamId])
   @@index([managerId])
@@ -259,9 +301,9 @@ model User {
 }
 
 model Team {
-  id        String   @id @default(uuid()) 
+  id        String   @id @default(uuid())
   name      String   @unique
-  leaderId  String?  
+  leaderId  String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -272,7 +314,7 @@ model Team {
 }
 
 model Role {
-  id          String   @id @default(uuid()) 
+  id          String   @id @default(uuid())
   name        RoleName @unique
   description String?
   createdAt   DateTime @default(now())
@@ -283,7 +325,7 @@ model Role {
 }
 
 model Permission {
-  id          String   @id @default(uuid()) 
+  id          String   @id @default(uuid())
   slug        String   @unique
   description String?
   createdAt   DateTime @default(now())
@@ -294,8 +336,8 @@ model Permission {
 }
 
 model UserRole {
-  userId String 
-  roleId String 
+  userId String
+  roleId String
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   role Role @relation(fields: [roleId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -305,8 +347,8 @@ model UserRole {
 }
 
 model RolePermission {
-  roleId       String 
-  permissionId String 
+  roleId       String
+  permissionId String
 
   role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -316,8 +358,8 @@ model RolePermission {
 }
 
 model UserPermission {
-  userId       String 
-  permissionId String 
+  userId       String
+  permissionId String
 
   user       User       @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -327,8 +369,8 @@ model UserPermission {
 }
 
 model Session {
-  id        String   @id @default(uuid()) 
-  userId    String   
+  id        String   @id @default(uuid())
+  userId    String
   tokenHash String
   ipAddress String?
   userAgent String?
@@ -343,8 +385,8 @@ model Session {
 }
 
 model UserActivityLog {
-  id        String   @id @default(uuid()) 
-  userId    String   
+  id        String   @id @default(uuid())
+  userId    String
   action    String
   metadata  Json?
   createdAt DateTime @default(now())
@@ -357,33 +399,33 @@ model UserActivityLog {
 }
 
 model Supplier {
-  id                String   @id @default(uuid()) 
-  name              String
-  code              String   @unique
-  contacts          Json?
-  deliveryDays      Int?
-  moqM2             Decimal? @db.Decimal(10, 2)
-  deliveryTerms     String?  // pickup | carrier | supplier_delivery
-  isDirectDelivery  Boolean  @default(true)
-  marginPercent     Decimal? @db.Decimal(5, 2)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  id               String   @id @default(uuid())
+  name             String
+  code             String   @unique
+  contacts         Json?
+  deliveryDays     Int?
+  moqM2            Decimal? @db.Decimal(10, 2)
+  deliveryTerms    String? // pickup | carrier | supplier_delivery
+  isDirectDelivery Boolean  @default(true)
+  marginPercent    Decimal? @db.Decimal(5, 2)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  products             Product[]
-  expectedReceipts     ExpectedReceipt[]
-  qualityMappings      SupplierQualityMapping[]
-  calculationLineItems CalculationLineItem[]
-  panelColors          PanelColor[]
-  thicknessPricings    PanelThicknessPricing[]
-  supplierOrders       SupplierOrder[]
-  deals                Deal[]
+  products                 Product[]
+  expectedReceipts         ExpectedReceipt[]
+  qualityMappings          SupplierQualityMapping[]
+  calculationLineItems     CalculationLineItem[]
+  panelColors              PanelColor[]
+  thicknessPricings        PanelThicknessPricing[]
+  supplierOrders           SupplierOrder[]
+  deals                    Deal[]
   commercialQualifications LeadCommercialQualification[]
 
   @@index([name])
 }
 
 model Brand {
-  id        String   @id @default(uuid()) 
+  id        String   @id @default(uuid())
   name      String
   code      String   @unique
   createdAt DateTime @default(now())
@@ -396,9 +438,9 @@ model Brand {
 }
 
 model ProductCollection {
-  id        String   @id @default(uuid()) 
+  id        String   @id @default(uuid())
   name      String
-  brandId   String   
+  brandId   String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -410,12 +452,12 @@ model ProductCollection {
 }
 
 model Product {
-  id           String        @id @default(uuid()) 
+  id           String        @id @default(uuid())
   sku          String        @unique
   name         String
-  brandId      String        
-  collectionId String?       
-  supplierId   String?       
+  brandId      String
+  collectionId String?
+  supplierId   String?
   decorCode    String?
   colorName    String?
   surface      String?
@@ -429,17 +471,18 @@ model Product {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
-  brand                Brand                 @relation(fields: [brandId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  collection           ProductCollection?    @relation(fields: [collectionId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  supplier             Supplier?             @relation(fields: [supplierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  prices               ProductPrice[]
-  stockBalance         StockBalance?
-  stockAdjustments     StockAdjustment[]
-  stockReservations    StockReservation[]
-  expectedReceiptItems ExpectedReceiptItem[]
-  dealItems            DealItem[]
-  orderItems           OrderItem[]
-  projectObjects       ProjectObject[]
+  brand                     Brand                      @relation(fields: [brandId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  collection                ProductCollection?         @relation(fields: [collectionId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  supplier                  Supplier?                  @relation(fields: [supplierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  prices                    ProductPrice[]
+  stockBalance              StockBalance?
+  stockAdjustments          StockAdjustment[]
+  stockReservations         StockReservation[]
+  expectedReceiptItems      ExpectedReceiptItem[]
+  expectedReceiptEventItems ExpectedReceiptEventItem[]
+  dealItems                 DealItem[]
+  orderItems                OrderItem[]
+  projectObjects            ProjectObject[]
 
   @@index([brandId])
   @@index([collectionId])
@@ -454,10 +497,10 @@ model Product {
 }
 
 model ProductPrice {
-  id        String           @id @default(uuid()) 
-  productId String           
+  id        String           @id @default(uuid())
+  productId String
   type      ProductPriceType
-  amount    Decimal          
+  amount    Decimal
   currency  String           @default("RUB")
   validFrom DateTime
   validTo   DateTime?
@@ -474,22 +517,23 @@ model ProductPrice {
 }
 
 model File {
-  id           String   @id @default(uuid()) 
+  id           String   @id @default(uuid())
   originalName String
   mimeType     String
   size         Int
   storageKey   String   @unique
-  uploadedById String   
+  uploadedById String
   relatedType  String
   relatedId    String
   comment      String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  uploadedBy User        @relation("FileUploader", fields: [uploadedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  dealOffers DealOffer[] @relation("DealOfferFile")
-  payments   Payment[]   @relation("PaymentFile")
-  deliveries Delivery[]  @relation("DeliveryFile")
+  uploadedBy  User         @relation("FileUploader", fields: [uploadedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  dealOffers  DealOffer[]  @relation("DealOfferFile")
+  payments    Payment[]    @relation("PaymentFile")
+  deliveries  Delivery[]   @relation("DeliveryFile")
+  panelQuotes PanelQuote[] @relation("QuotePdfFile")
 
   @@index([uploadedById])
   @@index([relatedType, relatedId])
@@ -498,7 +542,7 @@ model File {
 }
 
 model Client {
-  id        String         @id @default(uuid()) 
+  id        String         @id @default(uuid())
   type      ClientType
   name      String
   inn       String?
@@ -509,17 +553,19 @@ model Client {
   region    String?
   address   String?
   source    String?
-  comment   String?        
-  ownerId   String         
+  comment   String?
+  ownerId   String
   deletedAt DateTime?
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
 
-  owner          User            @relation("ClientOwner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  contacts       Contact[]
-  projectObjects ProjectObject[]
-  leads          Lead[]
-  deals          Deal[]
+  owner               User                 @relation("ClientOwner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  contacts            Contact[]
+  projectObjects      ProjectObject[]
+  leads               Lead[]
+  deals               Deal[]
+  calculationRequests CalculationRequest[]
+  panelQuotes         PanelQuote[]
 
   @@index([ownerId])
   @@index([ownerId, createdAt])
@@ -534,8 +580,8 @@ model Client {
 }
 
 model Contact {
-  id               String   @id @default(uuid()) 
-  clientId         String   
+  id               String   @id @default(uuid())
+  clientId         String
   firstName        String
   lastName         String?
   position         String?
@@ -558,21 +604,21 @@ model Contact {
 }
 
 model ProjectObject {
-  id                     String    @id @default(uuid()) 
-  clientId               String    
+  id                     String    @id @default(uuid())
+  clientId               String
   name                   String
   address                String?
   type                   String?
   stage                  String?
   approximateArea        Float?
   expectedDate           DateTime?
-  description            String?   
-  decisionMakerContactId String?   
+  description            String?
+  decisionMakerContactId String?
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
-  client               Client   @relation(fields: [clientId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  decisionMakerContact Contact? @relation("DecisionMakerContact", fields: [decisionMakerContactId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  client               Client    @relation(fields: [clientId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  decisionMakerContact Contact?  @relation("DecisionMakerContact", fields: [decisionMakerContactId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   leads                Lead[]
   deals                Deal[]
   products             Product[]
@@ -584,35 +630,47 @@ model ProjectObject {
 }
 
 model Lead {
-  id                    String     @id @default(uuid()) 
+  id                    String      @id @default(uuid())
   title                 String
-  status                LeadStatus @default(NEW)
+  status                LeadStatus  @default(NEW)
   source                String
-  ownerId               String     
-  clientId              String?    
-  contactId             String?    
-  dealId                String?    @unique 
-  needDescription       String?    
-  estimatedAmount       Decimal?   
+  ownerId               String
+  clientId              String?
+  contactId             String?
+  dealId                String?     @unique
+  needDescription       String?
+  estimatedAmount       Decimal?
   targetDate            DateTime?
-  projectObjectId       String?    
+  projectObjectId       String?
   decisionMakerContact  String?
   unqualificationReason String?
+  lostReasonCode        LossReason?
+  lostComment           String?
+  lostAt                DateTime?
+  lostById              String?
   deletedAt             DateTime?
-  createdAt             DateTime   @default(now())
-  updatedAt             DateTime   @updatedAt
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
 
-  owner             User                    @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  client            Client?                 @relation(fields: [clientId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  contact           Contact?                @relation(fields: [contactId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  deal              Deal?                   @relation("LeadConvertedDeal", fields: [dealId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  projectObject     ProjectObject?          @relation(fields: [projectObjectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  assignmentHistory LeadAssignmentHistory[]
-  calculationSessions CalculationSession[]
-  panelQuotes           PanelQuote[]
-  telegramLeadMetadata  TelegramLeadMetadata?
-  qualification         LeadQualification?
-  commercialQualification LeadCommercialQualification?
+  managerCommercialNote           String?
+  managerCommercialNoteUpdatedAt  DateTime?
+  managerCommercialInputReadyAt   DateTime?
+  managerCommercialInputReadyById String?
+
+  owner                         User                         @relation("LeadOwner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  client                        Client?                      @relation(fields: [clientId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  contact                       Contact?                     @relation(fields: [contactId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  deal                          Deal?                        @relation("LeadConvertedDeal", fields: [dealId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  projectObject                 ProjectObject?               @relation(fields: [projectObjectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  assignmentHistory             LeadAssignmentHistory[]
+  calculationRequests           CalculationRequest[]
+  calculationSessions           CalculationSession[]
+  panelQuotes                   PanelQuote[]
+  telegramLeadMetadata          TelegramLeadMetadata?
+  qualification                 LeadQualification?
+  commercialQualification       LeadCommercialQualification?
+  lostBy                        User?                        @relation("LeadLostBy", fields: [lostById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  managerCommercialInputReadyBy User?                        @relation("LeadManagerCommercialInputReadyBy", fields: [managerCommercialInputReadyById], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([ownerId])
   @@index([ownerId, status, createdAt])
@@ -624,26 +682,31 @@ model Lead {
   @@index([projectObjectId])
   @@index([deletedAt])
   @@index([createdAt])
+  @@index([lostReasonCode])
+  @@index([lostAt])
+  @@index([lostById])
+  @@index([managerCommercialInputReadyAt])
+  @@index([managerCommercialInputReadyById])
 }
 
 model LeadQualification {
   id     String @id @default(uuid())
   leadId String @unique
 
-  application            HplApplication?
-  panelTypeId            String?
-  thicknessMm            Int?
-  panelSizeId            String?
-  customWidthMm          Int?
-  customHeightMm         Int?
-  colorCode              String?
-  colorName              String?
-  requiredAreaM2         Decimal? @db.Decimal(10, 4)
-  installationRequired   Boolean?
-  stockOnly              Boolean?
-  urgent                 Boolean?
-  willingToWait          Boolean?
-  customerRequirements   String?
+  application          HplApplication?
+  panelTypeId          String?
+  thicknessMm          Decimal?        @db.Decimal(6, 2)
+  panelSizeId          String?
+  customWidthMm        Int?
+  customHeightMm       Int?
+  colorCode            String?
+  colorName            String?
+  requiredAreaM2       Decimal?        @db.Decimal(10, 4)
+  installationRequired Boolean?
+  stockOnly            Boolean?
+  urgent               Boolean?
+  willingToWait        Boolean?
+  customerRequirements String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -661,22 +724,22 @@ model LeadQualification {
 }
 
 model LeadCommercialQualification {
-  id              String                         @id @default(uuid())
-  leadId          String                         @unique
+  id              String                        @id @default(uuid())
+  leadId          String                        @unique
   supplierId      String
   qualityClassId  String
-  mappingId       String
-  status          CommercialQualificationStatus  @default(CONFIRMED)
+  mappingId       String?
+  status          CommercialQualificationStatus @default(CONFIRMED)
   decisionComment String?
   confirmedById   String
   confirmedAt     DateTime
-  createdAt       DateTime                       @default(now())
-  updatedAt       DateTime                       @updatedAt
+  createdAt       DateTime                      @default(now())
+  updatedAt       DateTime                      @updatedAt
 
   lead         Lead                    @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   supplier     Supplier                @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   qualityClass QualityClass            @relation(fields: [qualityClassId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  mapping      SupplierQualityMapping  @relation(fields: [mappingId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  mapping      SupplierQualityMapping? @relation(fields: [mappingId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   confirmedBy  User                    @relation("LeadCommercialConfirmedBy", fields: [confirmedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
   @@index([supplierId])
@@ -688,11 +751,11 @@ model LeadCommercialQualification {
 }
 
 model LeadAssignmentHistory {
-  id              String   @id @default(uuid()) 
-  leadId          String   
-  previousOwnerId String?  
-  newOwnerId      String   
-  assignedById    String   
+  id              String   @id @default(uuid())
+  leadId          String
+  previousOwnerId String?
+  newOwnerId      String
+  assignedById    String
   createdAt       DateTime @default(now())
 
   lead          Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -708,22 +771,22 @@ model LeadAssignmentHistory {
 }
 
 model Task {
-  id              String             @id @default(uuid()) 
+  id              String             @id @default(uuid())
   title           String
-  description     String?            
+  description     String?
   type            TaskType
   status          TaskStatus         @default(PENDING)
   priority        TaskPriority       @default(MEDIUM)
   computedStatus  TaskComputedStatus @default(ON_TIME)
   dueDate         DateTime
   originalDueDate DateTime
-  result          String?            
+  result          String?
   completedAt     DateTime?
   rescheduleCount Int                @default(0)
-  assigneeId      String             
-  createdById     String             
+  assigneeId      String
+  createdById     String
   relatedType     String
-  relatedId       String             
+  relatedId       String
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 
@@ -743,12 +806,12 @@ model Task {
 }
 
 model TaskRescheduleHistory {
-  id         String   @id @default(uuid()) 
-  taskId     String   
+  id         String   @id @default(uuid())
+  taskId     String
   oldDueDate DateTime
   newDueDate DateTime
-  reason     String   
-  authorId   String   
+  reason     String
+  authorId   String
   createdAt  DateTime @default(now())
 
   task   Task @relation(fields: [taskId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -760,14 +823,14 @@ model TaskRescheduleHistory {
 }
 
 model Notification {
-  id          String    @id @default(uuid()) 
-  userId      String    
-  taskId      String?   
+  id          String    @id @default(uuid())
+  userId      String
+  taskId      String?
   title       String
-  message     String?   
+  message     String?
   type        String
   relatedType String?
-  relatedId   String?   
+  relatedId   String?
   isRead      Boolean   @default(false)
   readAt      DateTime?
   createdAt   DateTime  @default(now())
@@ -784,39 +847,49 @@ model Notification {
 }
 
 model Deal {
-  id                String    @id @default(uuid()) 
-  title             String
-  stage             DealStage @default(QUALIFICATION)
-  clientId          String    
-  projectObjectId   String?   
-  ownerId           String    
-  totalAmount       Decimal   @default(0) 
-  currency          String    @default("RUB")
-  discountAmount    Decimal   @default(0) 
-  probability       Int       @default(0)
-  expectedCloseDate DateTime?
-  nextActionAt      DateTime?
-  margin            Decimal   @default(0) 
-  lossReason        String?
-  competitorName    String?
-  comment           String?   
-  result            String?
-  deletedAt         DateTime?
-  supplierId        String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  id                           String             @id @default(uuid())
+  title                        String
+  stage                        DealStage          @default(QUALIFICATION)
+  clientId                     String
+  projectObjectId              String?
+  ownerId                      String
+  totalAmount                  Decimal            @default(0)
+  currency                     String             @default("RUB")
+  discountAmount               Decimal            @default(0)
+  probability                  Int                @default(0)
+  expectedCloseDate            DateTime?
+  nextActionAt                 DateTime?
+  margin                       Decimal            @default(0)
+  lossReason                   String?
+  lostReasonCode               LossReason?
+  lostComment                  String?
+  lostAt                       DateTime?
+  lostById                     String?
+  fulfillmentSource            FulfillmentSource?
+  installationRequiredSnapshot Boolean?
+  competitorName               String?
+  comment                      String?
+  result                       String?
+  deletedAt                    DateTime?
+  supplierId                   String?
+  completedAt                  DateTime?
+  createdAt                    DateTime           @default(now())
+  updatedAt                    DateTime           @updatedAt
 
-  client            Client             @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  projectObject     ProjectObject?     @relation(fields: [projectObjectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  owner             User               @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  supplier          Supplier?          @relation(fields: [supplierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  convertedFromLead Lead?              @relation("LeadConvertedDeal")
-  items             DealItem[]
-  offers            DealOffer[]
-  order             Order?
-  stageHistory      DealStageHistory[]
-  panelQuotes       PanelQuote[]
-  supplierOrders    SupplierOrder[]
+  client              Client               @relation(fields: [clientId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  projectObject       ProjectObject?       @relation(fields: [projectObjectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  owner               User                 @relation("DealOwner", fields: [ownerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  supplier            Supplier?            @relation(fields: [supplierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  convertedFromLead   Lead?                @relation("LeadConvertedDeal")
+  items               DealItem[]
+  offers              DealOffer[]
+  order               Order?
+  stageHistory        DealStageHistory[]
+  calculationRequests CalculationRequest[]
+  panelQuotes         PanelQuote[]
+  supplierOrders      SupplierOrder[]
+  installation        DealInstallation?
+  lostBy              User?                @relation("DealLostBy", fields: [lostById], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([clientId])
   @@index([projectObjectId])
@@ -828,21 +901,26 @@ model Deal {
   @@index([deletedAt])
   @@index([createdAt])
   @@index([supplierId])
+  @@index([completedAt])
+  @@index([lostReasonCode])
+  @@index([lostAt])
+  @@index([lostById])
+  @@index([fulfillmentSource])
 }
 
 model DealItem {
-  id                    String   @id @default(uuid()) 
-  dealId                String   
-  productId             String   
+  id                    String          @id @default(uuid())
+  dealId                String
+  productId             String
   quantitySheets        Float
   quantityM2            Float
-  unitPrice             Decimal  
-  discount              Decimal  @default(0) 
-  totalPrice            Decimal  
-  purchasePriceSnapshot Decimal? 
+  unitPrice             Decimal
+  discount              Decimal         @default(0)
+  totalPrice            Decimal
+  purchasePriceSnapshot Decimal?
   source                OrderItemSource @default(SKU)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
 
   deal    Deal    @relation(fields: [dealId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   product Product @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
@@ -852,14 +930,14 @@ model DealItem {
 }
 
 model DealOffer {
-  id         String    @id @default(uuid()) 
-  dealId     String    
+  id         String    @id @default(uuid())
+  dealId     String
   version    Int       @default(1)
   number     String?
-  amount     Decimal?  
-  pdfFileId  String?   
+  amount     Decimal?
+  pdfFileId  String?
   validUntil DateTime?
-  feedback   String?   
+  feedback   String?
   isApproved Boolean   @default(false)
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
@@ -874,14 +952,14 @@ model DealOffer {
 }
 
 model DealStageHistory {
-  id           String     @id @default(uuid()) 
-  dealId       String     
+  id           String     @id @default(uuid())
+  dealId       String
   oldStage     DealStage?
   newStage     DealStage
-  changedById  String     
+  changedById  String
   isException  Boolean    @default(false)
-  approvedById String?    
-  reason       String?    
+  approvedById String?
+  reason       String?
   createdAt    DateTime   @default(now())
 
   deal       Deal  @relation(fields: [dealId], references: [id], onDelete: Cascade, onUpdate: Cascade)
@@ -895,13 +973,47 @@ model DealStageHistory {
   @@index([createdAt])
 }
 
+model DealInstallation {
+  id                      String             @id @default(uuid())
+  dealId                  String             @unique
+  status                  InstallationStatus @default(SCHEDULED)
+  expectedInstallationAt  DateTime?
+  expectedCompletionAt    DateTime?
+  assessmentComment       String?
+  workComment             String?
+  assessedAt              DateTime?
+  assessedById            String?
+  startedAt               DateTime?
+  startedById             String?
+  installerConfirmedAt    DateTime?
+  installerConfirmedById  String?
+  supervisorConfirmedAt   DateTime?
+  supervisorConfirmedById String?
+  completedAt             DateTime?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+
+  deal                  Deal  @relation(fields: [dealId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  assessedBy            User? @relation("InstallationAssessedBy", fields: [assessedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  startedBy             User? @relation("InstallationStartedBy", fields: [startedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  installerConfirmedBy  User? @relation("InstallationInstallerConfirmedBy", fields: [installerConfirmedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  supervisorConfirmedBy User? @relation("InstallationSupervisorConfirmedBy", fields: [supervisorConfirmedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([status])
+  @@index([assessedById])
+  @@index([startedById])
+  @@index([installerConfirmedById])
+  @@index([supervisorConfirmedById])
+  @@index([completedAt])
+}
+
 model StockBalance {
-  id        String   @id @default(uuid()) 
-  productId String   @unique 
+  id        String   @id @default(uuid())
+  productId String   @unique
   onHand    Float    @default(0)
   reserved  Float    @default(0)
   available Float    @default(0)
-  updatedBy String?  
+  updatedBy String?
   version   Int      @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -912,12 +1024,12 @@ model StockBalance {
 }
 
 model StockAdjustment {
-  id          String              @id @default(uuid()) 
-  productId   String              
+  id          String              @id @default(uuid())
+  productId   String
   quantity    Float
   type        StockAdjustmentType
   reason      String
-  createdById String              
+  createdById String
   createdAt   DateTime            @default(now())
 
   product   Product @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
@@ -930,9 +1042,9 @@ model StockAdjustment {
 }
 
 model StockReservation {
-  id        String                 @id @default(uuid()) 
-  productId String                 
-  orderId   String                 
+  id        String                 @id @default(uuid())
+  productId String
+  orderId   String
   quantity  Float
   status    StockReservationStatus @default(ACTIVE)
   expiresAt DateTime?
@@ -951,48 +1063,93 @@ model StockReservation {
 }
 
 model ExpectedReceipt {
-  id           String                @id @default(uuid()) 
-  supplierId   String?               
+  id           String                @id @default(uuid())
+  supplierId   String?
+  orderedAt    DateTime              @default(now())
   expectedDate DateTime
   status       ExpectedReceiptStatus @default(PENDING)
-  comment      String?               
+  comment      String?
+  createdById  String?
   createdAt    DateTime              @default(now())
   updatedAt    DateTime              @updatedAt
 
-  supplier Supplier?             @relation(fields: [supplierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  items    ExpectedReceiptItem[]
+  supplier      Supplier?              @relation(fields: [supplierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  createdBy     User?                  @relation("ExpectedReceiptCreatedBy", fields: [createdById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  items         ExpectedReceiptItem[]
+  receiptEvents ExpectedReceiptEvent[]
 
   @@index([supplierId])
+  @@index([createdById])
+  @@index([orderedAt])
   @@index([expectedDate])
   @@index([status])
 }
 
 model ExpectedReceiptItem {
-  id                String   @id @default(uuid()) 
-  expectedReceiptId String   
-  productId         String   
+  id                String   @id @default(uuid())
+  expectedReceiptId String
+  productId         String
   quantity          Float
   receivedQuantity  Float    @default(0)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
-  expectedReceipt ExpectedReceipt @relation(fields: [expectedReceiptId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  product         Product         @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  expectedReceipt   ExpectedReceipt            @relation(fields: [expectedReceiptId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  product           Product                    @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  receiptEventItems ExpectedReceiptEventItem[]
 
   @@index([expectedReceiptId])
   @@index([productId])
 }
 
+model ExpectedReceiptEvent {
+  id                String   @id @default(uuid())
+  expectedReceiptId String
+  receivedAt        DateTime @default(now())
+  receivedById      String
+  comment           String?
+  clientReceiptId   String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  expectedReceipt ExpectedReceipt            @relation(fields: [expectedReceiptId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  receivedBy      User                       @relation("ExpectedReceiptReceivedBy", fields: [receivedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  items           ExpectedReceiptEventItem[]
+
+  @@unique([expectedReceiptId, clientReceiptId])
+  @@index([expectedReceiptId])
+  @@index([receivedById])
+  @@index([receivedAt])
+}
+
+model ExpectedReceiptEventItem {
+  id                    String   @id @default(uuid())
+  receiptEventId        String
+  expectedReceiptItemId String
+  productId             String
+  acceptedQuantity      Float
+  rejectedQuantity      Float    @default(0)
+  createdAt             DateTime @default(now())
+
+  receiptEvent        ExpectedReceiptEvent @relation(fields: [receiptEventId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  expectedReceiptItem ExpectedReceiptItem  @relation(fields: [expectedReceiptItemId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  product             Product              @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([receiptEventId])
+  @@index([expectedReceiptItemId])
+  @@index([productId])
+}
+
 model Order {
-  id              String        @id @default(uuid()) 
+  id              String        @id @default(uuid())
   orderNumber     String        @unique
-  dealId          String        @unique 
+  dealId          String        @unique
   status          OrderStatus   @default(DRAFT)
   paymentStatus   PaymentStatus @default(UNPAID)
-  totalAmount     Decimal       
-  paidAmount      Decimal       @default(0) 
-  remainingAmount Decimal       
-  paymentTerms    String?       
+  totalAmount     Decimal
+  paidAmount      Decimal       @default(0)
+  remainingAmount Decimal
+  paymentTerms    String?
   promisedDate    DateTime?
   deliveryAddress String?
   deletedAt       DateTime?
@@ -1015,17 +1172,17 @@ model Order {
 }
 
 model OrderItem {
-  id                String   @id @default(uuid()) 
-  orderId           String   
-  productId         String   
+  id                String          @id @default(uuid())
+  orderId           String
+  productId         String
   quantity          Float
-  reservedQuantity  Float    @default(0)
-  deliveredQuantity Float    @default(0)
-  unitPrice         Decimal  
-  totalPrice        Decimal  
+  reservedQuantity  Float           @default(0)
+  deliveredQuantity Float           @default(0)
+  unitPrice         Decimal
+  totalPrice        Decimal
   source            OrderItemSource @default(SKU)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
 
   order         Order          @relation(fields: [orderId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   product       Product        @relation(fields: [productId], references: [id], onDelete: Restrict, onUpdate: Cascade)
@@ -1036,16 +1193,16 @@ model OrderItem {
 }
 
 model Payment {
-  id          String              @id @default(uuid()) 
-  orderId     String              
-  amount      Decimal             
+  id          String              @id @default(uuid())
+  orderId     String
+  amount      Decimal
   currency    String              @default("RUB")
   plannedDate DateTime?
   paymentDate DateTime?
   status      PaymentRecordStatus @default(PENDING)
-  comment     String?             
-  fileId      String?             
-  createdById String              
+  comment     String?
+  fileId      String?
+  createdById String
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
 
@@ -1062,14 +1219,14 @@ model Payment {
 }
 
 model Delivery {
-  id             String         @id @default(uuid()) 
-  orderId        String         
+  id             String         @id @default(uuid())
+  orderId        String
   deliveryDate   DateTime
   recipient      String?
   status         DeliveryStatus @default(PLANNED)
   trackingNumber String?
-  comment        String?        
-  fileId         String?        
+  comment        String?
+  fileId         String?
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
 
@@ -1084,9 +1241,9 @@ model Delivery {
 }
 
 model DeliveryItem {
-  id          String   @id @default(uuid()) 
-  deliveryId  String   
-  orderItemId String   
+  id          String   @id @default(uuid())
+  deliveryId  String
+  orderItemId String
   quantity    Float
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -1099,12 +1256,12 @@ model DeliveryItem {
 }
 
 model Activity {
-  id          String       @id @default(uuid()) 
-  authorId    String       
+  id          String       @id @default(uuid())
+  authorId    String
   relatedType String
-  relatedId   String       
+  relatedId   String
   type        ActivityType
-  content     String?      
+  content     String?
   metadata    Json?
   createdAt   DateTime     @default(now())
 
@@ -1117,11 +1274,11 @@ model Activity {
 }
 
 model AuditLog {
-  id         String   @id @default(uuid()) 
-  userId     String?  
+  id         String   @id @default(uuid())
+  userId     String?
   action     String
   entityType String
-  entityId   String   
+  entityId   String
   oldValue   Json?
   newValue   Json?
   ipAddress  String?
@@ -1137,23 +1294,43 @@ model AuditLog {
 }
 
 model SalesPlan {
-  id           String   @id @default(uuid()) 
-  userId       String   
+  id           String   @id @default(uuid())
+  userId       String
   period       DateTime
-  targetAmount Decimal  
-  actualAmount Decimal  @default(0) 
+  targetAmount Decimal
+  actualAmount Decimal  @default(0)
+  currencyCode String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  fxRates SalesPlanFxRate[]
 
   @@unique([userId, period])
   @@index([period])
 }
 
+/// Director-owned conversion snapshot for one SalesPlan. `rateToPlanCurrency`
+/// means: 1 unit of `fromCurrency` equals this many units of the plan currency.
+model SalesPlanFxRate {
+  id                 String   @id @default(uuid())
+  salesPlanId        String
+  fromCurrency       String
+  rateToPlanCurrency Decimal  @db.Decimal(18, 8)
+  createdById        String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  salesPlan SalesPlan @relation(fields: [salesPlanId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  createdBy User      @relation("SalesPlanFxRateCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([salesPlanId, fromCurrency])
+  @@index([createdById])
+}
+
 model LeadPlan {
-  id          String   @id @default(uuid()) 
-  userId      String   
+  id          String   @id @default(uuid())
+  userId      String
   period      DateTime
   targetCount Int
   actualCount Int      @default(0)
@@ -1167,7 +1344,7 @@ model LeadPlan {
 }
 
 model KpiSetting {
-  id                   String   @id @default(uuid()) 
+  id                   String   @id @default(uuid())
   period               DateTime
   salesPlanWeight      Int      @default(40)
   qualifiedLeadsWeight Int      @default(15)
@@ -1243,7 +1420,7 @@ model PanelType {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  qualityMappings SupplierQualityMapping[]
+  qualityMappings      SupplierQualityMapping[]
   calculationLineItems CalculationLineItem[]
   qualifications       LeadQualification[]
 }
@@ -1267,7 +1444,7 @@ model PanelThicknessPricing {
   id             String    @id @default(uuid())
   supplierId     String
   qualityClassId String
-  thicknessMm    Int
+  thicknessMm    Decimal   @db.Decimal(6, 2)
   basePricePerM2 Decimal   @db.Decimal(12, 2)
   currencyCode   String    @default("CNY")
   validFrom      DateTime  @default(now())
@@ -1286,9 +1463,9 @@ model QualityClass {
   code   String @unique
   nameRu String
 
-  supplierMappings  SupplierQualityMapping[]
-  calculationLineItems CalculationLineItem[]
-  thicknessPricings PanelThicknessPricing[]
+  supplierMappings         SupplierQualityMapping[]
+  calculationLineItems     CalculationLineItem[]
+  thicknessPricings        PanelThicknessPricing[]
   commercialQualifications LeadCommercialQualification[]
 }
 
@@ -1299,9 +1476,9 @@ model SupplierQualityMapping {
   qualityClassId String
   isDefault      Boolean @default(false)
 
-  supplier     Supplier     @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  panelType    PanelType    @relation(fields: [panelTypeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  qualityClass QualityClass @relation(fields: [qualityClassId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  supplier                 Supplier                      @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  panelType                PanelType                     @relation(fields: [panelTypeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  qualityClass             QualityClass                  @relation(fields: [qualityClassId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   commercialQualifications LeadCommercialQualification[]
 
   @@unique([supplierId, panelTypeId, qualityClassId])
@@ -1342,13 +1519,16 @@ model SupplierOrder {
   deliveryAddress    String?
   deliveryCost       Decimal?            @db.Decimal(10, 2)
   trackingNumber     String?
+  deliveredAt        DateTime?
+  deliveredById      String?
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
-  deal             Deal     @relation(fields: [dealId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  supplier         Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  createdBy        User?    @relation("SupplierOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  readyConfirmedBy User?    @relation("SupplierOrderReadyConfirmedBy", fields: [readyConfirmedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  deal             Deal                         @relation(fields: [dealId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  supplier         Supplier                     @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdBy        User?                        @relation("SupplierOrderCreatedBy", fields: [createdById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  readyConfirmedBy User?                        @relation("SupplierOrderReadyConfirmedBy", fields: [readyConfirmedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  deliveredBy      User?                        @relation("SupplierOrderDeliveredBy", fields: [deliveredById], references: [id], onDelete: SetNull, onUpdate: Cascade)
   reminderClaims   SupplierOrderReminderClaim[]
 
   @@index([dealId])
@@ -1357,6 +1537,7 @@ model SupplierOrder {
   @@index([expectedReadyAt])
   @@index([createdById])
   @@index([readyConfirmedById])
+  @@index([deliveredById])
 }
 
 model SupplierOrderReminderClaim {
@@ -1374,31 +1555,68 @@ model SupplierOrderReminderClaim {
 
 // === Calculation Domain (P1) ===
 
+model CalculationRequest {
+  id            String    @id @default(uuid())
+  leadId        String
+  clientId      String?
+  dealId        String?
+  createdById   String
+  status        String    @default("draft")
+  notes         String?
+  submittedAt   DateTime?
+  submittedById String?
+  quotedAt      DateTime?
+  deletedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  lead         Lead                 @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  client       Client?              @relation(fields: [clientId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  deal         Deal?                @relation(fields: [dealId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  createdBy    User                 @relation("CalculationRequestCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  submittedBy  User?                @relation("CalculationRequestSubmittedBy", fields: [submittedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  calculations CalculationSession[]
+  quotes       PanelQuote[]
+
+  @@index([leadId, status])
+  @@index([clientId])
+  @@index([dealId])
+  @@index([createdById])
+  @@index([status, createdAt])
+  @@index([submittedById])
+  @@index([deletedAt])
+}
+
 model CalculationSession {
-  id              String    @id @default(uuid())
-  leadId          String
-  dealId          String?
-  clientId        String?
-  projectObjectId String?
-  createdById     String
-  status          String    @default("draft")
-  totalAmount     Decimal?  @db.Decimal(12, 2)
-  displayCurrency String    @default("USD")
-  cnyUsdRate          Decimal? @db.Decimal(18, 8)
-  sellingCoefficient  Decimal? @db.Decimal(8, 4)
-  notes           String?
+  id                       String    @id @default(uuid())
+  requestId                String?
+  leadId                   String
+  dealId                   String?
+  clientId                 String?
+  projectObjectId          String?
+  createdById              String
+  status                   String    @default("draft")
+  sortOrder                Int       @default(0)
+  title                    String?
+  totalAmount              Decimal?  @db.Decimal(12, 2)
+  displayCurrency          String    @default("USD")
+  cnyUsdRate               Decimal?  @db.Decimal(18, 8)
+  sellingCoefficient       Decimal?  @db.Decimal(8, 4)
+  notes                    String?
   commercialSupplierId     String?
   commercialQualityClassId String?
   commercialConfirmedAt    DateTime?
-  deletedAt       DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  deletedAt                DateTime?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
-  lead      Lead                  @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  createdBy User                  @relation("CalculationCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  items     CalculationLineItem[]
+  request    CalculationRequest?   @relation(fields: [requestId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  lead       Lead                  @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  createdBy  User                  @relation("CalculationCreator", fields: [createdById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  items      CalculationLineItem[]
   panelQuote PanelQuote?
 
+  @@index([requestId, sortOrder])
   @@index([leadId, status])
   @@index([createdById])
   @@index([status, createdAt])
@@ -1406,29 +1624,35 @@ model CalculationSession {
 }
 
 model CalculationLineItem {
-  id             String   @id @default(uuid())
-  calculationId  String
-  sortOrder      Int      @default(0)
-  panelTypeId    String
-  panelSizeId    String
-  thicknessMm    Int
-  supplierId     String
-  qualityClassId String
-  colorId        String?
-  requiredAreaM2     Decimal  @db.Decimal(10, 4)
-  sheetsCount        Int
-  supplierPricePerM2 Decimal  @db.Decimal(12, 2)
-  clientPricePerM2   Decimal  @db.Decimal(12, 2)
-  pricePerM2         Decimal  @db.Decimal(12, 2)
-  pricePerSheet      Decimal  @db.Decimal(12, 2)
-  totalPrice         Decimal  @db.Decimal(12, 2)
-  wastePercent   Decimal  @db.Decimal(5, 2)
-  createdAt      DateTime @default(now())
+  id                    String   @id @default(uuid())
+  calculationId         String
+  sortOrder             Int      @default(0)
+  panelTypeId           String
+  panelSizeId           String
+  thicknessMm           Decimal  @db.Decimal(6, 2)
+  supplierId            String?
+  qualityClassId        String
+  colorId               String?
+  coating               String?
+  texture               String?
+  note                  String?
+  customTypeDescription String?
+  customWidthMm         Int?
+  customHeightMm        Int?
+  requiredAreaM2        Decimal  @db.Decimal(10, 4)
+  sheetsCount           Int
+  supplierPricePerM2    Decimal  @db.Decimal(12, 2)
+  clientPricePerM2      Decimal  @db.Decimal(12, 2)
+  pricePerM2            Decimal  @db.Decimal(12, 2)
+  pricePerSheet         Decimal  @db.Decimal(12, 2)
+  totalPrice            Decimal  @db.Decimal(12, 2)
+  wastePercent          Decimal  @db.Decimal(5, 2)
+  createdAt             DateTime @default(now())
 
   calculation  CalculationSession @relation(fields: [calculationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   panelType    PanelType          @relation(fields: [panelTypeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   panelSize    PanelSize          @relation(fields: [panelSizeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  supplier     Supplier           @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  supplier     Supplier?          @relation(fields: [supplierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   qualityClass QualityClass       @relation(fields: [qualityClassId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   color        PanelColor?        @relation(fields: [colorId], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
@@ -1438,65 +1662,106 @@ model CalculationLineItem {
 // === Panel Quote Domain (P2) ===
 
 model PanelQuote {
-  id              String   @id @default(uuid())
-  calculationId   String   @unique
-  leadId          String
-  managerId       String
-  dealId          String?
-  status          String   @default("draft")
-  totalAmount     Decimal  @db.Decimal(12, 2)
-  displayCurrency String   @default("USD")
-  cnyUsdRate          Decimal? @db.Decimal(18, 8)
-  sellingCoefficient  Decimal? @db.Decimal(8, 4)
-  deliveryCost    Decimal? @db.Decimal(10, 2)
-  clientComment      String?
-  rejectionReason    String?
-  validUntil         DateTime
-  clientAcceptedAt   DateTime?
-  clientAcceptedById String?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  id                     String    @id @default(uuid())
+  calculationId          String?   @unique
+  requestId              String?
+  leadId                 String
+  clientId               String?
+  managerId              String
+  approverId             String?
+  dealId                 String?
+  status                 String    @default("draft")
+  totalAmount            Decimal   @db.Decimal(12, 2)
+  displayCurrency        String    @default("USD")
+  cnyUsdRate             Decimal?  @db.Decimal(18, 8)
+  sellingCoefficient     Decimal?  @db.Decimal(8, 4)
+  deliveryCost           Decimal?  @db.Decimal(10, 2)
+  clientComment          String?
+  commercialNote         String?
+  internalCommercialNote String?
+  productionTerms        String?
+  deliveryTerms          String?
+  productionDaysFrom     Int?
+  productionDaysTo       Int?
+  deliveryDaysFrom       Int?
+  deliveryDaysTo         Int?
+  documentDate           DateTime?
+  rejectionReason        String?
+  validUntil             DateTime
+  clientAcceptedAt       DateTime?
+  clientAcceptedById     String?
+  pdfFileId              String?
+  finalizedAt            DateTime?
+  previousVersionId      String?   @unique
+  versionNumber          Int       @default(1)
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
-  calculation      CalculationSession @relation(fields: [calculationId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  lead             Lead               @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  manager          User               @relation("QuoteManager", fields: [managerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
-  clientAcceptedBy User?              @relation("QuoteClientAcceptedBy", fields: [clientAcceptedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  deal             Deal?              @relation(fields: [dealId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  calculation      CalculationSession? @relation(fields: [calculationId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  request          CalculationRequest? @relation(fields: [requestId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  lead             Lead                @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  client           Client?             @relation(fields: [clientId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  manager          User                @relation("QuoteManager", fields: [managerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  approver         User?               @relation("QuoteApprover", fields: [approverId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  clientAcceptedBy User?               @relation("QuoteClientAcceptedBy", fields: [clientAcceptedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  deal             Deal?               @relation(fields: [dealId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  pdfFile          File?               @relation("QuotePdfFile", fields: [pdfFileId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   items            PanelQuoteItem[]
+  previousVersion  PanelQuote?         @relation("QuoteVersions", fields: [previousVersionId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  nextVersion      PanelQuote?         @relation("QuoteVersions")
 
+  @@unique([requestId, versionNumber])
   @@index([leadId, status])
+  @@index([clientId, createdAt])
+  @@index([requestId, status])
   @@index([managerId])
+  @@index([approverId])
   @@index([status, createdAt])
   @@index([clientAcceptedById])
+  @@index([pdfFileId])
+  @@index([previousVersionId])
 }
 
 model PanelQuoteItem {
-  id               String   @id @default(uuid())
-  quoteId          String
-  panelTypeCode    String
-  panelTypeName    String
-  panelSizeName    String
-  areaM2           Decimal  @db.Decimal(10, 4)
-  thicknessMm      Int
-  supplierCode     String
-  supplierName     String
-  qualityClassCode String
-  qualityClassName String
-  colorCode        String?
-  colorName        String?
-  requiredAreaM2   Decimal  @db.Decimal(10, 4)
-  sheetsCount        Int
-  supplierPricePerM2 Decimal  @db.Decimal(12, 2)
-  pricePerM2         Decimal  @db.Decimal(12, 2)
-  pricePerSheet      Decimal  @db.Decimal(12, 2)
-  totalPrice       Decimal  @db.Decimal(12, 2)
-  wastePercent     Decimal  @db.Decimal(5, 2)
-  sortOrder        Int      @default(0)
-  createdAt        DateTime @default(now())
+  id                        String    @id @default(uuid())
+  quoteId                   String
+  calculationId             String?
+  calculationGroupTitle     String?
+  calculationGroupSortOrder Int       @default(0)
+  panelTypeCode             String
+  panelTypeName             String
+  panelSizeName             String
+  areaM2                    Decimal   @db.Decimal(10, 4)
+  thicknessMm               Decimal   @db.Decimal(6, 2)
+  supplierCode              String
+  supplierName              String
+  qualityClassCode          String
+  qualityClassName          String
+  colorCode                 String?
+  colorName                 String?
+  coating                   String?
+  texture                   String?
+  note                      String?
+  customTypeDescription     String?
+  customWidthMm             Int?
+  customHeightMm            Int?
+  requiredAreaM2            Decimal   @db.Decimal(10, 4)
+  sheetsCount               Int
+  supplierPricePerM2        Decimal?  @db.Decimal(12, 2)
+  pricePerM2                Decimal?  @db.Decimal(12, 2)
+  currencyCode              String?   @default("USD")
+  priceApprovedAt           DateTime?
+  priceApprovedById         String?
+  pricePerSheet             Decimal?  @db.Decimal(12, 2)
+  totalPrice                Decimal?  @db.Decimal(12, 2)
+  wastePercent              Decimal   @db.Decimal(5, 2)
+  sortOrder                 Int       @default(0)
+  createdAt                 DateTime  @default(now())
 
   quote PanelQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade, onUpdate: Cascade)
 
   @@index([quoteId, sortOrder])
+  @@index([calculationId])
 }
 
 // Centralized CNY → USD rate for the HPL selling formula. Not a multi-currency FX subsystem.

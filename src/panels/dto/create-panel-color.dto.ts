@@ -34,9 +34,9 @@ class PanelColorFieldsConstraint implements ValidatorConstraintInterface {
 
     return Boolean(
       colorCode &&
-        colorCode.length <= 50 &&
-        colorName &&
-        colorName.length <= 100,
+      colorCode.length <= 50 &&
+      colorName &&
+      colorName.length <= 100,
     );
   }
 

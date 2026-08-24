@@ -20,6 +20,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import type { CurrentUser as CurrentUserType } from '../../common/interfaces/current-user.interface';
+import { LoseOpportunityDto } from '../../common/dto/lose-opportunity.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { AssignLeadDto } from './dto/assign-lead.dto';
 import { CreateLeadDto } from './dto/create-lead.dto';
@@ -28,10 +29,15 @@ import { DisqualifyLeadDto } from './dto/disqualify-lead.dto';
 import { FilterLeadDto } from './dto/filter-lead.dto';
 import { QualifyLeadDto } from './dto/qualify-lead.dto';
 import { UpdateLeadDto } from './dto/update-lead.dto';
+import { UpdateLeadManagerCommercialNoteDto } from './dto/update-lead-manager-commercial-note.dto';
 import { UpsertLeadCommercialQualificationDto } from './dto/upsert-lead-commercial-qualification.dto';
 import { UpsertLeadQualificationDto } from './dto/upsert-lead-qualification.dto';
-import { LEADS_COMMERCIAL_QUALIFY_PERMISSION } from './lead.constants';
+import {
+  LEADS_COMMERCIAL_QUALIFY_PERMISSION,
+  MANAGER_COMMERCIAL_NOTE_PERMISSION,
+} from './lead.constants';
 import { LeadCommercialQualificationService } from './lead-commercial-qualification.service';
+import { LeadManagerCommercialNoteService } from './lead-manager-commercial-note.service';
 import { LeadQualificationService } from './lead-qualification.service';
 import { LeadsService } from './leads.service';
 
@@ -44,6 +50,7 @@ export class LeadsController {
     private readonly leadsService: LeadsService,
     private readonly leadQualificationService: LeadQualificationService,
     private readonly leadCommercialQualificationService: LeadCommercialQualificationService,
+    private readonly leadManagerCommercialNoteService: LeadManagerCommercialNoteService,
   ) {}
 
   @Post()
@@ -114,7 +121,10 @@ export class LeadsController {
   @ApiOperation({
     summary: 'Get Stage-2 HEAD commercial qualification for a lead',
   })
-  @ApiResponse({ status: 200, description: 'Commercial qualification returned' })
+  @ApiResponse({
+    status: 200,
+    description: 'Commercial qualification returned',
+  })
   @ApiResponse({ status: 404, description: 'Lead not found' })
   getCommercialQualification(
     @Param('id', ParseUUIDPipe) id: string,
@@ -138,7 +148,10 @@ export class LeadsController {
     description: 'Commercial qualification confirmed; Lead stays QUALIFIED',
   })
   @ApiResponse({ status: 400, description: 'Invalid supplier/quality mapping' })
-  @ApiResponse({ status: 403, description: 'Insufficient commercial authority' })
+  @ApiResponse({
+    status: 403,
+    description: 'Insufficient commercial authority',
+  })
   @ApiResponse({ status: 404, description: 'Lead not found' })
   @ApiResponse({
     status: 409,
@@ -155,6 +168,48 @@ export class LeadsController {
       user.id,
       user.permissions,
     );
+  }
+
+  @Patch(':id/manager-commercial-note')
+  @RequirePermissions(MANAGER_COMMERCIAL_NOTE_PERMISSION)
+  @ApiOperation({
+    summary:
+      'Save MANAGER-owned customer note (Примечание / пожелания клиента). Does not hand off to HEAD.',
+  })
+  @ApiResponse({ status: 200, description: 'Manager note saved' })
+  @ApiResponse({
+    status: 403,
+    description: 'HEAD/DIRECTOR/ADMIN cannot mutate',
+  })
+  @ApiResponse({ status: 404, description: 'Lead not found' })
+  updateManagerCommercialNote(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateLeadManagerCommercialNoteDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadManagerCommercialNoteService.updateNote(id, dto, user);
+  }
+
+  @Post(':id/handoff-to-head')
+  @RequirePermissions(MANAGER_COMMERCIAL_NOTE_PERMISSION)
+  @ApiOperation({
+    summary:
+      'MANAGER finished customer-side input and hands the case to HEAD for КП preparation',
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Handoff recorded; active HEAD users notified',
+  })
+  @ApiResponse({ status: 403, description: 'Only MANAGER can hand off' })
+  @ApiResponse({
+    status: 409,
+    description: 'Lead is not Stage-1 QUALIFIED or is terminal',
+  })
+  handoffToHead(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadManagerCommercialNoteService.handoffToHead(id, user);
   }
 
   @Patch(':id')
@@ -206,6 +261,19 @@ export class LeadsController {
     @CurrentUser() user: CurrentUserType,
   ) {
     return this.leadsService.disqualify(id, dto, user.id, user.permissions);
+  }
+
+  @Post(':id/lose')
+  @RequirePermissions('leads:update')
+  @ApiOperation({
+    summary: 'Close a pre-Deal opportunity with a structured loss reason',
+  })
+  lose(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: LoseOpportunityDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadsService.lose(id, dto, user.id, user.permissions);
   }
 
   @Post(':id/assign')

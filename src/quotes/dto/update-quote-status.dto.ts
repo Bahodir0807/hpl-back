@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString, MaxLength, ValidateIf } from 'class-validator';
+import { IsIn, IsString, MaxLength, ValidateIf } from 'class-validator';
 import { QUOTE_STATUS } from '../quote.constants';
 
 const PATCHABLE_STATUSES = [
@@ -11,7 +11,9 @@ export class UpdateQuoteStatusDto {
   @IsIn(PATCHABLE_STATUSES)
   status!: (typeof PATCHABLE_STATUSES)[number];
 
-  @ValidateIf((dto: UpdateQuoteStatusDto) => dto.status === QUOTE_STATUS.REJECTED)
+  @ValidateIf(
+    (dto: UpdateQuoteStatusDto) => dto.status === QUOTE_STATUS.REJECTED,
+  )
   @IsString()
   @MaxLength(1000)
   rejectionReason?: string;

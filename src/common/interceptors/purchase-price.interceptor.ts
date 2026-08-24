@@ -14,6 +14,7 @@ const PURCHASE_PRICE_PERMISSION = 'products:read_purchase_price';
 const COST_FIELDS = new Set([
   'purchasePrice',
   'purchasePriceSnapshot',
+  'purchasePricePerM2Cny',
   'margin',
   'marginPercent',
   'supplierPricePerM2',

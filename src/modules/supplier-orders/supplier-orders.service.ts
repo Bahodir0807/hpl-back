@@ -2,18 +2,28 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
 import {
   ActivityType,
+  FulfillmentSource,
   Prisma,
   RoleName,
   SupplierOrder,
   SupplierOrderStatus,
 } from '@prisma/client';
 import { QUOTE_STATUS } from '../../quotes/quote.constants';
+import { BusinessException } from '../../common/exceptions/business.exception';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
+import { hasAnyRole } from '../../common/enums/role.enum';
+import { DealCompletionService } from '../deals/deal-completion.service';
+import {
+  CLIENT_DELIVERY_FORBIDDEN_MESSAGE,
+  CLIENT_DELIVERY_NOT_SHIPPED_MESSAGE,
+  FULFILLMENT_AUDIT,
+} from '../deals/deal-fulfillment.constants';
 import { DealPolicyService } from '../deals/services/deal-policy.service';
 import {
   assertPaidForClientShipment,
@@ -55,6 +65,7 @@ export class SupplierOrdersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly dealPolicy: DealPolicyService,
+    private readonly dealCompletion: DealCompletionService,
   ) {}
 
   async createForDeal(
@@ -75,6 +86,7 @@ export class SupplierOrdersService {
       select: {
         id: true,
         ownerId: true,
+        fulfillmentSource: true,
         panelQuotes: {
           select: {
             id: true,
@@ -89,6 +101,22 @@ export class SupplierOrdersService {
 
     if (!deal || !this.dealPolicy.canReadDeal(user, deal)) {
       throw new NotFoundException('Deal not found');
+    }
+
+    if (deal.fulfillmentSource === FulfillmentSource.WAREHOUSE_STOCK) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'FULFILLMENT_SOURCE_CONFLICT',
+        'Warehouse-stock Deal cannot create supplier orders',
+      );
+    }
+
+    if (deal.fulfillmentSource !== FulfillmentSource.SUPPLIER_ORDER) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'FULFILLMENT_SOURCE_REQUIRED',
+        'Deal fulfillment source must be selected before supplier ordering',
+      );
     }
 
     this.assertHplDealReadyForSupplierOrder(deal.panelQuotes);
@@ -164,11 +192,7 @@ export class SupplierOrdersService {
     dealId: string,
     user: CurrentUser,
   ): Promise<SupplierOrderWithSupplier[]> {
-    await this.assertDealAccessOrNotFound(
-      dealId,
-      user,
-      'Deal not found',
-    );
+    await this.assertDealAccessOrNotFound(dealId, user, 'Deal not found');
 
     return this.prisma.supplierOrder.findMany({
       where: { dealId },
@@ -399,6 +423,114 @@ export class SupplierOrdersService {
     throw new ConflictException('Supplier order readiness was not confirmed');
   }
 
+  async confirmClientDelivery(
+    id: string,
+    user: CurrentUser,
+  ): Promise<SupplierOrderWithSupplier> {
+    this.assertClientDeliveryAllowed(user);
+
+    const supplierOrder = await this.requireAccessibleOrder(id, user);
+
+    if (supplierOrder.status === SupplierOrderStatus.CANCELLED) {
+      throw new BadRequestException(
+        'Cannot confirm client delivery for a cancelled supplier order',
+      );
+    }
+
+    if (supplierOrder.status === SupplierOrderStatus.DELIVERED) {
+      await this.dealCompletion.tryFinalizeDeal(supplierOrder.dealId, user.id);
+      return this.prisma.supplierOrder.findUniqueOrThrow({
+        where: { id },
+        include: supplierOrderInclude,
+      });
+    }
+
+    if (supplierOrder.status !== SupplierOrderStatus.SHIPPED) {
+      throw new BadRequestException(CLIENT_DELIVERY_NOT_SHIPPED_MESSAGE);
+    }
+
+    const deliveredAt = new Date();
+
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      await this.dealCompletion.lockFulfillmentRows(tx, supplierOrder.dealId);
+      await this.assertDealPaidForShipment(tx, supplierOrder.dealId);
+
+      const result = await tx.supplierOrder.updateMany({
+        where: {
+          id,
+          status: SupplierOrderStatus.SHIPPED,
+        },
+        data: {
+          status: SupplierOrderStatus.DELIVERED,
+          deliveredAt,
+          deliveredById: user.id,
+        },
+      });
+
+      if (result.count !== 1) {
+        return null;
+      }
+
+      await tx.activity.create({
+        data: {
+          authorId: user.id,
+          relatedType: 'Deal',
+          relatedId: supplierOrder.dealId,
+          type: ActivityType.CLIENT_DELIVERY_CONFIRMED,
+          content: 'Client delivery confirmed',
+          metadata: {
+            action: 'client_delivery_confirmed',
+            supplierOrderId: id,
+            oldStatus: SupplierOrderStatus.SHIPPED,
+            newStatus: SupplierOrderStatus.DELIVERED,
+          },
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: FULFILLMENT_AUDIT.CLIENT_DELIVERY_CONFIRMED,
+          entityType: 'SupplierOrder',
+          entityId: id,
+          oldValue: {
+            status: SupplierOrderStatus.SHIPPED,
+            deliveredAt: null,
+            deliveredById: null,
+          },
+          newValue: {
+            status: SupplierOrderStatus.DELIVERED,
+            deliveredAt: deliveredAt.toISOString(),
+            deliveredById: user.id,
+          },
+        },
+      });
+
+      await this.dealCompletion.tryFinalize(tx, supplierOrder.dealId, user.id);
+
+      return tx.supplierOrder.findUniqueOrThrow({
+        where: { id },
+        include: supplierOrderInclude,
+      });
+    });
+
+    if (claimed) {
+      return claimed;
+    }
+
+    const latest = await this.prisma.supplierOrder.findUnique({
+      where: { id },
+      include: supplierOrderInclude,
+    });
+
+    if (latest?.status === SupplierOrderStatus.DELIVERED) {
+      await this.dealCompletion.tryFinalizeDeal(supplierOrder.dealId, user.id);
+      return latest;
+    }
+
+    throw new ConflictException('Client delivery was not confirmed');
+  }
+
   async updateStatus(
     id: string,
     status: SupplierOrderStatus,
@@ -407,6 +539,10 @@ export class SupplierOrdersService {
     this.assertManageAllowed(user);
 
     const supplierOrder = await this.requireAccessibleOrder(id, user);
+
+    if (status === SupplierOrderStatus.DELIVERED) {
+      return this.confirmClientDelivery(id, user);
+    }
 
     if (status === supplierOrder.status) {
       return supplierOrder;
@@ -429,10 +565,20 @@ export class SupplierOrdersService {
         await this.assertDealPaidForShipment(tx, supplierOrder.dealId);
       }
 
-      const updated = await tx.supplierOrder.update({
-        where: { id },
+      const claimed = await tx.supplierOrder.updateMany({
+        where: { id, status: supplierOrder.status },
         data: { status },
       });
+
+      if (claimed.count === 0) {
+        const latest = await tx.supplierOrder.findUnique({ where: { id } });
+        if (latest?.status === status) {
+          return latest;
+        }
+        throw new ConflictException(
+          'Supplier order status changed concurrently',
+        );
+      }
 
       await tx.activity.create({
         data: {
@@ -460,7 +606,7 @@ export class SupplierOrdersService {
         },
       });
 
-      return updated;
+      return tx.supplierOrder.findUniqueOrThrow({ where: { id } });
     });
   }
 
@@ -617,6 +763,16 @@ export class SupplierOrdersService {
     }
 
     throw new ForbiddenException(CLIENT_SHIPMENT_FORBIDDEN_MESSAGE);
+  }
+
+  private assertClientDeliveryAllowed(user: CurrentUser): void {
+    if (
+      hasAnyRole(user, [RoleName.MANAGER, RoleName.HEAD, RoleName.DIRECTOR])
+    ) {
+      return;
+    }
+
+    throw new ForbiddenException(CLIENT_DELIVERY_FORBIDDEN_MESSAGE);
   }
 
   private assertHplDealReadyForSupplierOrder(

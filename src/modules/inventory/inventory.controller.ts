@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -24,6 +25,7 @@ import { CreateExpectedReceiptDto } from './dto/create-expected-receipt.dto';
 import { FilterExpectedReceiptDto } from './dto/filter-expected-receipt.dto';
 import { FilterStockBalanceDto } from './dto/filter-stock-balance.dto';
 import { ReceiveExpectedReceiptDto } from './dto/receive-expected-receipt.dto';
+import { UpdateWarehousePurchaseDto } from './dto/update-warehouse-purchase.dto';
 import { InventoryService } from './inventory.service';
 
 @ApiTags('Inventory')
@@ -58,16 +60,58 @@ export class InventoryController {
     return this.inventoryService.getExpectedReceipts(filterDto);
   }
 
+  @Get('warehouse-purchases')
+  @RequirePermissions('inventory:read')
+  @ApiOperation({ summary: 'List warehouse purchases' })
+  getWarehousePurchases(@Query() filterDto: FilterExpectedReceiptDto) {
+    return this.inventoryService.getExpectedReceipts(filterDto);
+  }
+
   @Post('expected-receipts')
-  @RequirePermissions('inventory:manage')
+  @RequirePermissions('warehouse_purchases:plan')
   @ApiOperation({ summary: 'Plan expected supplier receipt' })
   @ApiResponse({ status: 201, description: 'Expected receipt created' })
-  createExpectedReceipt(@Body() dto: CreateExpectedReceiptDto) {
-    return this.inventoryService.createExpectedReceipt(dto);
+  createExpectedReceipt(
+    @Body() dto: CreateExpectedReceiptDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.inventoryService.createExpectedReceipt(dto, user.id);
+  }
+
+  @Post('warehouse-purchases')
+  @RequirePermissions('warehouse_purchases:plan')
+  @ApiOperation({ summary: 'Create warehouse purchase plan' })
+  @ApiResponse({ status: 201, description: 'Warehouse purchase created' })
+  createWarehousePurchase(
+    @Body() dto: CreateExpectedReceiptDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.inventoryService.createExpectedReceipt(dto, user.id);
+  }
+
+  @Patch('warehouse-purchases/:id')
+  @RequirePermissions('warehouse_purchases:plan')
+  @ApiOperation({ summary: 'Update warehouse purchase plan' })
+  updateWarehousePurchase(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateWarehousePurchaseDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.inventoryService.updateWarehousePurchase(id, dto, user.id);
+  }
+
+  @Post('warehouse-purchases/:id/cancel')
+  @RequirePermissions('warehouse_purchases:plan')
+  @ApiOperation({ summary: 'Cancel warehouse purchase before receipt' })
+  cancelWarehousePurchase(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.inventoryService.cancelWarehousePurchase(id, user.id);
   }
 
   @Post('expected-receipts/:id/receive')
-  @RequirePermissions('inventory:manage')
+  @RequirePermissions('warehouse_purchases:receive')
   @ApiOperation({ summary: 'Receive expected goods to stock' })
   @ApiResponse({ status: 201, description: 'Expected receipt processed' })
   @ApiResponse({
@@ -76,6 +120,18 @@ export class InventoryController {
   })
   @ApiResponse({ status: 404, description: 'Expected receipt not found' })
   processReceipt(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReceiveExpectedReceiptDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.inventoryService.processReceipt(id, dto, user.id);
+  }
+
+  @Post('warehouse-purchases/:id/receipts')
+  @RequirePermissions('warehouse_purchases:receive')
+  @ApiOperation({ summary: 'Receive warehouse purchase goods to stock' })
+  @ApiResponse({ status: 201, description: 'Warehouse receipt recorded' })
+  receiveWarehousePurchase(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReceiveExpectedReceiptDto,
     @CurrentUser() user: CurrentUserType,

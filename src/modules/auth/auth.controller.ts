@@ -1,11 +1,4 @@
-import {
-  Body,
-  Controller,
-  Get,
-  Headers,
-  Ip,
-  Post,
-} from '@nestjs/common';
+import { Body, Controller, Get, Headers, Ip, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle, Throttle } from '@nestjs/throttler';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';

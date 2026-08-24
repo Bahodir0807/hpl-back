@@ -14,6 +14,10 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
       findUnique: jest.fn(),
       findUniqueOrThrow: jest.fn(),
       updateMany: jest.fn(),
+      update: jest.fn(),
+    },
+    contact: {
+      findUnique: jest.fn(),
     },
     leadQualification: {
       findUnique: jest.fn(),
@@ -24,6 +28,7 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     deal: {
       create: jest.fn(),
     },
+    dealStageHistory: { create: jest.fn() },
     activity: {
       create: jest.fn(),
     },
@@ -51,14 +56,14 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     status: LeadStatus.NEW,
     dealId: null,
     deletedAt: null,
+    estimatedAmount: 999999,
+    targetDate: new Date('2026-12-01T00:00:00.000Z'),
   };
 
   const qualifyDto = {
     clientId: 'client-id',
     projectObjectId: 'object-id',
     needDescription: 'HPL panels for lobby',
-    estimatedAmount: 125000,
-    targetDate: new Date('2026-09-01T00:00:00.000Z'),
     decisionMakerContact: 'Chief architect',
   } as QualifyLeadDto;
 
@@ -66,8 +71,8 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     ...ownedLead,
     ...qualifyDto,
     status: LeadStatus.QUALIFIED,
-    dealId: null,
-    deal: null,
+    dealId: 'deal-id',
+    deal: { id: 'deal-id', title: 'Lobby HPL' },
   };
 
   let service: LeadsService;
@@ -95,7 +100,14 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
       managerId: 'head-id',
       manager: { id: 'head-id', isActive: true },
     });
+    prisma.contact.findUnique.mockResolvedValue({
+      id: 'contact-id',
+      clientId: 'client-id',
+    });
     prisma.lead.updateMany.mockResolvedValue({ count: 1 });
+    prisma.lead.update.mockResolvedValue({});
+    prisma.deal.create.mockResolvedValue({ id: 'deal-id', title: 'Lobby HPL' });
+    prisma.dealStageHistory.create.mockResolvedValue({});
     prisma.activity.create.mockResolvedValue({});
     prisma.auditLog.create.mockResolvedValue({});
     prisma.task.create.mockResolvedValue({ id: 'task-id' });
@@ -104,14 +116,24 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     prisma.lead.findUniqueOrThrow.mockResolvedValue(qualifiedLead);
   });
 
-  it('transitions a complete Stage-1 lead to QUALIFIED without creating a Deal', async () => {
+  it('transitions a complete Stage-1 lead to QUALIFIED and creates its Deal', async () => {
     const result = await service.qualify('lead-id', qualifyDto, 'owner-id', [
       'leads:qualify',
     ]);
 
     expect(result.status).toBe(LeadStatus.QUALIFIED);
-    expect(result.dealId).toBeNull();
-    expect(prisma.deal.create).not.toHaveBeenCalled();
+    expect(result.dealId).toBe('deal-id');
+    expect(prisma.deal.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        clientId: qualifyDto.clientId,
+        ownerId: 'owner-id',
+        stage: 'QUALIFICATION',
+      }),
+    });
+    expect(prisma.lead.update).toHaveBeenCalledWith({
+      where: { id: 'lead-id' },
+      data: { dealId: 'deal-id' },
+    });
     expect(prisma.lead.updateMany).toHaveBeenCalledWith({
       where: {
         id: 'lead-id',
@@ -125,6 +147,12 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
       }),
     });
     expect(prisma.lead.updateMany.mock.calls[0][0].data.dealId).toBeUndefined();
+    expect(
+      prisma.lead.updateMany.mock.calls[0][0].data.estimatedAmount,
+    ).toBeUndefined();
+    expect(
+      prisma.lead.updateMany.mock.calls[0][0].data.targetDate,
+    ).toBeUndefined();
     expect(prisma.activity.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         type: 'STATUS_CHANGED',
@@ -189,7 +217,7 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     ]);
 
     expect(result.status).toBe(LeadStatus.QUALIFIED);
-    expect(result.dealId).toBeNull();
+    expect(result.dealId).toBe('deal-id');
     expect(prisma.lead.updateMany).toHaveBeenCalled();
     expect(prisma.task.create).not.toHaveBeenCalled();
     expect(prisma.notification.create).toHaveBeenCalledWith({
@@ -233,7 +261,7 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
   it('allows qualification without supplier, quality, FX or price fields', async () => {
     await service.qualify('lead-id', qualifyDto, 'owner-id', ['leads:qualify']);
 
-    expect(prisma.deal.create).not.toHaveBeenCalled();
+    expect(prisma.deal.create).toHaveBeenCalledTimes(1);
     expect(prisma.lead.updateMany).toHaveBeenCalled();
   });
 
@@ -255,7 +283,7 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     expect(prisma.deal.create).not.toHaveBeenCalled();
   });
 
-  it('does not create a Deal when two qualifies race and the loser observes QUALIFIED', async () => {
+  it('does not create a duplicate Deal when two qualifies race', async () => {
     prisma.lead.updateMany.mockResolvedValue({ count: 0 });
     prisma.lead.findUnique.mockResolvedValue(qualifiedLead);
 
@@ -264,7 +292,7 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     ]);
 
     expect(result.status).toBe(LeadStatus.QUALIFIED);
-    expect(result.dealId).toBeNull();
+    expect(result.dealId).toBe('deal-id');
     expect(prisma.deal.create).not.toHaveBeenCalled();
     expect(prisma.task.create).not.toHaveBeenCalled();
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
@@ -301,5 +329,114 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
       service.qualify('lead-id', qualifyDto, 'stranger-id', ['leads:qualify']),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('qualifies without estimatedAmount', async () => {
+    const result = await service.qualify(
+      'lead-id',
+      { ...qualifyDto } as QualifyLeadDto,
+      'owner-id',
+      ['leads:qualify'],
+    );
+
+    expect(result.status).toBe(LeadStatus.QUALIFIED);
+    expect(
+      prisma.lead.updateMany.mock.calls[0][0].data.estimatedAmount,
+    ).toBeUndefined();
+  });
+
+  it('qualifies without targetDate and does not overwrite historical timeline', async () => {
+    const result = await service.qualify('lead-id', qualifyDto, 'owner-id', [
+      'leads:qualify',
+    ]);
+
+    expect(result.status).toBe(LeadStatus.QUALIFIED);
+    expect(
+      prisma.lead.updateMany.mock.calls[0][0].data.targetDate,
+    ).toBeUndefined();
+  });
+
+  it('does not require estimatedAmount or targetDate for Stage-1 completeness', async () => {
+    await expect(
+      service.qualify('lead-id', qualifyDto, 'owner-id', ['leads:qualify']),
+    ).resolves.toEqual(
+      expect.objectContaining({ status: LeadStatus.QUALIFIED }),
+    );
+  });
+
+  it('persists contactId in the same Stage-1 claim as client and project', async () => {
+    await service.qualify(
+      'lead-id',
+      { ...qualifyDto, contactId: 'contact-id' } as QualifyLeadDto,
+      'owner-id',
+      ['leads:qualify'],
+    );
+
+    expect(prisma.contact.findUnique).toHaveBeenCalledWith({
+      where: { id: 'contact-id' },
+      select: { id: true, clientId: true },
+    });
+    expect(prisma.lead.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          clientId: 'client-id',
+          contactId: 'contact-id',
+          projectObjectId: 'object-id',
+          status: LeadStatus.QUALIFIED,
+        }),
+      }),
+    );
+  });
+
+  it('rolls back Stage-1 when contactId does not belong to the client', async () => {
+    prisma.contact.findUnique.mockResolvedValue({
+      id: 'contact-id',
+      clientId: 'other-client',
+    });
+
+    await expect(
+      service.qualify(
+        'lead-id',
+        { ...qualifyDto, contactId: 'contact-id' } as QualifyLeadDto,
+        'owner-id',
+        ['leads:qualify'],
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(leadQualificationService.upsertInTx).not.toHaveBeenCalled();
+    expect(prisma.lead.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not claim QUALIFIED if nested HPL qualification write fails', async () => {
+    leadQualificationService.upsertInTx.mockRejectedValue(
+      new Error('qualification write failed'),
+    );
+
+    await expect(
+      service.qualify(
+        'lead-id',
+        {
+          ...qualifyDto,
+          qualification: { application: undefined },
+        } as QualifyLeadDto,
+        'owner-id',
+        ['leads:qualify'],
+      ),
+    ).rejects.toThrow('qualification write failed');
+    expect(prisma.lead.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps historical estimatedAmount readable on the qualified lead', async () => {
+    prisma.lead.findUnique.mockResolvedValue({
+      ...qualifiedLead,
+      estimatedAmount: ownedLead.estimatedAmount,
+      targetDate: ownedLead.targetDate,
+    });
+
+    const result = await service.qualify('lead-id', qualifyDto, 'owner-id', [
+      'leads:qualify',
+    ]);
+
+    expect(result.estimatedAmount).toBe(999999);
+    expect(result.targetDate).toEqual(ownedLead.targetDate);
   });
 });

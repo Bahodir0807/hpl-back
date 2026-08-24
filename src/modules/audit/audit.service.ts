@@ -3,12 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import {
-  Activity,
-  ActivityType,
-  AuditLog,
-  Prisma,
-} from '@prisma/client';
+import { Activity, ActivityType, AuditLog, Prisma } from '@prisma/client';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import { PrismaService } from '../prisma/prisma.service';
 

@@ -4,11 +4,21 @@ import { NotificationsModule } from '../modules/notifications/notifications.modu
 import { PrismaModule } from '../modules/prisma/prisma.module';
 import { QuotesController } from './quotes.controller';
 import { QuotesService } from './quotes.service';
+import { QuoteStockService } from './quote-stock.service';
+import { QuoteDocumentService } from './quote-document.service';
+import { InventoryModule } from '../modules/inventory/inventory.module';
+import { PanelsModule } from '../panels/panels.module';
 
 @Module({
-  imports: [PrismaModule, NotificationsModule, DealsModule],
+  imports: [
+    PrismaModule,
+    NotificationsModule,
+    DealsModule,
+    InventoryModule,
+    PanelsModule,
+  ],
   controllers: [QuotesController],
-  providers: [QuotesService],
+  providers: [QuotesService, QuoteStockService, QuoteDocumentService],
   exports: [QuotesService],
 })
 export class QuotesModule {}

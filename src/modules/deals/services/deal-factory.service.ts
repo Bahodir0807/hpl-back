@@ -1,9 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import { DealStage, OrderItemSource, Prisma } from '@prisma/client';
+import {
+  DealStage,
+  FulfillmentSource,
+  OrderItemSource,
+  Prisma,
+} from '@prisma/client';
 
 const FIRST_DEAL_ACTION_SLA_MS = 2 * 60 * 60 * 1000;
 
 export type QuoteItemForDeal = {
+  id: string;
   areaM2: Prisma.Decimal;
   sheetsCount: number;
   pricePerM2: Prisma.Decimal;
@@ -21,6 +27,7 @@ export type QuoteForDeal = {
   cnyUsdRate?: Prisma.Decimal | null;
   sellingCoefficient?: Prisma.Decimal | null;
   items: QuoteItemForDeal[];
+  versionNumber?: number;
 };
 
 export type CreateDealFromQuoteInput = {
@@ -28,8 +35,12 @@ export type CreateDealFromQuoteInput = {
   clientId: string;
   projectObjectId: string | null;
   serviceProductId: string;
+  resolvedProductIds?: Record<string, string>;
+  fulfillmentSource: FulfillmentSource;
+  installationRequiredSnapshot: boolean;
   userId: string;
   supplierId: string;
+  existingDealId?: string;
 };
 
 @Injectable()
@@ -43,11 +54,24 @@ export class DealFactory {
       clientId,
       projectObjectId,
       serviceProductId,
+      resolvedProductIds,
+      fulfillmentSource,
+      installationRequiredSnapshot,
       userId,
       supplierId,
+      existingDealId,
     } = input;
     const initialTaskDueDate = new Date(Date.now() + FIRST_DEAL_ACTION_SLA_MS);
     const title = `КП #${quote.id.slice(0, 8)}`;
+
+    if (
+      fulfillmentSource === FulfillmentSource.WAREHOUSE_STOCK &&
+      quote.items.some((item) => !resolvedProductIds?.[item.id])
+    ) {
+      throw new Error(
+        'Warehouse-stock Deal requires a resolved SKU for every Quote line',
+      );
+    }
 
     const dealItems = quote.items.map((item) => {
       const quantityM2 = new Prisma.Decimal(item.areaM2.toString()).mul(
@@ -59,14 +83,17 @@ export class DealFactory {
       );
 
       return {
-        productId: serviceProductId,
+        productId: resolvedProductIds?.[item.id] ?? serviceProductId,
         quantitySheets: item.sheetsCount,
         quantityM2: quantityM2.toNumber(),
         unitPrice: item.pricePerM2,
         discount: new Prisma.Decimal(0),
         totalPrice: item.totalPrice,
         purchasePriceSnapshot: purchaseUsdPerM2,
-        source: OrderItemSource.PANEL_CALCULATOR,
+        source:
+          fulfillmentSource === FulfillmentSource.WAREHOUSE_STOCK
+            ? OrderItemSource.SKU
+            : OrderItemSource.PANEL_CALCULATOR,
       };
     });
 
@@ -86,31 +113,38 @@ export class DealFactory {
       purchaseCost,
     );
 
-    const deal = await tx.deal.create({
-      data: {
-        title,
-        clientId,
-        projectObjectId,
-        ownerId: quote.managerId,
-        supplierId,
-        stage: DealStage.QUALIFICATION,
-        totalAmount: quote.totalAmount,
-        currency: quote.displayCurrency,
-        probability: 50,
-        margin,
-        nextActionAt: initialTaskDueDate,
-        items: { create: dealItems },
-      },
-    });
+    const dealData = {
+      title,
+      clientId,
+      projectObjectId,
+      ownerId: quote.managerId,
+      supplierId,
+      fulfillmentSource,
+      installationRequiredSnapshot,
+      stage: DealStage.QUALIFICATION,
+      totalAmount: quote.totalAmount,
+      currency: quote.displayCurrency,
+      probability: 50,
+      margin,
+      nextActionAt: initialTaskDueDate,
+      items: { create: dealItems },
+    };
+    const deal = existingDealId
+      ? await tx.deal.update({
+          where: { id: existingDealId },
+          data: { ...dealData, stage: undefined },
+        })
+      : await tx.deal.create({ data: dealData });
 
-    await tx.dealStageHistory.create({
-      data: {
-        dealId: deal.id,
-        oldStage: null,
-        newStage: DealStage.QUALIFICATION,
-        changedById: userId,
-      },
-    });
+    if (!existingDealId)
+      await tx.dealStageHistory.create({
+        data: {
+          dealId: deal.id,
+          oldStage: null,
+          newStage: DealStage.QUALIFICATION,
+          changedById: userId,
+        },
+      });
 
     await tx.auditLog.create({
       data: {
@@ -123,6 +157,7 @@ export class DealFactory {
           stage: DealStage.QUALIFICATION,
           quoteId: quote.id,
           source: 'panel_quote',
+          fulfillmentSource,
         },
       },
     });
@@ -130,8 +165,8 @@ export class DealFactory {
     await tx.dealOffer.create({
       data: {
         dealId: deal.id,
-        version: 1,
-        number: `KP-${deal.id.slice(0, 8)}-v1`,
+        version: quote.versionNumber ?? 1,
+        number: `KP-${deal.id.slice(0, 8)}-v${quote.versionNumber ?? 1}`,
         amount: quote.totalAmount,
         validUntil: quote.validUntil,
         isApproved: false,

@@ -5,7 +5,11 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../modules/prisma/prisma.service';
-import { CreatePanelColorDto, resolvePanelColorCode, resolvePanelColorName } from '../dto/create-panel-color.dto';
+import {
+  CreatePanelColorDto,
+  resolvePanelColorCode,
+  resolvePanelColorName,
+} from '../dto/create-panel-color.dto';
 import { FilterPanelColorsDto } from '../dto/filter-panel-colors.dto';
 import { UpdatePanelColorDto } from '../dto/update-panel-color.dto';
 

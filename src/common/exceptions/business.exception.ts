@@ -4,6 +4,7 @@ export type BusinessErrorBody = {
   statusCode: number;
   errorCode: string;
   message: string;
+  details?: Record<string, unknown>;
 };
 
 export class BusinessException extends HttpException {
@@ -11,12 +12,14 @@ export class BusinessException extends HttpException {
     status: HttpStatus,
     errorCode: string,
     message: string,
+    details?: Record<string, unknown>,
   ) {
     super(
       {
         statusCode: status,
         errorCode,
         message,
+        ...(details ? { details } : {}),
       } satisfies BusinessErrorBody,
       status,
     );

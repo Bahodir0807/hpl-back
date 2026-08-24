@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ScheduleModule } from '@nestjs/schedule';
 import { DealPolicyModule } from '../deals/deal-policy.module';
+import { DealFulfillmentModule } from '../deals/deal-fulfillment.module';
 import { PrismaModule } from '../prisma/prisma.module';
 import { SupplierOrderRemindersCronService } from './supplier-order-reminders.cron';
 import { SupplierOrdersController } from './supplier-orders.controller';
@@ -11,7 +12,12 @@ const scheduleImports = process.env.JEST_WORKER_ID
   : [ScheduleModule.forRoot()];
 
 @Module({
-  imports: [PrismaModule, DealPolicyModule, ...scheduleImports],
+  imports: [
+    PrismaModule,
+    DealPolicyModule,
+    DealFulfillmentModule,
+    ...scheduleImports,
+  ],
   controllers: [SupplierOrdersController],
   providers: [SupplierOrdersService, SupplierOrderRemindersCronService],
   exports: [SupplierOrdersService],

@@ -1,17 +1,21 @@
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
-import { Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import {
   DealStage,
+  ExpectedReceiptStatus,
+  InstallationStatus,
   LeadPlan,
   LeadStatus,
   Prisma,
   RoleName,
   SalesPlan,
+  SupplierOrderStatus,
   TaskStatus,
 } from '@prisma/client';
 import type { Cache } from 'cache-manager';
 import { PrismaService } from '../prisma/prisma.service';
 import { ReportFilterDto } from './dto/report-filter.dto';
+import { UpsertSalesPlanDto } from './dto/upsert-sales-plan.dto';
 
 const DEAL_STAGES: DealStage[] = [
   DealStage.QUALIFICATION,
@@ -38,7 +42,9 @@ type DateRange = {
 export type FunnelStageMetric = {
   stage: DealStage;
   count: number;
-  amount: number;
+  amount: number | null;
+  currency: string | null;
+  amounts: Array<{ amount: number; currency: string }>;
   conversionPercent: number;
 };
 
@@ -66,12 +72,16 @@ export type OverduesReport = {
 export type KpiManagerMetric = {
   managerId: string;
   managerName: string;
-  salesPlanPercent: number;
+  salesPlanPercent: number | null;
+  salesPlanCurrency: string | null;
+  actualSalesInPlanCurrency: number | null;
+  salesPlanStatus: 'COMPLETE' | 'INCOMPLETE' | 'NOT_CONFIGURED';
+  missingFxCurrencies: string[];
   qualifiedLeadsPercent: number;
   conversionPercent: number;
   deadlineCompliancePercent: number;
   crmDisciplinePercent: number;
-  totalScore: number;
+  totalScore: number | null;
 };
 
 export type KpiReport = {
@@ -92,9 +102,16 @@ type ReportUser = {
 };
 
 type ManagerKpiInput = {
-  salesPlan: SalesPlan | undefined;
+  salesPlan:
+    | (SalesPlan & {
+        fxRates: Array<{
+          fromCurrency: string;
+          rateToPlanCurrency: Prisma.Decimal;
+        }>;
+      })
+    | undefined;
   leadPlan: LeadPlan | undefined;
-  actualSales: number;
+  wonAmounts: Array<{ amount: number; currency: string }>;
   totalLeads: number;
   qualifiedLeads: number;
   convertedLeads: number;
@@ -116,13 +133,242 @@ export class ReportsService {
     );
   }
 
+  async getOverview(filterDto: ReportFilterDto) {
+    return this.cached('overview', filterDto, async () => {
+      const range = this.buildDateRange(filterDto);
+      const now = new Date();
+      const supplierActive = [
+        SupplierOrderStatus.DRAFT,
+        SupplierOrderStatus.SENT_TO_PRODUCTION,
+        SupplierOrderStatus.IN_PRODUCTION,
+        SupplierOrderStatus.READY_FOR_SHIPMENT,
+        SupplierOrderStatus.SHIPPED,
+      ];
+      const [
+        leadStatuses,
+        leadLossReasons,
+        dealLossReasons,
+        quoteCreated,
+        quoteApproved,
+        quoteAccepted,
+        dealStages,
+        completedDeals,
+        supplierStatuses,
+        overdueSupplierOrders,
+        installationStatuses,
+        pendingDualConfirmation,
+        stock,
+        warehousePurchases,
+        quoteDurations,
+        supplierDurations,
+        completionDurations,
+      ] = await Promise.all([
+        this.prisma.lead.groupBy({
+          by: ['status'],
+          where: { deletedAt: null, createdAt: range },
+          orderBy: { status: 'asc' },
+          _count: { id: true },
+        }),
+        this.prisma.lead.groupBy({
+          by: ['lostReasonCode'],
+          where: { lostAt: range, lostReasonCode: { not: null } },
+          orderBy: { lostReasonCode: 'asc' },
+          _count: { id: true },
+        }),
+        this.prisma.deal.groupBy({
+          by: ['lostReasonCode'],
+          where: { lostAt: range, lostReasonCode: { not: null } },
+          orderBy: { lostReasonCode: 'asc' },
+          _count: { id: true },
+        }),
+        this.prisma.panelQuote.count({ where: { createdAt: range } }),
+        this.prisma.panelQuote.count({
+          where: {
+            createdAt: range,
+            status: { in: ['approved', 'converted'] },
+          },
+        }),
+        this.prisma.panelQuote.count({ where: { clientAcceptedAt: range } }),
+        this.prisma.deal.groupBy({
+          by: ['stage'],
+          where: { deletedAt: null, createdAt: range },
+          orderBy: { stage: 'asc' },
+          _count: { id: true },
+        }),
+        this.prisma.deal.count({
+          where: { deletedAt: null, completedAt: range },
+        }),
+        this.prisma.supplierOrder.groupBy({
+          by: ['status'],
+          where: { createdAt: range },
+          orderBy: { status: 'asc' },
+          _count: { id: true },
+        }),
+        this.prisma.supplierOrder.count({
+          where: {
+            createdAt: range,
+            status: { in: supplierActive },
+            expectedReadyAt: { lt: now },
+            readyConfirmedAt: null,
+          },
+        }),
+        this.prisma.dealInstallation.groupBy({
+          by: ['status'],
+          where: { createdAt: range },
+          orderBy: { status: 'asc' },
+          _count: { id: true },
+        }),
+        this.prisma.dealInstallation.count({
+          where: {
+            createdAt: range,
+            status: InstallationStatus.IN_PROGRESS,
+            OR: [
+              { installerConfirmedAt: null },
+              { supervisorConfirmedAt: null },
+            ],
+          },
+        }),
+        this.prisma.stockBalance.aggregate({
+          _count: { id: true },
+          _sum: { onHand: true, reserved: true },
+        }),
+        this.prisma.expectedReceipt.groupBy({
+          by: ['status'],
+          where: { createdAt: range },
+          orderBy: { status: 'asc' },
+          _count: { id: true },
+        }),
+        this.prisma.panelQuote.findMany({
+          where: { clientAcceptedAt: range },
+          select: { createdAt: true, clientAcceptedAt: true },
+        }),
+        this.prisma.supplierOrder.findMany({
+          where: { readyConfirmedAt: range, orderedAt: { not: null } },
+          select: { orderedAt: true, readyConfirmedAt: true },
+        }),
+        this.prisma.deal.findMany({
+          where: { completedAt: range },
+          select: {
+            completedAt: true,
+            stageHistory: {
+              where: { newStage: DealStage.WON },
+              orderBy: { createdAt: 'asc' },
+              take: 1,
+              select: { createdAt: true },
+            },
+          },
+        }),
+      ]);
+
+      const leadCounts = Object.fromEntries(
+        leadStatuses.map((row) => [row.status, row._count.id]),
+      );
+      const dealCounts = Object.fromEntries(
+        dealStages.map((row) => [row.stage, row._count.id]),
+      );
+      const supplierCounts = Object.fromEntries(
+        supplierStatuses.map((row) => [row.status, row._count.id]),
+      );
+      const installationCounts = Object.fromEntries(
+        installationStatuses.map((row) => [row.status, row._count.id]),
+      );
+      const purchaseCounts = Object.fromEntries(
+        warehousePurchases.map((row) => [row.status, row._count.id]),
+      );
+      const leadLossCounts = Object.fromEntries(
+        leadLossReasons
+          .filter((row) => row.lostReasonCode !== null)
+          .map((row) => [row.lostReasonCode!, row._count.id]),
+      );
+      const dealLossCounts = Object.fromEntries(
+        dealLossReasons
+          .filter((row) => row.lostReasonCode !== null)
+          .map((row) => [row.lostReasonCode!, row._count.id]),
+      );
+
+      return {
+        period: { from: range.gte, to: range.lte },
+        leads: {
+          total: Object.values(leadCounts).reduce(
+            (sum, count) => sum + count,
+            0,
+          ),
+          byStatus: leadCounts,
+          qualified:
+            (leadCounts[LeadStatus.QUALIFIED] ?? 0) +
+            (leadCounts[LeadStatus.CONVERTED] ?? 0),
+          converted: leadCounts[LeadStatus.CONVERTED] ?? 0,
+          lost: leadCounts[LeadStatus.LOST] ?? 0,
+          lossReasons: leadLossCounts,
+        },
+        quotes: {
+          created: quoteCreated,
+          approved: quoteApproved,
+          clientAccepted: quoteAccepted,
+        },
+        deals: {
+          byStage: dealCounts,
+          active: Object.entries(dealCounts)
+            .filter(
+              ([stage]) => stage !== DealStage.WON && stage !== DealStage.LOST,
+            )
+            .reduce((sum, [, count]) => sum + count, 0),
+          won: dealCounts[DealStage.WON] ?? 0,
+          lost: dealCounts[DealStage.LOST] ?? 0,
+          operationallyCompleted: completedDeals,
+          lossReasons: dealLossCounts,
+        },
+        supplierOrders: {
+          byStatus: supplierCounts,
+          active: supplierActive.reduce(
+            (sum, status) => sum + (supplierCounts[status] ?? 0),
+            0,
+          ),
+          overdueReadiness: overdueSupplierOrders,
+        },
+        installation: {
+          byStatus: installationCounts,
+          scheduled: installationCounts[InstallationStatus.SCHEDULED] ?? 0,
+          pendingDualConfirmation,
+          completed: installationCounts[InstallationStatus.COMPLETED] ?? 0,
+        },
+        warehouse: {
+          stockRows: stock._count.id,
+          onHand: stock._sum.onHand ?? 0,
+          reserved: stock._sum.reserved ?? 0,
+          available: (stock._sum.onHand ?? 0) - (stock._sum.reserved ?? 0),
+          pendingPurchases: purchaseCounts[ExpectedReceiptStatus.PENDING] ?? 0,
+          partiallyReceivedPurchases:
+            purchaseCounts[ExpectedReceiptStatus.PARTIALLY_RECEIVED] ?? 0,
+        },
+        averageDurationsHours: {
+          quoteCreatedToClientAccepted: this.averageHours(
+            quoteDurations.map((row) => [row.createdAt, row.clientAcceptedAt]),
+          ),
+          supplierOrderedToReady: this.averageHours(
+            supplierDurations.map((row) => [
+              row.orderedAt,
+              row.readyConfirmedAt,
+            ]),
+          ),
+          dealWonToOperationalCompletion: this.averageHours(
+            completionDurations.map((row) => [
+              row.stageHistory[0]?.createdAt ?? null,
+              row.completedAt,
+            ]),
+          ),
+        },
+      };
+    });
+  }
+
   // Один groupBy по stage вместо 2 запросов на каждую из 9 стадий
   private async calculateFunnel(
     filterDto: ReportFilterDto,
   ): Promise<FunnelReport> {
     const range = this.buildDateRange(filterDto);
     const grouped = await this.prisma.deal.groupBy({
-      by: ['stage'],
+      by: ['stage', 'currency'],
       where: {
         deletedAt: null,
         ownerId: filterDto.managerId,
@@ -133,14 +379,19 @@ export class ReportsService {
       _sum: { totalAmount: true },
     });
 
-    const byStage = new Map(grouped.map((row) => [row.stage, row]));
     const stages = DEAL_STAGES.map((stage) => {
-      const row = byStage.get(stage);
+      const rows = grouped.filter((row) => row.stage === stage);
+      const amounts = rows.map((row) => ({
+        amount: this.toNumber(row._sum.totalAmount),
+        currency: row.currency,
+      }));
 
       return {
         stage,
-        count: row?._count.id ?? 0,
-        amount: this.toNumber(row?._sum.totalAmount),
+        count: rows.reduce((sum, row) => sum + row._count.id, 0),
+        amount: amounts.length === 1 ? amounts[0].amount : null,
+        currency: amounts.length === 1 ? amounts[0].currency : null,
+        amounts,
       };
     });
     const totalDeals = stages.reduce((sum, stage) => sum + stage.count, 0);
@@ -253,6 +504,54 @@ export class ReportsService {
     return this.cached('kpi', filterDto, () => this.calculateKpi(filterDto));
   }
 
+  async upsertSalesPlan(dto: UpsertSalesPlanDto, createdById: string) {
+    const period = this.startOfMonth(dto.period);
+    const currencyCode = dto.currencyCode.trim().toUpperCase();
+    const duplicate = new Set<string>();
+    for (const rate of dto.fxRates) {
+      const from = rate.fromCurrency.trim().toUpperCase();
+      if (from === currencyCode || duplicate.has(from)) {
+        throw new BadRequestException(
+          'FX currencies must be unique and different from plan currency',
+        );
+      }
+      duplicate.add(from);
+    }
+
+    const plan = await this.prisma.$transaction(async (tx) => {
+      const plan = await tx.salesPlan.upsert({
+        where: { userId_period: { userId: dto.userId, period } },
+        create: {
+          userId: dto.userId,
+          period,
+          targetAmount: new Prisma.Decimal(dto.targetAmount),
+          currencyCode,
+        },
+        update: {
+          targetAmount: new Prisma.Decimal(dto.targetAmount),
+          currencyCode,
+        },
+      });
+      await tx.salesPlanFxRate.deleteMany({ where: { salesPlanId: plan.id } });
+      if (dto.fxRates.length) {
+        await tx.salesPlanFxRate.createMany({
+          data: dto.fxRates.map((rate) => ({
+            salesPlanId: plan.id,
+            fromCurrency: rate.fromCurrency.trim().toUpperCase(),
+            rateToPlanCurrency: new Prisma.Decimal(rate.rateToPlanCurrency),
+            createdById,
+          })),
+        });
+      }
+      return tx.salesPlan.findUniqueOrThrow({
+        where: { id: plan.id },
+        include: { fxRates: { orderBy: { fromCurrency: 'asc' } } },
+      });
+    });
+    await this.cacheManager.clear();
+    return plan;
+  }
+
   // 9 запросов на всех менеджеров вместо 9 запросов на каждого
   private async calculateKpi(filterDto: ReportFilterDto): Promise<KpiReport> {
     const range = this.buildDateRange(filterDto);
@@ -303,6 +602,7 @@ export class ReportsService {
     ] = await Promise.all([
       this.prisma.salesPlan.findMany({
         where: { userId: { in: userIds }, period },
+        include: { fxRates: true },
       }),
       this.prisma.leadPlan.findMany({
         where: { userId: { in: userIds }, period },
@@ -310,14 +610,14 @@ export class ReportsService {
       // Won-суммы — по факту перехода в WON внутри периода (DealStageHistory),
       // а не по updatedAt, который триггерится любым редактированием сделки
       this.prisma.deal.groupBy({
-        by: ['ownerId'],
+        by: ['ownerId', 'currency'],
         where: {
           deletedAt: null,
           stageHistory: {
             some: { newStage: DealStage.WON, createdAt: range },
           },
         },
-        orderBy: { ownerId: 'asc' },
+        orderBy: [{ ownerId: 'asc' }, { currency: 'asc' }],
         _sum: { totalAmount: true },
       }),
       this.prisma.lead.groupBy({
@@ -366,12 +666,18 @@ export class ReportsService {
 
     const salesPlanMap = new Map(salesPlans.map((plan) => [plan.userId, plan]));
     const leadPlanMap = new Map(leadPlans.map((plan) => [plan.userId, plan]));
-    const wonMap = new Map(
-      wonByOwner.map((row) => [
-        row.ownerId,
-        this.toNumber(row._sum.totalAmount),
-      ]),
-    );
+    const wonMap = new Map<
+      string,
+      Array<{ amount: number; currency: string }>
+    >();
+    for (const row of wonByOwner) {
+      const current = wonMap.get(row.ownerId) ?? [];
+      current.push({
+        amount: this.toNumber(row._sum.totalAmount),
+        currency: row.currency.trim().toUpperCase(),
+      });
+      wonMap.set(row.ownerId, current);
+    }
     const totalLeadsMap = new Map(
       leadsTotalByOwner.map((row) => [row.ownerId, row._count.id]),
     );
@@ -406,7 +712,7 @@ export class ReportsService {
       this.buildManagerKpi(user, {
         salesPlan: salesPlanMap.get(user.id),
         leadPlan: leadPlanMap.get(user.id),
-        actualSales: wonMap.get(user.id) ?? 0,
+        wonAmounts: wonMap.get(user.id) ?? [],
         totalLeads: totalLeadsMap.get(user.id) ?? 0,
         qualifiedLeads: qualifiedMap.get(user.id) ?? 0,
         convertedLeads: convertedMap.get(user.id) ?? 0,
@@ -432,12 +738,42 @@ export class ReportsService {
     user: ReportUser,
     metrics: ManagerKpiInput,
   ): KpiManagerMetric {
-    const salesPlanPercent = metrics.salesPlan
-      ? this.percent(
-          metrics.actualSales,
-          this.toNumber(metrics.salesPlan.targetAmount),
-        )
-      : 0;
+    const fxMap = new Map(
+      metrics.salesPlan?.fxRates.map((rate) => [
+        rate.fromCurrency.trim().toUpperCase(),
+        this.toNumber(rate.rateToPlanCurrency),
+      ]) ?? [],
+    );
+    const planCurrency =
+      metrics.salesPlan?.currencyCode?.trim().toUpperCase() ?? null;
+    const missingFxCurrencies = metrics.salesPlan
+      ? [
+          ...new Set(
+            metrics.wonAmounts
+              .map((row) => row.currency)
+              .filter(
+                (currency) => currency !== planCurrency && !fxMap.has(currency),
+              ),
+          ),
+        ]
+      : [];
+    const actualSalesInPlanCurrency =
+      metrics.salesPlan && planCurrency && missingFxCurrencies.length === 0
+        ? metrics.wonAmounts.reduce(
+            (sum, row) =>
+              sum +
+              row.amount *
+                (row.currency === planCurrency ? 1 : fxMap.get(row.currency)!),
+            0,
+          )
+        : null;
+    const salesPlanPercent =
+      metrics.salesPlan && actualSalesInPlanCurrency !== null
+        ? this.percent(
+            actualSalesInPlanCurrency,
+            this.toNumber(metrics.salesPlan.targetAmount),
+          )
+        : null;
     const qualifiedLeadsPercent = metrics.leadPlan
       ? this.percent(metrics.qualifiedLeads, metrics.leadPlan.targetCount)
       : 0;
@@ -454,21 +790,35 @@ export class ReportsService {
       this.percent(metrics.activityCount, 20),
     );
     const totalScore =
-      salesPlanPercent * 0.4 +
-      qualifiedLeadsPercent * 0.15 +
-      conversionPercent * 0.15 +
-      deadlineCompliancePercent * 0.15 +
-      crmDisciplinePercent * 0.15;
+      salesPlanPercent === null
+        ? null
+        : salesPlanPercent * 0.4 +
+          qualifiedLeadsPercent * 0.15 +
+          conversionPercent * 0.15 +
+          deadlineCompliancePercent * 0.15 +
+          crmDisciplinePercent * 0.15;
 
     return {
       managerId: user.id,
       managerName: this.userName(user),
-      salesPlanPercent: this.round(salesPlanPercent),
+      salesPlanPercent:
+        salesPlanPercent === null ? null : this.round(salesPlanPercent),
+      salesPlanCurrency: planCurrency,
+      actualSalesInPlanCurrency:
+        actualSalesInPlanCurrency === null
+          ? null
+          : this.round(actualSalesInPlanCurrency),
+      salesPlanStatus: !metrics.salesPlan
+        ? 'NOT_CONFIGURED'
+        : !planCurrency || missingFxCurrencies.length
+          ? 'INCOMPLETE'
+          : 'COMPLETE',
+      missingFxCurrencies,
       qualifiedLeadsPercent: this.round(qualifiedLeadsPercent),
       conversionPercent: this.round(conversionPercent),
       deadlineCompliancePercent: this.round(deadlineCompliancePercent),
       crmDisciplinePercent: this.round(crmDisciplinePercent),
-      totalScore: this.round(totalScore),
+      totalScore: totalScore === null ? null : this.round(totalScore),
     };
   }
 
@@ -497,7 +847,26 @@ export class ReportsService {
     const from = filterDto.dateFrom ?? this.startOfMonth(now);
     const to = filterDto.dateTo ?? this.endOfMonth(from);
 
+    if (from > to) {
+      throw new BadRequestException(
+        'dateFrom must be before or equal to dateTo',
+      );
+    }
+
     return { gte: from, lte: to };
+  }
+
+  private averageHours(
+    pairs: Array<[Date | null, Date | null]>,
+  ): number | null {
+    const durations = pairs
+      .filter((pair): pair is [Date, Date] => Boolean(pair[0] && pair[1]))
+      .map(([start, end]) => (end.getTime() - start.getTime()) / 3_600_000)
+      .filter((duration) => duration >= 0);
+    if (durations.length === 0) return null;
+    return this.round(
+      durations.reduce((sum, duration) => sum + duration, 0) / durations.length,
+    );
   }
 
   private startOfMonth(date: Date): Date {

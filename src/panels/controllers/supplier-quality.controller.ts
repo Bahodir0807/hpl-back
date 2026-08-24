@@ -6,18 +6,23 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionsGuard } from '../../common/guards/permissions.guard';
 import { JwtAuthGuard } from '../../modules/auth/guards/jwt-auth.guard';
-import { PrismaService } from '../../modules/prisma/prisma.service';
+import { SupplierQualityService } from '../services/supplier-quality.service';
 
 @ApiTags('suppliers')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('suppliers')
 export class SupplierQualityController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly supplierQuality: SupplierQualityService) {}
 
   @Get(':code/quality-classes')
   @RequirePermissions('panel_catalog:read')
@@ -25,19 +30,15 @@ export class SupplierQualityController {
   @ApiQuery({ name: 'panelType', required: true })
   findQualityClasses(
     @Param('code') supplierCode: string,
-    @Query('panelType') panelTypeCode?: string,
+    @Query('panelType') panelTypeQuery?: string,
   ) {
-    if (!panelTypeCode) {
+    if (!panelTypeQuery) {
       throw new BadRequestException('panelType query required');
     }
 
-    return this.prisma.supplierQualityMapping.findMany({
-      where: {
-        supplier: { code: supplierCode },
-        panelType: { code: panelTypeCode },
-      },
-      include: { qualityClass: true },
-      orderBy: { qualityClass: { code: 'asc' } },
-    });
+    return this.supplierQuality.findQualityClasses(
+      supplierCode,
+      panelTypeQuery,
+    );
   }
 }

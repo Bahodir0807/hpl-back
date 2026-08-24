@@ -15,7 +15,10 @@ import {
   TaskComputedStatus,
   TaskStatus,
 } from '@prisma/client';
-import { panelTypeCodeForApplication } from '../../panels/pricing/hpl-quality-matrix';
+import {
+  panelTypeCodeForApplication,
+  supplierQualityMatrixApplies,
+} from '../../panels/pricing/hpl-quality-matrix';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpsertLeadCommercialQualificationDto } from './dto/upsert-lead-commercial-qualification.dto';
 import {
@@ -37,7 +40,11 @@ export class LeadCommercialQualificationService {
   constructor(private readonly prisma: PrismaService) {}
 
   async get(leadId: string, currentUserId: string, permissions: string[]) {
-    const lead = await this.ensureLeadAccess(leadId, currentUserId, permissions);
+    const lead = await this.ensureLeadAccess(
+      leadId,
+      currentUserId,
+      permissions,
+    );
     const commercialQualification =
       await this.prisma.leadCommercialQualification.findUnique({
         where: { leadId: lead.id },
@@ -61,7 +68,11 @@ export class LeadCommercialQualificationService {
     currentUserId: string,
     permissions: string[],
   ) {
-    const lead = await this.ensureLeadAccess(leadId, currentUserId, permissions);
+    const lead = await this.ensureLeadAccess(
+      leadId,
+      currentUserId,
+      permissions,
+    );
     this.assertLeadEligibleForStage2(lead);
 
     return this.prisma.$transaction((tx) =>
@@ -95,6 +106,14 @@ export class LeadCommercialQualificationService {
       stage1!.application!,
       stage1!.panelTypeId,
     );
+    const mappingId = mapping?.id ?? null;
+
+    if (dto.targetDate !== undefined) {
+      await tx.lead.update({
+        where: { id: lead.id },
+        data: { targetDate: dto.targetDate },
+      });
+    }
 
     const existing = await tx.leadCommercialQualification.findUnique({
       where: { leadId: lead.id },
@@ -137,7 +156,7 @@ export class LeadCommercialQualificationService {
           data: {
             supplierId: dto.supplierId,
             qualityClassId: dto.qualityClassId,
-            mappingId: mapping.id,
+            mappingId,
             status: CommercialQualificationStatus.CONFIRMED,
             decisionComment,
             confirmedById: currentUserId,
@@ -150,7 +169,7 @@ export class LeadCommercialQualificationService {
             leadId: lead.id,
             supplierId: dto.supplierId,
             qualityClassId: dto.qualityClassId,
-            mappingId: mapping.id,
+            mappingId,
             status: CommercialQualificationStatus.CONFIRMED,
             decisionComment,
             confirmedById: currentUserId,
@@ -176,8 +195,9 @@ export class LeadCommercialQualificationService {
           action,
           supplierId: dto.supplierId,
           qualityClassId: dto.qualityClassId,
-          mappingId: mapping.id,
+          mappingId,
           decisionComment,
+          targetDate: dto.targetDate ?? currentLead.targetDate,
         },
       },
     });
@@ -201,6 +221,7 @@ export class LeadCommercialQualificationService {
           qualityClassId: dto.qualityClassId,
           status: CommercialQualificationStatus.CONFIRMED,
           decisionComment,
+          targetDate: dto.targetDate ?? currentLead.targetDate,
         },
       },
     });
@@ -295,9 +316,10 @@ export class LeadCommercialQualificationService {
       },
     });
 
-    if (!mapping) {
+    if (!mapping && supplierQualityMatrixApplies(application)) {
       throw new BadRequestException({
-        message: 'Supplier and quality are incompatible with the customer application',
+        message:
+          'Supplier and quality are incompatible with the customer application',
         supplierId,
         qualityClassId,
         application,
@@ -309,7 +331,7 @@ export class LeadCommercialQualificationService {
   }
 
   private assertLeadEligibleForStage2(lead: Lead): void {
-    if (lead.status === LeadStatus.CONVERTED || lead.dealId !== null) {
+    if (lead.status === LeadStatus.CONVERTED) {
       throw new ConflictException(
         'Converted lead cannot receive commercial qualification',
       );

@@ -8,15 +8,19 @@ import {
   IsPositive,
   IsString,
   IsUUID,
+  Matches,
   MaxLength,
   Min,
   MinLength,
   Validate,
+  ValidateIf,
   ValidationArguments,
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from 'class-validator';
 import { HplApplication } from '@prisma/client';
+import { canonicalizeHplApplication } from '../../../panels/hpl-catalog';
+import { transformThicknessInput } from '../../../panels/hpl-thickness';
 
 export const FORBIDDEN_COMMERCIAL_QUALIFICATION_KEYS = [
   'supplierId',
@@ -33,15 +37,16 @@ export const FORBIDDEN_COMMERCIAL_QUALIFICATION_KEYS = [
   'clientPricePerM2',
   'pricePerM2',
   'totalPrice',
+  'estimatedAmount',
+  'estimatedAmountCurrency',
+  'targetDate',
 ] as const;
 
 @ValidatorConstraint({
   name: 'noCommercialQualificationFields',
   async: false,
 })
-export class NoCommercialQualificationFieldsConstraint
-  implements ValidatorConstraintInterface
-{
+export class NoCommercialQualificationFieldsConstraint implements ValidatorConstraintInterface {
   validate(_: unknown, args: ValidationArguments): boolean {
     const obj = args.object as Record<string, unknown>;
     return FORBIDDEN_COMMERCIAL_QUALIFICATION_KEYS.every(
@@ -59,6 +64,18 @@ export class UpsertLeadQualificationDto {
   private readonly commercialIsolationGuard = true;
 
   @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || value === '') {
+      return null;
+    }
+    if (typeof value !== 'string') {
+      return value;
+    }
+    return canonicalizeHplApplication(value) ?? value;
+  })
   @IsEnum(HplApplication)
   application?: HplApplication | null;
 
@@ -67,10 +84,13 @@ export class UpsertLeadQualificationDto {
   panelTypeId?: string | null;
 
   @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  thicknessMm?: number | null;
+  @Transform(({ value }: { value: unknown }) => transformThicknessInput(value))
+  @ValidateIf((_, value) => value !== null && value !== undefined)
+  @Matches(/^(?:\d+)(?:\.\d{1,2})?$/, {
+    message:
+      'thicknessMm must be a positive decimal with up to 2 fraction digits',
+  })
+  thicknessMm?: string | null;
 
   @IsOptional()
   @IsUUID()

@@ -11,7 +11,10 @@ import {
 } from '@prisma/client';
 import { BusinessException } from '../common/exceptions/business.exception';
 import type { CurrentUser } from '../common/interfaces/current-user.interface';
-import { panelTypeCodeForApplication } from '../panels/pricing/hpl-quality-matrix';
+import {
+  panelTypeCodeForApplication,
+  supplierQualityMatrixApplies,
+} from '../panels/pricing/hpl-quality-matrix';
 import { PanelPriceCalculator } from '../panels/services/panel-price-calculator.service';
 import { PanelQuantityCalculator } from '../panels/services/panel-quantity-calculator.service';
 import { CurrencyRateService } from '../panels/services/currency-rate.service';
@@ -19,12 +22,22 @@ import {
   HPL_SELLING_COEFFICIENT,
   HPL_SELLING_CURRENCY,
 } from '../panels/pricing/hpl-pricing.constants';
+import {
+  parseThicknessMm,
+  validateHplThickness,
+} from '../panels/hpl-thickness';
+import {
+  assertCustomDimensionsPair,
+  assertStage1QualificationComplete,
+} from '../modules/leads/lead-qualification.rules';
+import { HPL_CUSTOM_PANEL_TYPE_CODE } from '../panels/hpl-catalog';
 import { PrismaService } from '../modules/prisma/prisma.service';
-import { assertStage1QualificationComplete } from '../modules/leads/lead-qualification.rules';
 import {
   CALCULATION_PERMISSIONS,
+  CALCULATION_REQUEST_STATUS,
   CALCULATION_STATUS,
   LEADS_READ_ALL_PERMISSION,
+  MANUAL_PURCHASE_PRICE_PERMISSION,
 } from './calculation.constants';
 import {
   CalculationItemDto,
@@ -35,30 +48,38 @@ import { CreateCalculationDto } from './dto/create-calculation.dto';
 import { FilterCalculationsDto } from './dto/filter-calculations.dto';
 import { UpdateCalculationDto } from './dto/update-calculation.dto';
 
-const calculationInclude = Prisma.validator<Prisma.CalculationSessionInclude>()({
-  items: {
-    orderBy: { sortOrder: 'asc' },
-    include: {
-      panelType: { select: { code: true, displayNameRu: true } },
-      panelSize: { select: { displayName: true, areaM2: true } },
-      supplier: { select: { code: true, name: true } },
-      qualityClass: { select: { code: true, nameRu: true } },
-      color: { select: { colorCode: true, colorName: true } },
+const calculationInclude = Prisma.validator<Prisma.CalculationSessionInclude>()(
+  {
+    items: {
+      orderBy: { sortOrder: 'asc' },
+      include: {
+        panelType: { select: { code: true, displayNameRu: true } },
+        panelSize: { select: { displayName: true, areaM2: true } },
+        supplier: { select: { code: true, name: true } },
+        qualityClass: { select: { code: true, nameRu: true } },
+        color: { select: { colorCode: true, colorName: true } },
+      },
     },
   },
-});
+);
 
 export type CalculationWithItems = Prisma.CalculationSessionGetPayload<{
   include: typeof calculationInclude;
 }>;
 
-type CalculatedLineItem = {
+export type CalculatedLineItem = {
   panelTypeId: string;
   panelSizeId: string;
-  thicknessMm: number;
-  supplierId: string;
+  thicknessMm: Prisma.Decimal;
+  supplierId: string | null;
   qualityClassId: string;
   colorId: string | null;
+  coating: string | null;
+  texture: string | null;
+  note: string | null;
+  customTypeDescription: string | null;
+  customWidthMm: number | null;
+  customHeightMm: number | null;
   requiredAreaM2: Prisma.Decimal;
   sheetsCount: number;
   supplierPricePerM2: Prisma.Decimal;
@@ -70,6 +91,32 @@ type CalculatedLineItem = {
   sortOrder: number;
   areaM2: Prisma.Decimal;
 };
+
+export function toPersistedLineItem(item: CalculatedLineItem) {
+  return {
+    panelTypeId: item.panelTypeId,
+    panelSizeId: item.panelSizeId,
+    thicknessMm: item.thicknessMm,
+    supplierId: item.supplierId,
+    qualityClassId: item.qualityClassId,
+    colorId: item.colorId,
+    coating: item.coating,
+    texture: item.texture,
+    note: item.note,
+    customTypeDescription: item.customTypeDescription,
+    customWidthMm: item.customWidthMm,
+    customHeightMm: item.customHeightMm,
+    requiredAreaM2: item.requiredAreaM2,
+    sheetsCount: item.sheetsCount,
+    supplierPricePerM2: item.supplierPricePerM2,
+    clientPricePerM2: item.clientPricePerM2,
+    pricePerM2: item.pricePerM2,
+    pricePerSheet: item.pricePerSheet,
+    totalPrice: item.totalPrice,
+    wastePercent: item.wastePercent,
+    sortOrder: item.sortOrder,
+  };
+}
 
 type LeadForHplCalculation = Lead & {
   qualification: LeadQualification | null;
@@ -90,11 +137,42 @@ type CommercialDecision = {
 type ResolvedCalculationItem = {
   panelTypeId: string;
   panelSizeId: string;
-  thicknessMm: number;
-  supplierId: string;
+  thicknessMm: Prisma.Decimal;
+  supplierId: string | null;
   qualityClassId: string;
   colorId?: string;
+  coating?: string | null;
+  texture?: string | null;
+  note?: string | null;
+  customTypeDescription?: string | null;
+  customWidthMm?: number | null;
+  customHeightMm?: number | null;
   requiredAreaM2: string;
+  purchasePricePerM2Cny?: Prisma.Decimal;
+};
+
+export const MANAGER_CALCULATION_ITEM_REQUIRED_MESSAGE =
+  'Для позиции укажите тип HPL, линейку, размер, толщину и площадь.';
+
+type LineGeometry = {
+  panelTypeId: string;
+  panelSizeId: string;
+  thicknessMm: Prisma.Decimal;
+  supplierId: string | null;
+  qualityClassId: string;
+  colorId: string | null;
+  coating: string | null;
+  texture: string | null;
+  note: string | null;
+  customTypeDescription: string | null;
+  customWidthMm: number | null;
+  customHeightMm: number | null;
+  requiredAreaM2: Prisma.Decimal;
+  sheetsCount: number;
+  wastePercent: Prisma.Decimal;
+  widthMm: number;
+  heightMm: number;
+  coveredAreaM2: Prisma.Decimal;
 };
 
 @Injectable()
@@ -110,6 +188,10 @@ export class CalculationService {
     dto: CreateCalculationDto,
     user: CurrentUser,
   ): Promise<CalculationWithItems> {
+    this.assertManualPurchasePriceAccess(dto.items, user);
+    if (this.canSubmitManualPurchasePrice(user)) {
+      this.requireManualPurchasePrices(dto.items);
+    }
     const lead = await this.guardLeadForHplCalculation(dto.leadId, user);
     const commercial = this.requireCommercialDecision(lead);
     const items = this.deriveCalculationItems(
@@ -147,7 +229,7 @@ export class CalculationService {
           commercialQualityClassId: commercial.qualityClassId,
           commercialConfirmedAt: commercial.confirmedAt,
           items: {
-            create: calculatedItems.map(({ areaM2: _areaM2, ...item }) => item),
+            create: calculatedItems.map(toPersistedLineItem),
           },
         },
         include: calculationInclude,
@@ -231,6 +313,13 @@ export class CalculationService {
     const session = await this.findActiveSession(id);
     this.assertCalculationWriteAccess(session, user);
     this.assertDraft(session);
+    await this.assertRequestMutable(session.requestId);
+    if (dto.items) {
+      this.assertManualPurchasePriceAccess(dto.items, user);
+      if (this.canSubmitManualPurchasePrice(user)) {
+        this.requireManualPurchasePrices(dto.items);
+      }
+    }
 
     const lead = dto.items
       ? await this.guardLeadForHplCalculation(session.leadId, user)
@@ -287,9 +376,7 @@ export class CalculationService {
           ...(calculatedItems
             ? {
                 items: {
-                  create: calculatedItems.map(
-                    ({ areaM2: _areaM2, ...item }) => item,
-                  ),
+                  create: calculatedItems.map(toPersistedLineItem),
                 },
               }
             : {}),
@@ -311,7 +398,10 @@ export class CalculationService {
     });
   }
 
-  async softDelete(id: string, user: CurrentUser): Promise<CalculationWithItems> {
+  async softDelete(
+    id: string,
+    user: CurrentUser,
+  ): Promise<CalculationWithItems> {
     const session = await this.findActiveSession(id);
     this.assertCalculationDeleteAccess(session, user);
 
@@ -323,6 +413,8 @@ export class CalculationService {
   }
 
   async preview(dto: PreviewCalculationDto, user: CurrentUser) {
+    this.assertManualPurchasePriceAccess([dto], user);
+
     if (dto.leadId) {
       const lead = await this.guardLeadForHplCalculation(dto.leadId, user);
       const commercial = this.requireCommercialDecision(lead);
@@ -331,40 +423,105 @@ export class CalculationService {
         lead.qualification,
         commercial,
       );
-      const cnyUsdRate = await this.currencyRateService.getActiveCnyUsdRate();
-      const calculated = await this.calculateItem(
+      return this.previewResolvedItem(
         item,
-        0,
-        cnyUsdRate,
+        user,
         lead.qualification?.application,
       );
+    }
 
-      return {
-        sheetsCount: calculated.sheetsCount,
-        areaM2: calculated.areaM2,
-        wastePercent: calculated.wastePercent,
-        supplierPricePerM2: calculated.supplierPricePerM2,
-        clientPricePerM2: calculated.clientPricePerM2,
-        pricePerSheet: calculated.pricePerSheet,
-        total: calculated.totalPrice,
-      };
+    return this.previewResolvedItem(this.resolveCatalogPreviewItem(dto), user);
+  }
+
+  private async previewResolvedItem(
+    item: ResolvedCalculationItem,
+    user: CurrentUser,
+    application?: HplApplication | null,
+  ) {
+    const geometry = await this.resolveLineGeometry(item, application);
+    const mechanical = {
+      sheetsCount: geometry.sheetsCount,
+      areaM2: geometry.coveredAreaM2,
+      wastePercent: geometry.wastePercent,
+      sellingCoefficient: HPL_SELLING_COEFFICIENT,
+    };
+
+    if (
+      !item.purchasePricePerM2Cny &&
+      this.canSubmitManualPurchasePrice(user)
+    ) {
+      return mechanical;
     }
 
     const cnyUsdRate = await this.currencyRateService.getActiveCnyUsdRate();
-    const item = await this.calculateItem(
-      this.resolveCatalogPreviewItem(dto),
-      0,
-      cnyUsdRate,
-    );
+    const calculated = await this.priceGeometry(item, geometry, 0, cnyUsdRate);
 
     return {
-      sheetsCount: item.sheetsCount,
-      areaM2: item.areaM2,
-      wastePercent: item.wastePercent,
-      supplierPricePerM2: item.supplierPricePerM2,
-      clientPricePerM2: item.clientPricePerM2,
-      pricePerSheet: item.pricePerSheet,
-      total: item.totalPrice,
+      sheetsCount: calculated.sheetsCount,
+      areaM2: calculated.areaM2,
+      wastePercent: calculated.wastePercent,
+      supplierPricePerM2: calculated.supplierPricePerM2,
+      purchasePricePerM2Cny: calculated.supplierPricePerM2,
+      clientPricePerM2: calculated.clientPricePerM2,
+      pricePerSheet: calculated.pricePerSheet,
+      total: calculated.totalPrice,
+      cnyUsdRate,
+      sellingCoefficient: HPL_SELLING_COEFFICIENT,
+    };
+  }
+
+  async prepareManagerCatalogGroup(
+    leadId: string,
+    items: CalculationItemDto[],
+    user: CurrentUser,
+  ): Promise<{
+    lead: LeadForHplCalculation;
+    cnyUsdRate: null;
+    calculatedItems: CalculatedLineItem[];
+  }> {
+    this.assertManualPurchasePriceAccess(items, user);
+    const lead = await this.guardLeadForCalculationRequest(leadId, user);
+    const resolved = this.deriveManagerCatalogItems(items, lead.qualification);
+    const calculatedItems = await Promise.all(
+      resolved.map((item, index) => this.snapshotManagerItem(item, index)),
+    );
+
+    return { lead, cnyUsdRate: null, calculatedItems };
+  }
+
+  private async snapshotManagerItem(
+    item: ResolvedCalculationItem,
+    sortOrder: number,
+  ): Promise<CalculatedLineItem> {
+    // A CalculationRequest is a technical snapshot, not a commercial
+    // calculation. In particular, the selected type intentionally overrides
+    // the old Lead application and no purchase-price lookup happens here.
+    const geometry = await this.resolveLineGeometry(item);
+    const unpriced = new Prisma.Decimal(0);
+
+    return {
+      panelTypeId: item.panelTypeId,
+      panelSizeId: item.panelSizeId,
+      thicknessMm: geometry.thicknessMm,
+      supplierId: item.supplierId,
+      qualityClassId: item.qualityClassId,
+      colorId: geometry.colorId,
+      coating: geometry.coating,
+      texture: geometry.texture,
+      note: geometry.note,
+      customTypeDescription: geometry.customTypeDescription,
+      customWidthMm: geometry.customWidthMm,
+      customHeightMm: geometry.customHeightMm,
+      requiredAreaM2: geometry.requiredAreaM2.toDecimalPlaces(4),
+      sheetsCount: geometry.sheetsCount,
+      supplierPricePerM2: unpriced,
+      clientPricePerM2: unpriced,
+      pricePerM2: unpriced,
+      pricePerSheet: unpriced,
+      totalPrice: unpriced,
+      wastePercent: geometry.wastePercent,
+      sortOrder,
+      areaM2: geometry.coveredAreaM2,
     };
   }
 
@@ -386,6 +543,65 @@ export class CalculationService {
     cnyUsdRate: Prisma.Decimal,
     application?: HplApplication | null,
   ): Promise<CalculatedLineItem> {
+    const geometry = await this.resolveLineGeometry(item, application);
+    return this.priceGeometry(item, geometry, sortOrder, cnyUsdRate);
+  }
+
+  private async priceGeometry(
+    item: ResolvedCalculationItem,
+    geometry: LineGeometry,
+    sortOrder: number,
+    cnyUsdRate: Prisma.Decimal,
+  ): Promise<CalculatedLineItem> {
+    if (!item.supplierId) {
+      throw new BusinessException(
+        HttpStatus.BAD_REQUEST,
+        'SUPPLIER_REQUIRED_FOR_PRICING',
+        'Для коммерческого расчёта руководитель должен выбрать поставщика',
+      );
+    }
+
+    const price = await this.priceCalc.calculate({
+      supplierId: item.supplierId,
+      qualityClassId: item.qualityClassId,
+      thicknessMm: geometry.thicknessMm,
+      widthMm: geometry.widthMm,
+      heightMm: geometry.heightMm,
+      sheets: geometry.sheetsCount,
+      cnyUsdRate,
+      purchasePricePerM2Cny: item.purchasePricePerM2Cny,
+    });
+
+    return {
+      panelTypeId: item.panelTypeId,
+      panelSizeId: item.panelSizeId,
+      thicknessMm: geometry.thicknessMm,
+      supplierId: item.supplierId,
+      qualityClassId: item.qualityClassId,
+      colorId: geometry.colorId,
+      coating: geometry.coating,
+      texture: geometry.texture,
+      note: geometry.note,
+      customTypeDescription: geometry.customTypeDescription,
+      customWidthMm: geometry.customWidthMm,
+      customHeightMm: geometry.customHeightMm,
+      requiredAreaM2: geometry.requiredAreaM2.toDecimalPlaces(4),
+      sheetsCount: geometry.sheetsCount,
+      supplierPricePerM2: price.supplierPricePerM2,
+      clientPricePerM2: price.clientPricePerM2,
+      pricePerM2: price.clientPricePerM2,
+      pricePerSheet: price.pricePerSheet,
+      totalPrice: price.total,
+      wastePercent: geometry.wastePercent,
+      sortOrder,
+      areaM2: price.areaM2,
+    };
+  }
+
+  private async resolveLineGeometry(
+    item: ResolvedCalculationItem,
+    application?: HplApplication | null,
+  ): Promise<LineGeometry> {
     const requiredArea = new Prisma.Decimal(item.requiredAreaM2);
 
     if (requiredArea.lte(0)) {
@@ -411,13 +627,15 @@ export class CalculationService {
       this.prisma.panelSize.findFirst({
         where: { id: item.panelSizeId, isActive: true },
       }),
-      this.prisma.supplierQualityMapping.findFirst({
-        where: {
-          supplierId: item.supplierId,
-          panelTypeId: item.panelTypeId,
-          qualityClassId: item.qualityClassId,
-        },
-      }),
+      item.supplierId
+        ? this.prisma.supplierQualityMapping.findFirst({
+            where: {
+              supplierId: item.supplierId,
+              panelTypeId: item.panelTypeId,
+              qualityClassId: item.qualityClassId,
+            },
+          })
+        : Promise.resolve(null),
       item.colorId
         ? this.prisma.panelColor.findUnique({ where: { id: item.colorId } })
         : Promise.resolve(null),
@@ -433,6 +651,7 @@ export class CalculationService {
 
     if (
       application &&
+      panelType.code !== HPL_CUSTOM_PANEL_TYPE_CODE &&
       panelType.code !== panelTypeCodeForApplication(application)
     ) {
       throw new BusinessException(
@@ -450,7 +669,10 @@ export class CalculationService {
       );
     }
 
-    if (!mapping) {
+    const mappingRequired =
+      supplierQualityMatrixApplies(application ?? null) &&
+      panelType.code !== HPL_CUSTOM_PANEL_TYPE_CODE;
+    if (mappingRequired && !mapping) {
       throw new BusinessException(
         HttpStatus.BAD_REQUEST,
         'INVALID_QUALITY_MAPPING',
@@ -466,7 +688,7 @@ export class CalculationService {
       );
     }
 
-    if (color && color.supplierId !== item.supplierId) {
+    if (color && item.supplierId && color.supplierId !== item.supplierId) {
       throw new BusinessException(
         HttpStatus.BAD_REQUEST,
         'COLOR_SUPPLIER_MISMATCH',
@@ -474,18 +696,19 @@ export class CalculationService {
       );
     }
 
-    const thicknessMm = item.thicknessMm;
-
-    if (!Number.isInteger(thicknessMm) || thicknessMm <= 0) {
+    const thicknessResult = validateHplThickness(application, item.thicknessMm);
+    if (!thicknessResult.ok) {
       throw new BusinessException(
         HttpStatus.BAD_REQUEST,
-        'INVALID_THICKNESS',
-        'Толщина должна быть целым числом больше 0',
+        thicknessResult.errorCode,
+        thicknessResult.message,
       );
     }
+    const thicknessMm = thicknessResult.thicknessMm;
 
     const quantity = this.quantityCalc.calculate(requiredArea, size);
-    if (quantity.sheetsCount <= 0) {
+    const sheetsCount = quantity.sheetsCount;
+    if (sheetsCount <= 0) {
       throw new BusinessException(
         HttpStatus.BAD_REQUEST,
         'INVALID_QUANTITY',
@@ -493,15 +716,16 @@ export class CalculationService {
       );
     }
 
-    const price = await this.priceCalc.calculate({
-      supplierId: item.supplierId,
-      qualityClassId: item.qualityClassId,
-      thicknessMm,
-      widthMm: size.widthMm,
-      heightMm: size.heightMm,
-      sheets: quantity.sheetsCount,
-      cnyUsdRate,
-    });
+    if (panelType.code === HPL_CUSTOM_PANEL_TYPE_CODE) {
+      const customNote = item.customTypeDescription?.trim();
+      if (!customNote) {
+        throw new BusinessException(
+          HttpStatus.BAD_REQUEST,
+          'CUSTOM_TYPE_DESCRIPTION_REQUIRED',
+          'Для типа «Другой» укажите описание запроса',
+        );
+      }
+    }
 
     return {
       panelTypeId: item.panelTypeId,
@@ -510,17 +734,70 @@ export class CalculationService {
       supplierId: item.supplierId,
       qualityClassId: item.qualityClassId,
       colorId: item.colorId ?? null,
+      coating: item.coating?.trim() || null,
+      texture: item.texture?.trim() || null,
+      note: item.note?.trim() || null,
+      customTypeDescription: item.customTypeDescription?.trim() || null,
+      customWidthMm: item.customWidthMm ?? null,
+      customHeightMm: item.customHeightMm ?? null,
       requiredAreaM2: requiredArea.toDecimalPlaces(4),
-      sheetsCount: quantity.sheetsCount,
-      supplierPricePerM2: price.supplierPricePerM2,
-      clientPricePerM2: price.clientPricePerM2,
-      pricePerM2: price.clientPricePerM2,
-      pricePerSheet: price.pricePerSheet,
-      totalPrice: price.total,
+      sheetsCount,
       wastePercent: quantity.wastePercent,
-      sortOrder,
-      areaM2: price.areaM2,
+      widthMm: size.widthMm,
+      heightMm: size.heightMm,
+      coveredAreaM2: quantity.actualAreaM2.toDecimalPlaces(4),
     };
+  }
+
+  private deriveManagerCatalogItems(
+    items: CalculationItemDto[],
+    qualification: LeadQualification | null,
+  ): ResolvedCalculationItem[] {
+    return items.map((item) => {
+      const thicknessMm = parseThicknessMm(resolveThicknessMm(item));
+      assertCustomDimensionsPair(item);
+      if (
+        !item.panelTypeId ||
+        !item.panelSizeId ||
+        !item.qualityClassId ||
+        !item.requiredAreaM2 ||
+        thicknessMm == null
+      ) {
+        throw new BusinessException(
+          HttpStatus.BAD_REQUEST,
+          'CALCULATION_PREFILL_INCOMPLETE',
+          MANAGER_CALCULATION_ITEM_REQUIRED_MESSAGE,
+        );
+      }
+
+      if (new Prisma.Decimal(item.requiredAreaM2).lt(0)) {
+        throw new BusinessException(
+          HttpStatus.BAD_REQUEST,
+          'INVALID_AREA',
+          'Площадь не может быть отрицательной',
+        );
+      }
+
+      return {
+        panelTypeId: item.panelTypeId,
+        panelSizeId: item.panelSizeId,
+        thicknessMm,
+        supplierId: null,
+        qualityClassId: item.qualityClassId,
+        requiredAreaM2: item.requiredAreaM2,
+        colorId: item.colorId,
+        coating: item.coating,
+        texture: item.texture,
+        note: item.note,
+        customTypeDescription:
+          item.customTypeDescription ?? qualification?.customerRequirements,
+        customWidthMm: item.customWidthMm,
+        customHeightMm: item.customHeightMm,
+        purchasePricePerM2Cny: this.parseManualPurchasePriceCny(
+          item.purchasePricePerM2Cny,
+        ),
+      };
+    });
   }
 
   private deriveCalculationItems(
@@ -552,12 +829,35 @@ export class CalculationService {
 
       const panelTypeId = item.panelTypeId ?? qualification!.panelTypeId;
       const panelSizeId = item.panelSizeId ?? qualification!.panelSizeId;
-      const thicknessMm =
-        resolveThicknessMm(item) ?? qualification!.thicknessMm;
+      const thicknessMm = parseThicknessMm(
+        resolveThicknessMm(item) ?? qualification!.thicknessMm,
+      );
       const requiredAreaM2 =
         item.requiredAreaM2 ?? qualification!.requiredAreaM2?.toString();
+      const customWidthMm = qualification!.customWidthMm;
+      const customHeightMm = qualification!.customHeightMm;
 
-      if (!panelTypeId || !panelSizeId || !thicknessMm || !requiredAreaM2) {
+      if (!panelTypeId || !thicknessMm || !requiredAreaM2) {
+        throw new BusinessException(
+          HttpStatus.BAD_REQUEST,
+          'CALCULATION_PREFILL_INCOMPLETE',
+          'Недостаточно данных Stage-1 для расчёта',
+        );
+      }
+
+      if (!panelSizeId) {
+        if ((customWidthMm ?? 0) > 0 && (customHeightMm ?? 0) > 0) {
+          throw new BusinessException(
+            HttpStatus.UNPROCESSABLE_ENTITY,
+            'CUSTOM_SIZE_PRICING_NOT_CONFIGURED',
+            'Нестандартный размер принят, но цена для custom-размера не настроена',
+            {
+              customWidthMm,
+              customHeightMm,
+            },
+          );
+        }
+
         throw new BusinessException(
           HttpStatus.BAD_REQUEST,
           'CALCULATION_PREFILL_INCOMPLETE',
@@ -573,6 +873,15 @@ export class CalculationService {
         supplierId: commercial.supplierId,
         qualityClassId: commercial.qualityClassId,
         colorId: item.colorId,
+        coating: item.coating,
+        texture: item.texture,
+        note: item.note,
+        customTypeDescription: item.customTypeDescription,
+        customWidthMm: item.customWidthMm,
+        customHeightMm: item.customHeightMm,
+        purchasePricePerM2Cny: this.parseManualPurchasePriceCny(
+          item.purchasePricePerM2Cny,
+        ),
       };
     });
   }
@@ -580,7 +889,7 @@ export class CalculationService {
   private resolveCatalogPreviewItem(
     dto: PreviewCalculationDto,
   ): ResolvedCalculationItem {
-    const thicknessMm = resolveThicknessMm(dto);
+    const thicknessMm = parseThicknessMm(resolveThicknessMm(dto));
     if (
       !dto.panelTypeId ||
       !dto.panelSizeId ||
@@ -604,6 +913,14 @@ export class CalculationService {
       qualityClassId: dto.qualityClassId,
       requiredAreaM2: dto.requiredAreaM2,
       colorId: dto.colorId,
+      coating: dto.coating,
+      texture: dto.texture,
+      customTypeDescription: dto.customTypeDescription,
+      customWidthMm: dto.customWidthMm,
+      customHeightMm: dto.customHeightMm,
+      purchasePricePerM2Cny: this.parseManualPurchasePriceCny(
+        dto.purchasePricePerM2Cny,
+      ),
     };
   }
 
@@ -662,8 +979,7 @@ export class CalculationService {
 
     if (
       lead.status === LeadStatus.CONVERTED ||
-      lead.status === LeadStatus.UNQUALIFIED ||
-      lead.dealId !== null
+      lead.status === LeadStatus.UNQUALIFIED
     ) {
       throw new BusinessException(
         HttpStatus.CONFLICT,
@@ -682,6 +998,62 @@ export class CalculationService {
 
     assertStage1QualificationComplete(lead.qualification);
     this.requireCommercialDecision(lead);
+
+    return lead;
+  }
+
+  async guardLeadForCalculationRequest(
+    leadId: string,
+    user: CurrentUser,
+  ): Promise<LeadForHplCalculation> {
+    const lead = await this.prisma.lead.findFirst({
+      where: { id: leadId, deletedAt: null },
+      include: {
+        qualification: true,
+        commercialQualification: true,
+      },
+    });
+
+    if (!lead) {
+      throw new BusinessException(
+        HttpStatus.NOT_FOUND,
+        'LEAD_NOT_FOUND',
+        'Лид не найден',
+      );
+    }
+
+    if (
+      !user.permissions.includes(LEADS_READ_ALL_PERMISSION) &&
+      lead.ownerId !== user.id
+    ) {
+      throw new BusinessException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'У вас нет доступа к этому лиду',
+      );
+    }
+
+    if (
+      lead.status === LeadStatus.CONVERTED ||
+      lead.status === LeadStatus.UNQUALIFIED
+    ) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'LEAD_NOT_CALCULABLE',
+        'Расчёт недоступен для терминального лида',
+      );
+    }
+
+    if (
+      lead.status !== LeadStatus.QUALIFIED &&
+      lead.status !== LeadStatus.IN_PROGRESS
+    ) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'LEAD_NOT_CALCULABLE',
+        'Сначала заполните квалификацию Stage 1',
+      );
+    }
 
     return lead;
   }
@@ -742,6 +1114,25 @@ export class CalculationService {
     }
   }
 
+  private async assertRequestMutable(requestId: string | null): Promise<void> {
+    if (!requestId) {
+      return;
+    }
+
+    const request = await this.prisma.calculationRequest.findFirst({
+      where: { id: requestId, deletedAt: null },
+      select: { status: true },
+    });
+
+    if (request && request.status !== CALCULATION_REQUEST_STATUS.DRAFT) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'CALCULATION_REQUEST_LOCKED',
+        'Запрос отправлен руководителю, расчёты менять нельзя',
+      );
+    }
+  }
+
   private assertCalculationReadAccess(
     session: CalculationSession,
     user: CurrentUser,
@@ -795,5 +1186,62 @@ export class CalculationService {
       'FORBIDDEN',
       'У вас нет доступа к удалению этого расчёта',
     );
+  }
+
+  private canSubmitManualPurchasePrice(user: CurrentUser): boolean {
+    return user.permissions.includes(MANUAL_PURCHASE_PRICE_PERMISSION);
+  }
+
+  private assertManualPurchasePriceAccess(
+    items: Array<{ purchasePricePerM2Cny?: string }>,
+    user: CurrentUser,
+  ): void {
+    const submitted = items.some(
+      (item) =>
+        item.purchasePricePerM2Cny !== undefined &&
+        item.purchasePricePerM2Cny !== null,
+    );
+    if (!submitted || this.canSubmitManualPurchasePrice(user)) {
+      return;
+    }
+
+    throw new BusinessException(
+      HttpStatus.FORBIDDEN,
+      'MANUAL_PURCHASE_PRICE_FORBIDDEN',
+      'Ручной ввод закупочной цены доступен только руководителю',
+    );
+  }
+
+  private requireManualPurchasePrices(
+    items: Array<{ purchasePricePerM2Cny?: string }>,
+  ): void {
+    for (const item of items) {
+      if (!this.parseManualPurchasePriceCny(item.purchasePricePerM2Cny)) {
+        throw new BusinessException(
+          HttpStatus.BAD_REQUEST,
+          'PURCHASE_PRICE_REQUIRED',
+          'Укажите закупочную цену, CNY/м²',
+        );
+      }
+    }
+  }
+
+  private parseManualPurchasePriceCny(
+    value?: string,
+  ): Prisma.Decimal | undefined {
+    if (value === undefined || value === null || value === '') {
+      return undefined;
+    }
+
+    const price = new Prisma.Decimal(value);
+    if (price.lte(0)) {
+      throw new BusinessException(
+        HttpStatus.BAD_REQUEST,
+        'INVALID_SUPPLIER_PRICE',
+        'Закупочная цена должна быть больше 0',
+      );
+    }
+
+    return price;
   }
 }

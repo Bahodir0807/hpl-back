@@ -5,7 +5,7 @@ export type SerializedLeadCommercialQualification = {
   leadId: string;
   supplierId: string;
   qualityClassId: string;
-  mappingId: string;
+  mappingId: string | null;
   status: CommercialQualificationStatus;
   decisionComment: string | null;
   confirmedById: string;
@@ -37,7 +37,7 @@ export function serializeLeadCommercialQualification(qualification: {
   leadId: string;
   supplierId: string;
   qualityClassId: string;
-  mappingId: string;
+  mappingId: string | null;
   status: CommercialQualificationStatus;
   decisionComment: string | null;
   confirmedById: string;

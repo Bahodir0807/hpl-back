@@ -14,11 +14,13 @@ export class PanelPriceCalculator {
   async calculate(input: {
     supplierId: string;
     qualityClassId: string;
-    thicknessMm: number;
-    widthMm: number;
-    heightMm: number;
+    thicknessMm: Prisma.Decimal | number;
+    widthMm?: number;
+    heightMm?: number;
+    areaM2?: Prisma.Decimal | number | string;
     sheets: number;
     cnyUsdRate: Prisma.Decimal;
+    purchasePricePerM2Cny?: Prisma.Decimal | string | null;
   }) {
     if (!Number.isInteger(input.sheets) || input.sheets <= 0) {
       throw new BusinessException(
@@ -28,7 +30,14 @@ export class PanelPriceCalculator {
       );
     }
 
-    if (input.widthMm <= 0 || input.heightMm <= 0) {
+    const areaM2 =
+      input.areaM2 !== undefined
+        ? new Prisma.Decimal(input.areaM2.toString())
+        : input.widthMm !== undefined && input.heightMm !== undefined
+          ? new Prisma.Decimal(input.widthMm).mul(input.heightMm).div(1_000_000)
+          : new Prisma.Decimal(0);
+
+    if (areaM2.lte(0)) {
       throw new BusinessException(
         HttpStatus.BAD_REQUEST,
         'INVALID_AREA',
@@ -45,47 +54,17 @@ export class PanelPriceCalculator {
       );
     }
 
-    const pricing = await this.prisma.panelThicknessPricing.findFirst({
-      where: {
-        supplierId: input.supplierId,
-        qualityClassId: input.qualityClassId,
-        thicknessMm: input.thicknessMm,
-        isActive: true,
-      },
-    });
-
-    if (!pricing) {
-      throw new BusinessException(
-        HttpStatus.BAD_REQUEST,
-        'PRICING_NOT_FOUND',
-        `Цена для толщины ${input.thicknessMm} мм не найдена`,
-      );
-    }
-
-    if (pricing.currencyCode !== HPL_SOURCE_CURRENCY) {
-      throw new BusinessException(
-        HttpStatus.BAD_REQUEST,
-        'PRICING_CURRENCY_INVALID',
-        'Закупочная цена поставщика должна быть в CNY',
-      );
-    }
-
-    const supplierPricePerM2 = new Prisma.Decimal(
-      pricing.basePricePerM2.toString(),
-    );
+    const supplierPricePerM2 = await this.resolveSupplierPricePerM2Cny(input);
     if (supplierPricePerM2.lte(0)) {
       throw new BusinessException(
         HttpStatus.BAD_REQUEST,
         'INVALID_SUPPLIER_PRICE',
-        'Закупочная цена поставщика должна быть больше 0',
+        'Закупочная цена должна быть больше 0',
       );
     }
 
     const usdPerM2 = supplierPricePerM2.mul(cnyUsdRate);
     const clientPricePerM2 = usdPerM2.mul(HPL_SELLING_COEFFICIENT);
-    const areaM2 = new Prisma.Decimal(input.widthMm)
-      .mul(input.heightMm)
-      .div(1_000_000);
     const pricePerSheet = clientPricePerM2.mul(areaM2);
     const total = pricePerSheet.mul(input.sheets);
 
@@ -106,5 +85,47 @@ export class PanelPriceCalculator {
       cnyUsdRate,
       sellingCoefficient: HPL_SELLING_COEFFICIENT,
     };
+  }
+
+  private async resolveSupplierPricePerM2Cny(input: {
+    supplierId: string;
+    qualityClassId: string;
+    thicknessMm: Prisma.Decimal | number;
+    purchasePricePerM2Cny?: Prisma.Decimal | string | null;
+  }): Promise<Prisma.Decimal> {
+    if (
+      input.purchasePricePerM2Cny !== undefined &&
+      input.purchasePricePerM2Cny !== null &&
+      input.purchasePricePerM2Cny !== ''
+    ) {
+      return new Prisma.Decimal(input.purchasePricePerM2Cny.toString());
+    }
+
+    const pricing = await this.prisma.panelThicknessPricing.findFirst({
+      where: {
+        supplierId: input.supplierId,
+        qualityClassId: input.qualityClassId,
+        thicknessMm: new Prisma.Decimal(input.thicknessMm.toString()),
+        isActive: true,
+      },
+    });
+
+    if (!pricing) {
+      throw new BusinessException(
+        HttpStatus.UNPROCESSABLE_ENTITY,
+        'PRICING_NOT_CONFIGURED',
+        `Цена для толщины ${input.thicknessMm.toString()} мм не настроена`,
+      );
+    }
+
+    if (pricing.currencyCode !== HPL_SOURCE_CURRENCY) {
+      throw new BusinessException(
+        HttpStatus.BAD_REQUEST,
+        'PRICING_CURRENCY_INVALID',
+        'Закупочная цена поставщика должна быть в CNY',
+      );
+    }
+
+    return new Prisma.Decimal(pricing.basePricePerM2.toString());
   }
 }

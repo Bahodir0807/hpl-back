@@ -25,9 +25,7 @@ import { SupplierOrdersService } from './supplier-orders.service';
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('supplier-orders')
 export class SupplierOrdersController {
-  constructor(
-    private readonly supplierOrdersService: SupplierOrdersService,
-  ) {}
+  constructor(private readonly supplierOrdersService: SupplierOrdersService) {}
 
   @Get(':id')
   @RequirePermissions('deals:read')
@@ -70,5 +68,18 @@ export class SupplierOrdersController {
     @CurrentUser() user: CurrentUserType,
   ) {
     return this.supplierOrdersService.confirmReady(id, user);
+  }
+
+  @Post(':id/confirm-client-delivery')
+  @HttpCode(200)
+  @RequirePermissions(SUPPLIER_ORDER_PERMISSIONS.CONFIRM_CLIENT_DELIVERY)
+  @ApiOperation({
+    summary: 'Confirm goods were actually delivered to the client',
+  })
+  confirmClientDelivery(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.supplierOrdersService.confirmClientDelivery(id, user);
   }
 }

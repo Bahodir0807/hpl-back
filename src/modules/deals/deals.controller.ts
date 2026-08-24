@@ -3,6 +3,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpCode,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -34,6 +35,15 @@ import { DealsService } from './deals.service';
 import { CreateSupplierOrderDto } from '../supplier-orders/dto/create-supplier-order.dto';
 import { SUPPLIER_ORDER_PERMISSIONS } from '../supplier-orders/supplier-order.constants';
 import { SupplierOrdersService } from '../supplier-orders/supplier-orders.service';
+import { DealInstallationService } from './deal-installation.service';
+import {
+  INSTALLATION_ASSESS_PERMISSION,
+  INSTALLATION_CONFIRM_SUPERVISOR_PERMISSION,
+  INSTALLATION_CONFIRM_WORK_PERMISSION,
+  INSTALLATION_SCHEDULE_PERMISSION,
+} from './deal-fulfillment.constants';
+import { ScheduleInstallationDto } from './dto/schedule-installation.dto';
+import { UpdateInstallationAssessmentDto } from './dto/update-installation-assessment.dto';
 
 @ApiTags('Deals')
 @ApiBearerAuth()
@@ -44,6 +54,7 @@ export class DealsController {
   constructor(
     private readonly dealsService: DealsService,
     private readonly supplierOrdersService: SupplierOrdersService,
+    private readonly dealInstallationService: DealInstallationService,
   ) {}
 
   @Post()
@@ -105,6 +116,76 @@ export class DealsController {
     @CurrentUser() user: CurrentUserType,
   ) {
     return this.supplierOrdersService.createForDeal(id, dto, user);
+  }
+
+  @Get(':id/installation')
+  @RequirePermissions('deals:read')
+  @ApiOperation({ summary: 'Get the deal installation job if it exists' })
+  getInstallation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.dealInstallationService.getByDealId(id, user);
+  }
+
+  @Post(':id/installation/schedule')
+  @HttpCode(200)
+  @RequirePermissions(INSTALLATION_SCHEDULE_PERMISSION)
+  @ApiOperation({ summary: 'Schedule or update installation planned dates' })
+  scheduleInstallation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ScheduleInstallationDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.dealInstallationService.schedule(id, dto, user);
+  }
+
+  @Patch(':id/installation/assessment')
+  @RequirePermissions(INSTALLATION_ASSESS_PERMISSION)
+  @ApiOperation({ summary: 'Update lightweight installation assessment notes' })
+  updateInstallationAssessment(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateInstallationAssessmentDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.dealInstallationService.updateAssessment(id, dto, user);
+  }
+
+  @Post(':id/installation/start')
+  @HttpCode(200)
+  @RequirePermissions(INSTALLATION_CONFIRM_WORK_PERMISSION)
+  @ApiOperation({ summary: 'Mark installation work as started' })
+  startInstallation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.dealInstallationService.start(id, user);
+  }
+
+  @Post(':id/installation/confirm-installer')
+  @HttpCode(200)
+  @RequirePermissions(INSTALLATION_CONFIRM_WORK_PERMISSION)
+  @ApiOperation({
+    summary: 'Installer confirmation of completed installation work',
+  })
+  confirmInstaller(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.dealInstallationService.confirmInstaller(id, user);
+  }
+
+  @Post(':id/installation/confirm-supervisor')
+  @HttpCode(200)
+  @RequirePermissions(INSTALLATION_CONFIRM_SUPERVISOR_PERMISSION)
+  @ApiOperation({
+    summary: 'HEAD or DIRECTOR confirmation of installation completion',
+  })
+  confirmSupervisor(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.dealInstallationService.confirmSupervisor(id, user);
   }
 
   @Get(':id')

@@ -26,8 +26,10 @@ describe('ApiKeyAuthGuard', () => {
   };
 
   const createContext = (headers: Record<string, string>): ExecutionContext => {
-    const request: { headers: Record<string, string>; serviceAccount?: ServiceAccount } =
-      { headers };
+    const request: {
+      headers: Record<string, string>;
+      serviceAccount?: ServiceAccount;
+    } = { headers };
 
     return {
       switchToHttp: () => ({

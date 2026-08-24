@@ -23,23 +23,25 @@ describe('multi-role policy helpers', () => {
     expect(hasRole(directorAdmin, RoleName.ADMIN)).toBe(true);
     expect(hasRole(directorAdmin, RoleName.HEAD)).toBe(false);
 
-    expect(hasAnyRole(headAdmin, [RoleName.HEAD, RoleName.DIRECTOR])).toBe(true);
+    expect(hasAnyRole(headAdmin, [RoleName.HEAD, RoleName.DIRECTOR])).toBe(
+      true,
+    );
     expect(hasAnyRole(accountantAdmin, [RoleName.ACCOUNTANT])).toBe(true);
   });
 
   it('keeps unscoped deal/order visibility when ADMIN is also assigned', () => {
-    expect(hasUnscopedDealVisibility(user([RoleName.DIRECTOR, RoleName.ADMIN]))).toBe(
-      true,
-    );
-    expect(hasUnscopedOrderVisibility(user([RoleName.DIRECTOR, RoleName.ADMIN]))).toBe(
-      true,
-    );
-    expect(hasUnscopedDealVisibility(user([RoleName.HEAD, RoleName.ADMIN]))).toBe(
-      true,
-    );
-    expect(hasUnscopedOrderVisibility(user([RoleName.HEAD, RoleName.ADMIN]))).toBe(
-      true,
-    );
+    expect(
+      hasUnscopedDealVisibility(user([RoleName.DIRECTOR, RoleName.ADMIN])),
+    ).toBe(true);
+    expect(
+      hasUnscopedOrderVisibility(user([RoleName.DIRECTOR, RoleName.ADMIN])),
+    ).toBe(true);
+    expect(
+      hasUnscopedDealVisibility(user([RoleName.HEAD, RoleName.ADMIN])),
+    ).toBe(true);
+    expect(
+      hasUnscopedOrderVisibility(user([RoleName.HEAD, RoleName.ADMIN])),
+    ).toBe(true);
     expect(
       hasUnscopedDealVisibility(user([RoleName.ACCOUNTANT, RoleName.ADMIN])),
     ).toBe(true);
@@ -54,18 +56,18 @@ describe('multi-role policy helpers', () => {
     expect(hasUnscopedDealVisibility(user([RoleName.INSTALLER]))).toBe(false);
     expect(hasUnscopedOrderVisibility(user([RoleName.INSTALLER]))).toBe(false);
     expect(hasUnscopedDealVisibility(user([RoleName.MANAGER]))).toBe(false);
-    expect(hasUnscopedOrderVisibility(user([RoleName.MANAGER, RoleName.ADMIN]))).toBe(
-      false,
-    );
+    expect(
+      hasUnscopedOrderVisibility(user([RoleName.MANAGER, RoleName.ADMIN])),
+    ).toBe(false);
   });
 
   it('keeps user-module access when ADMIN is combined with a blocked business role', () => {
     expect(hasUserModuleAccess(user([RoleName.ADMIN]))).toBe(true);
     expect(hasUserModuleAccess(user([RoleName.DIRECTOR]))).toBe(true);
     expect(hasUserModuleAccess(user([RoleName.HEAD]))).toBe(true);
-    expect(hasUserModuleAccess(user([RoleName.ACCOUNTANT, RoleName.ADMIN]))).toBe(
-      true,
-    );
+    expect(
+      hasUserModuleAccess(user([RoleName.ACCOUNTANT, RoleName.ADMIN])),
+    ).toBe(true);
     expect(hasUserModuleAccess(user([RoleName.MANAGER, RoleName.ADMIN]))).toBe(
       true,
     );

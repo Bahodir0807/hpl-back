@@ -1,19 +1,10 @@
 import { Prisma, PrismaClient, ProductPriceType, ProductStatus } from '@prisma/client';
 
-const CALCULATOR_PRODUCT_SKU = 'HPL-CALC-PANEL';
+export const CALCULATOR_PRODUCT_SKU = 'HPL-CALC-PANEL';
 
 export async function seedCalculatorProduct(
   prisma: PrismaClient,
-): Promise<{ id: string }> {
-  const existing = await prisma.product.findUnique({
-    where: { sku: CALCULATOR_PRODUCT_SKU },
-    select: { id: true },
-  });
-
-  if (existing) {
-    return existing;
-  }
-
+): Promise<{ id: string; created: boolean }> {
   const brand = await prisma.brand.upsert({
     where: { code: 'HPLPRO' },
     update: {},
@@ -25,6 +16,25 @@ export async function seedCalculatorProduct(
     update: {},
     create: { code: 'wuya', name: 'Wuya', contacts: {} },
   });
+
+  const existing = await prisma.product.findUnique({
+    where: { sku: CALCULATOR_PRODUCT_SKU },
+    select: { id: true },
+  });
+
+  if (existing) {
+    await prisma.product.update({
+      where: { id: existing.id },
+      data: {
+        name: 'HPL-панель (калькулятор)',
+        brandId: brand.id,
+        supplierId: supplier.id,
+        status: ProductStatus.ACTIVE,
+        deletedAt: null,
+      },
+    });
+    return { id: existing.id, created: false };
+  }
 
   const product = await prisma.product.create({
     data: {
@@ -50,5 +60,5 @@ export async function seedCalculatorProduct(
     select: { id: true },
   });
 
-  return product;
+  return { id: product.id, created: true };
 }

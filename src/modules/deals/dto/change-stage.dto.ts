@@ -4,12 +4,16 @@ import {
   IsBoolean,
   IsEnum,
   IsOptional,
+  NotEquals,
   IsString,
   MaxLength,
 } from 'class-validator';
 
 export class ChangeStageDto {
   @IsEnum(DealStage)
+  @NotEquals(DealStage.LOST, {
+    message: 'Use the explicit Deal loss action for LOST transitions',
+  })
   newStage!: DealStage;
 
   @IsOptional()

@@ -34,6 +34,8 @@ import { PanelsModule } from './panels/panels.module';
 import { CalculationsModule } from './calculations/calculations.module';
 import { QuotesModule } from './quotes/quotes.module';
 import { SupplierOrdersModule } from './modules/supplier-orders/supplier-orders.module';
+import { DealLossModule } from './modules/deals/deal-loss.module';
+import { DealFulfillmentModule } from './modules/deals/deal-fulfillment.module';
 
 @Module({
   imports: [
@@ -97,6 +99,8 @@ import { SupplierOrdersModule } from './modules/supplier-orders/supplier-orders.
     CalculationsModule,
     QuotesModule,
     SupplierOrdersModule,
+    DealLossModule,
+    DealFulfillmentModule,
   ],
   controllers: [AppController],
   providers: [

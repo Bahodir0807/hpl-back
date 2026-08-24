@@ -22,7 +22,9 @@ export class QueueDashboardAuthMiddleware implements NestMiddleware {
     const authorization = req.headers.authorization;
 
     if (!authorization?.startsWith('Bearer ')) {
-      res.status(401).json({ message: 'Missing or invalid Authorization header' });
+      res
+        .status(401)
+        .json({ message: 'Missing or invalid Authorization header' });
       return;
     }
 

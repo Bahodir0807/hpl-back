@@ -1,20 +1,20 @@
 import {
   BadRequestException,
-  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleInit,
 } from '@nestjs/common';
 import { File } from '@prisma/client';
 import { fileTypeFromBuffer } from 'file-type';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { readFile, unlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
 import { PrismaService } from '../prisma/prisma.service';
 import { FileRelatedType, UploadFileDto } from './dto/upload-file.dto';
+import { ensureFileStorage, fileStoragePath } from './file-storage';
 
-const UPLOADS_DIR = resolve(process.cwd(), 'uploads');
 export const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
 // Расширение берём из whitelist mime → ext, а не из originalname (path traversal)
@@ -31,6 +31,7 @@ const READ_ALL_PERMISSIONS: Partial<Record<FileRelatedType, string>> = {
   [FileRelatedType.DEAL]: 'deals:read_all',
   [FileRelatedType.ORDER]: 'deals:read_all',
   [FileRelatedType.TASK]: 'tasks:read_all',
+  [FileRelatedType.QUOTE]: 'quotes:read_all',
 };
 
 export type UploadedFileResult = {
@@ -42,10 +43,19 @@ export type UploadedFileResult = {
 };
 
 @Injectable()
-export class FilesService {
+export class FilesService implements OnModuleInit {
   private readonly logger = new Logger(FilesService.name);
 
   constructor(private readonly prisma: PrismaService) {}
+
+  async onModuleInit(): Promise<void> {
+    try {
+      await ensureFileStorage();
+    } catch (error) {
+      this.logger.error(`File storage is unavailable: ${fileStoragePath()}`);
+      throw error;
+    }
+  }
 
   async upload(
     file: Express.Multer.File,
@@ -72,21 +82,27 @@ export class FilesService {
     }
 
     const storageKey = `${randomUUID()}${extension}`;
-    await mkdir(UPLOADS_DIR, { recursive: true });
-    await writeFile(join(UPLOADS_DIR, storageKey), file.buffer);
+    const storageDirectory = await ensureFileStorage();
+    await writeFile(join(storageDirectory, storageKey), file.buffer);
 
-    const record = await this.prisma.file.create({
-      data: {
-        originalName: file.originalname,
-        mimeType: file.mimetype,
-        size: file.size,
-        storageKey,
-        uploadedById: user.id,
-        relatedType: dto.relatedType,
-        relatedId: dto.relatedId,
-        comment: dto.comment,
-      },
-    });
+    let record: File;
+    try {
+      record = await this.prisma.file.create({
+        data: {
+          originalName: file.originalname,
+          mimeType: file.mimetype,
+          size: file.size,
+          storageKey,
+          uploadedById: user.id,
+          relatedType: dto.relatedType,
+          relatedId: dto.relatedId,
+          comment: dto.comment,
+        },
+      });
+    } catch (error) {
+      await this.removeUncommittedFile(storageKey);
+      throw error;
+    }
 
     return {
       id: record.id,
@@ -136,8 +152,44 @@ export class FilesService {
 
     return {
       record,
-      absolutePath: join(UPLOADS_DIR, record.storageKey),
+      absolutePath: join(fileStoragePath(), record.storageKey),
     };
+  }
+
+  async storeGeneratedPdf(input: {
+    buffer: Buffer;
+    originalName: string;
+    uploadedById: string;
+    relatedId: string;
+  }): Promise<File> {
+    const storageKey = `${randomUUID()}.pdf`;
+    const storageDirectory = await ensureFileStorage();
+    await writeFile(join(storageDirectory, storageKey), input.buffer);
+
+    try {
+      return await this.prisma.file.create({
+        data: {
+          originalName: input.originalName,
+          mimeType: 'application/pdf',
+          size: input.buffer.length,
+          storageKey,
+          uploadedById: input.uploadedById,
+          relatedType: FileRelatedType.QUOTE,
+          relatedId: input.relatedId,
+        },
+      });
+    } catch (error) {
+      await this.removeUncommittedFile(storageKey);
+      throw error;
+    }
+  }
+
+  async readStoredBuffer(fileId: string): Promise<Buffer> {
+    const record = await this.prisma.file.findUnique({ where: { id: fileId } });
+    if (!record) {
+      throw new NotFoundException('File not found');
+    }
+    return readFile(join(fileStoragePath(), record.storageKey));
   }
 
   private isAllowedFileContent(
@@ -160,6 +212,17 @@ export class FilesService {
     );
   }
 
+  private async removeUncommittedFile(storageKey: string): Promise<void> {
+    try {
+      await unlink(join(fileStoragePath(), storageKey));
+    } catch (cleanupError) {
+      this.logger.error(
+        `Failed to remove uncommitted file ${storageKey}`,
+        cleanupError instanceof Error ? cleanupError.stack : undefined,
+      );
+    }
+  }
+
   private async assertRelatedAccess(
     relatedType: FileRelatedType,
     relatedId: string,
@@ -178,7 +241,8 @@ export class FilesService {
 
     // '' — общедоступная сущность (каталог товаров)
     if (ownerId !== '' && ownerId !== user.id) {
-      throw new ForbiddenException('Access denied to related entity');
+      // Keep missing and foreign identifiers indistinguishable to callers.
+      throw new NotFoundException(`${relatedType} not found`);
     }
   }
 
@@ -225,6 +289,13 @@ export class FilesService {
         }
 
         return task.assigneeId;
+      }
+      case FileRelatedType.QUOTE: {
+        const quote = await this.prisma.panelQuote.findUnique({
+          where: { id: relatedId },
+          select: { managerId: true },
+        });
+        return quote?.managerId ?? null;
       }
       case FileRelatedType.PRODUCT: {
         const product = await this.prisma.product.findFirst({

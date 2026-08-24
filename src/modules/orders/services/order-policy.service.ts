@@ -25,7 +25,8 @@ export class OrderPolicyService {
     const isOwner = order.deal.ownerId === user.id;
     const canMutateAsHead = hasRole(user, RoleName.HEAD) && !isFinal;
     const canMutateOwn =
-      (hasRole(user, RoleName.MANAGER) || hasRole(user, RoleName.STOREKEEPER)) &&
+      (hasRole(user, RoleName.MANAGER) ||
+        hasRole(user, RoleName.STOREKEEPER)) &&
       isOwner &&
       !isFinal;
     const canMutate = canMutateAsHead || canMutateOwn;

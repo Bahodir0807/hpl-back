@@ -12,6 +12,10 @@ export class FilterQuotesDto {
   leadId?: string;
 
   @IsOptional()
+  @IsUUID()
+  clientId?: string;
+
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)

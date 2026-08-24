@@ -11,6 +11,7 @@ describe('CurrencyRateService', () => {
       create: jest.fn(),
     },
     auditLog: { create: jest.fn() },
+    $queryRaw: jest.fn(),
     $transaction: jest.fn(),
   };
 
@@ -18,7 +19,9 @@ describe('CurrencyRateService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    prisma.$transaction.mockImplementation(async (callback) => callback(prisma));
+    prisma.$transaction.mockImplementation(async (callback) =>
+      callback(prisma),
+    );
   });
 
   it('returns the active CNY→USD rate', async () => {
@@ -76,6 +79,7 @@ describe('CurrencyRateService', () => {
         }),
       }),
     );
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     expect(prisma.currencyRate.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({

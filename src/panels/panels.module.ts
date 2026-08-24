@@ -10,6 +10,8 @@ import { PanelPriceCalculator } from './services/panel-price-calculator.service'
 import { PanelQuantityCalculator } from './services/panel-quantity-calculator.service';
 import { PanelColorsService } from './services/panel-colors.service';
 import { CurrencyRateService } from './services/currency-rate.service';
+import { PanelThicknessPricingService } from './services/panel-thickness-pricing.service';
+import { SupplierQualityService } from './services/supplier-quality.service';
 
 @Module({
   imports: [PrismaModule],
@@ -26,12 +28,15 @@ import { CurrencyRateService } from './services/currency-rate.service';
     PanelPriceCalculator,
     PanelColorsService,
     CurrencyRateService,
+    PanelThicknessPricingService,
+    SupplierQualityService,
   ],
   exports: [
     PanelQuantityCalculator,
     PanelPriceCalculator,
     PanelColorsService,
     CurrencyRateService,
+    PanelThicknessPricingService,
   ],
 })
 export class PanelsModule {}

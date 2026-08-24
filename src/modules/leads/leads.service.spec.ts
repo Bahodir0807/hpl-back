@@ -1,5 +1,5 @@
 import { ForbiddenException } from '@nestjs/common';
-import { LeadStatus } from '@prisma/client';
+import { LeadStatus, LossReason } from '@prisma/client';
 import { LeadsService } from './leads.service';
 
 describe('LeadsService authorization', () => {
@@ -8,10 +8,15 @@ describe('LeadsService authorization', () => {
       findFirst: jest.fn(),
       findUniqueOrThrow: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
     },
     leadAssignmentHistory: {
       create: jest.fn(),
     },
+    activity: { create: jest.fn() },
+    auditLog: { create: jest.fn() },
+    user: { findMany: jest.fn() },
+    task: { findMany: jest.fn(), create: jest.fn() },
     $transaction: jest.fn(),
   };
 
@@ -26,10 +31,13 @@ describe('LeadsService authorization', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    service = new LeadsService(prisma as never, {
-      upsertInTx: jest.fn(),
-      assertStage1Complete: jest.fn(),
-    } as never);
+    service = new LeadsService(
+      prisma as never,
+      {
+        upsertInTx: jest.fn(),
+        assertStage1Complete: jest.fn(),
+      } as never,
+    );
     prisma.lead.findFirst.mockResolvedValue(ownedLead);
   });
 
@@ -86,5 +94,99 @@ describe('LeadsService authorization', () => {
         id: 'lead-id',
       }),
     );
+  });
+
+  it('persists server-derived structured loss data and creates HEAD recovery for PRICE', async () => {
+    prisma.$transaction.mockImplementation(
+      (fn: (tx: typeof prisma) => unknown) => fn(prisma),
+    );
+    prisma.lead.updateMany.mockResolvedValue({ count: 1 });
+    prisma.lead.findUniqueOrThrow.mockResolvedValue({
+      ...ownedLead,
+      status: LeadStatus.LOST,
+      lostReasonCode: LossReason.PRICE,
+    });
+    prisma.user.findMany.mockResolvedValue([{ id: 'head-id' }]);
+    prisma.task.findMany.mockResolvedValue([]);
+    prisma.task.create.mockResolvedValue({ id: 'recovery-id' });
+
+    await service.lose('lead-id', { reason: LossReason.PRICE }, 'owner-id', [
+      'leads:update',
+    ]);
+
+    expect(prisma.lead.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          lostReasonCode: LossReason.PRICE,
+          lostById: 'owner-id',
+          lostAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(prisma.task.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('records COMPETITOR without creating a recovery task', async () => {
+    prisma.$transaction.mockImplementation(
+      (fn: (tx: typeof prisma) => unknown) => fn(prisma),
+    );
+    prisma.lead.updateMany.mockResolvedValue({ count: 1 });
+    prisma.lead.findUniqueOrThrow.mockResolvedValue(ownedLead);
+
+    await service.lose(
+      'lead-id',
+      { reason: LossReason.COMPETITOR },
+      'owner-id',
+      ['leads:update'],
+    );
+
+    expect(prisma.task.create).not.toHaveBeenCalled();
+  });
+
+  it('requires a non-empty comment for OTHER', async () => {
+    await expect(
+      service.lose(
+        'lead-id',
+        { reason: LossReason.OTHER, comment: '   ' },
+        'owner-id',
+        ['leads:update'],
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('denies a foreign Manager from losing the Lead', async () => {
+    await expect(
+      service.lose('lead-id', { reason: LossReason.PRICE }, 'foreign-id', [
+        'leads:update',
+      ]),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('rejects MANAGER create-time targetDate without commercial authority', async () => {
+    await expect(
+      service.create(
+        {
+          title: 'Timeline leak',
+          source: 'web',
+          targetDate: new Date('2026-10-01T00:00:00.000Z'),
+        },
+        'manager-id',
+        ['leads:create'],
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('rejects MANAGER PATCH of targetDate without commercial authority', async () => {
+    await expect(
+      service.update(
+        'lead-id',
+        { targetDate: new Date('2026-10-01T00:00:00.000Z') },
+        'owner-id',
+        ['leads:update'],
+      ),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.lead.update).not.toHaveBeenCalled();
   });
 });

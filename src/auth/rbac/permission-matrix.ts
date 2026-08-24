@@ -51,9 +51,15 @@ export const PERMISSION_DEFINITIONS = [
   ['deliveries:create', 'Create deliveries'],
   ['inventory:read', 'Read inventory'],
   ['inventory:manage', 'Manage inventory'],
+  ['warehouse_purchases:plan', 'Create and manage warehouse purchases'],
+  [
+    'warehouse_purchases:receive',
+    'Record physical warehouse purchase receipts',
+  ],
   ['files:upload', 'Upload files'],
   ['files:read', 'Download and list files'],
   ['reports:read', 'Read reports'],
+  ['reports:manage_plans', 'Manage SalesPlan currencies and KPI FX snapshots'],
   ['audit:read', 'Read audit timeline'],
   ['admin:queues', 'Access Bull queue dashboard'],
   ['panel_catalog:read', 'Read panel catalog and calculator reference data'],
@@ -70,8 +76,20 @@ export const PERMISSION_DEFINITIONS = [
   ['quotes:approve', 'Approve panel quotes (privileged commercial approval)'],
   ['quotes:client_accept', 'Record customer acceptance of an approved quote'],
   ['supplier_orders:manage', 'Create and operate client Deal supplier orders'],
+  [
+    'supplier_orders:confirm_client_delivery',
+    'Confirm actual goods delivery to the client',
+  ],
+  ['installation:schedule', 'Schedule deal installation dates'],
+  ['installation:assess', 'Record lightweight installation assessment notes'],
+  ['installation:confirm_work', 'Confirm installation work as installer'],
+  [
+    'installation:confirm_supervisor',
+    'Confirm installation completion as HEAD or DIRECTOR',
+  ],
   ['currency_rates:read', 'Read the active CNY to USD rate'],
   ['currency_rates:manage', 'Manage the centralized CNY to USD rate'],
+  ['panel_pricing:manage', 'Manage supplier CNY panel thickness prices'],
 ] as const;
 
 export type PermissionSlug = (typeof PERMISSION_DEFINITIONS)[number][0];
@@ -114,6 +132,7 @@ const DIRECTOR_PERMISSIONS: PermissionSlug[] = [
   'orders:read',
   'files:read',
   'reports:read',
+  'reports:manage_plans',
   'audit:read',
   'panel_catalog:read',
   'calculations:read',
@@ -121,9 +140,14 @@ const DIRECTOR_PERMISSIONS: PermissionSlug[] = [
   'quotes:read',
   'quotes:read_all',
   'inventory:read',
+  'warehouse_purchases:plan',
   'currency_rates:read',
   'currency_rates:manage',
   'supplier_orders:manage',
+  'supplier_orders:confirm_client_delivery',
+  'installation:schedule',
+  'installation:confirm_supervisor',
+  'installation:assess',
 ];
 
 const HEAD_PERMISSIONS: PermissionSlug[] = [
@@ -173,12 +197,14 @@ const HEAD_PERMISSIONS: PermissionSlug[] = [
   'deliveries:create',
   'inventory:read',
   'inventory:manage',
+  'warehouse_purchases:plan',
   'files:upload',
   'files:read',
   'reports:read',
   'audit:read',
   'panel_catalog:read',
   'panel_catalog:manage',
+  'panel_pricing:manage',
   'calculations:read',
   'calculations:read_all',
   'calculations:create',
@@ -191,6 +217,10 @@ const HEAD_PERMISSIONS: PermissionSlug[] = [
   'quotes:approve',
   'currency_rates:read',
   'supplier_orders:manage',
+  'supplier_orders:confirm_client_delivery',
+  'installation:schedule',
+  'installation:confirm_supervisor',
+  'installation:assess',
 ];
 
 const MANAGER_PERMISSIONS: PermissionSlug[] = [
@@ -230,6 +260,7 @@ const MANAGER_PERMISSIONS: PermissionSlug[] = [
   'quotes:update',
   'quotes:client_accept',
   'currency_rates:read',
+  'supplier_orders:confirm_client_delivery',
 ];
 
 const ACCOUNTANT_PERMISSIONS: PermissionSlug[] = [
@@ -254,33 +285,47 @@ const STOREKEEPER_PERMISSIONS: PermissionSlug[] = [
   'deliveries:create',
   'inventory:read',
   'inventory:manage',
+  'warehouse_purchases:receive',
 ];
 
-const INSTALLER_PERMISSIONS: PermissionSlug[] = ['auth:me'];
+const INSTALLER_PERMISSIONS: PermissionSlug[] = [
+  'auth:me',
+  'deals:read',
+  'installation:assess',
+  'installation:confirm_work',
+];
 
-export const ROLE_PERMISSION_SLUGS: Record<RoleName, readonly PermissionSlug[]> =
-  {
-    [RoleName.ADMIN]: ADMIN_PERMISSIONS,
-    [RoleName.DIRECTOR]: DIRECTOR_PERMISSIONS,
-    [RoleName.HEAD]: HEAD_PERMISSIONS,
-    [RoleName.MANAGER]: MANAGER_PERMISSIONS,
-    [RoleName.ACCOUNTANT]: ACCOUNTANT_PERMISSIONS,
-    [RoleName.STOREKEEPER]: STOREKEEPER_PERMISSIONS,
-    [RoleName.INSTALLER]: INSTALLER_PERMISSIONS,
-  };
+export const ROLE_PERMISSION_SLUGS: Record<
+  RoleName,
+  readonly PermissionSlug[]
+> = {
+  [RoleName.ADMIN]: ADMIN_PERMISSIONS,
+  [RoleName.DIRECTOR]: DIRECTOR_PERMISSIONS,
+  [RoleName.HEAD]: HEAD_PERMISSIONS,
+  [RoleName.MANAGER]: MANAGER_PERMISSIONS,
+  [RoleName.ACCOUNTANT]: ACCOUNTANT_PERMISSIONS,
+  [RoleName.STOREKEEPER]: STOREKEEPER_PERMISSIONS,
+  [RoleName.INSTALLER]: INSTALLER_PERMISSIONS,
+};
 
 export const BUSINESS_MUTATION_PERMISSIONS = [
   'payments:confirm',
+  'reports:manage_plans',
   'quotes:approve',
   'quotes:client_accept',
   'leads:commercial_qualify',
   'currency_rates:manage',
+  'panel_pricing:manage',
   'supplier_orders:manage',
+  'supplier_orders:confirm_client_delivery',
+  'warehouse_purchases:plan',
+  'warehouse_purchases:receive',
+  'installation:schedule',
+  'installation:assess',
+  'installation:confirm_work',
+  'installation:confirm_supervisor',
 ] as const;
 
-export function roleHasPermission(
-  roleName: RoleName,
-  slug: string,
-): boolean {
+export function roleHasPermission(roleName: RoleName, slug: string): boolean {
   return ROLE_PERMISSION_SLUGS[roleName].includes(slug as PermissionSlug);
 }

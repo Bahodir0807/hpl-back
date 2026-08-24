@@ -25,7 +25,9 @@ describe('permission matrix', () => {
     expect(Object.keys(ROLE_PERMISSION_SLUGS).sort()).toEqual(
       [...TARGET_ROLE_NAMES].sort(),
     );
-    expect(Object.values(RoleName).sort()).toEqual([...TARGET_ROLE_NAMES].sort());
+    expect(Object.values(RoleName).sort()).toEqual(
+      [...TARGET_ROLE_NAMES].sort(),
+    );
     expect(Object.values(RoleName)).not.toContain('FINANCIER');
   });
 
@@ -44,6 +46,18 @@ describe('permission matrix', () => {
 
     for (const slug of BUSINESS_MUTATION_PERMISSIONS) {
       expect(roleHasPermission(RoleName.ADMIN, slug)).toBe(false);
+    }
+  });
+
+  it('gives PanelThicknessPricing manage only to HEAD', () => {
+    expect(roleHasPermission(RoleName.HEAD, 'panel_pricing:manage')).toBe(true);
+
+    for (const roleName of TARGET_ROLE_NAMES) {
+      if (roleName === RoleName.HEAD) {
+        continue;
+      }
+
+      expect(roleHasPermission(roleName, 'panel_pricing:manage')).toBe(false);
     }
   });
 
@@ -96,28 +110,140 @@ describe('permission matrix', () => {
     }
   });
 
-  it('keeps INSTALLER to authentication-only permissions', () => {
-    expect([...ROLE_PERMISSION_SLUGS[RoleName.INSTALLER]]).toEqual(['auth:me']);
+  it('gives INSTALLER only installation execution permissions', () => {
+    expect([...ROLE_PERMISSION_SLUGS[RoleName.INSTALLER]]).toEqual([
+      'auth:me',
+      'deals:read',
+      'installation:assess',
+      'installation:confirm_work',
+    ]);
     expect(roleHasPermission(RoleName.INSTALLER, 'leads:create')).toBe(false);
     expect(roleHasPermission(RoleName.INSTALLER, 'inventory:manage')).toBe(
       false,
     );
     expect(roleHasPermission(RoleName.INSTALLER, 'orders:read')).toBe(false);
+    expect(
+      roleHasPermission(RoleName.INSTALLER, 'installation:confirm_supervisor'),
+    ).toBe(false);
+    expect(roleHasPermission(RoleName.INSTALLER, 'installation:schedule')).toBe(
+      false,
+    );
+  });
+
+  it('gives client delivery confirmation to MANAGER, HEAD and DIRECTOR', () => {
+    expect(
+      roleHasPermission(
+        RoleName.MANAGER,
+        'supplier_orders:confirm_client_delivery',
+      ),
+    ).toBe(true);
+    expect(
+      roleHasPermission(
+        RoleName.HEAD,
+        'supplier_orders:confirm_client_delivery',
+      ),
+    ).toBe(true);
+    expect(
+      roleHasPermission(
+        RoleName.DIRECTOR,
+        'supplier_orders:confirm_client_delivery',
+      ),
+    ).toBe(true);
+
+    for (const roleName of TARGET_ROLE_NAMES) {
+      if (
+        roleName === RoleName.MANAGER ||
+        roleName === RoleName.HEAD ||
+        roleName === RoleName.DIRECTOR
+      ) {
+        continue;
+      }
+
+      expect(
+        roleHasPermission(roleName, 'supplier_orders:confirm_client_delivery'),
+      ).toBe(false);
+    }
+  });
+
+  it('gives installation schedule and supervisor confirmation only to HEAD and DIRECTOR', () => {
+    for (const slug of [
+      'installation:schedule',
+      'installation:confirm_supervisor',
+    ] as const) {
+      expect(roleHasPermission(RoleName.HEAD, slug)).toBe(true);
+      expect(roleHasPermission(RoleName.DIRECTOR, slug)).toBe(true);
+
+      for (const roleName of TARGET_ROLE_NAMES) {
+        if (roleName === RoleName.HEAD || roleName === RoleName.DIRECTOR) {
+          continue;
+        }
+
+        expect(roleHasPermission(roleName, slug)).toBe(false);
+      }
+    }
+  });
+
+  it('gives installation:assess to INSTALLER, HEAD and DIRECTOR only', () => {
+    expect(roleHasPermission(RoleName.INSTALLER, 'installation:assess')).toBe(
+      true,
+    );
+    expect(roleHasPermission(RoleName.HEAD, 'installation:assess')).toBe(true);
+    expect(roleHasPermission(RoleName.DIRECTOR, 'installation:assess')).toBe(
+      true,
+    );
+
+    for (const roleName of TARGET_ROLE_NAMES) {
+      if (
+        roleName === RoleName.INSTALLER ||
+        roleName === RoleName.HEAD ||
+        roleName === RoleName.DIRECTOR
+      ) {
+        continue;
+      }
+
+      expect(roleHasPermission(roleName, 'installation:assess')).toBe(false);
+    }
+  });
+
+  it('gives installer work confirmation only to INSTALLER', () => {
+    expect(
+      roleHasPermission(RoleName.INSTALLER, 'installation:confirm_work'),
+    ).toBe(true);
+
+    for (const roleName of TARGET_ROLE_NAMES) {
+      if (roleName === RoleName.INSTALLER) {
+        continue;
+      }
+
+      expect(roleHasPermission(roleName, 'installation:confirm_work')).toBe(
+        false,
+      );
+    }
   });
 
   it('gives DIRECTOR read_all visibility without unrelated operational mutations', () => {
     expect(roleHasPermission(RoleName.DIRECTOR, 'leads:read_all')).toBe(true);
     expect(roleHasPermission(RoleName.DIRECTOR, 'deals:read_all')).toBe(true);
     expect(roleHasPermission(RoleName.DIRECTOR, 'quotes:read_all')).toBe(true);
-    expect(roleHasPermission(RoleName.DIRECTOR, 'payments:confirm')).toBe(false);
-    expect(roleHasPermission(RoleName.DIRECTOR, 'leads:commercial_qualify')).toBe(
+    expect(roleHasPermission(RoleName.DIRECTOR, 'payments:confirm')).toBe(
+      false,
+    );
+    expect(
+      roleHasPermission(RoleName.DIRECTOR, 'leads:commercial_qualify'),
+    ).toBe(false);
+    expect(
+      roleHasPermission(RoleName.MANAGER, 'leads:commercial_qualify'),
+    ).toBe(false);
+    expect(roleHasPermission(RoleName.ADMIN, 'leads:commercial_qualify')).toBe(
       false,
     );
     expect(roleHasPermission(RoleName.DIRECTOR, 'quotes:approve')).toBe(false);
     expect(roleHasPermission(RoleName.DIRECTOR, 'quotes:client_accept')).toBe(
       false,
     );
-    expect(roleHasPermission(RoleName.DIRECTOR, 'inventory:manage')).toBe(false);
+    expect(roleHasPermission(RoleName.DIRECTOR, 'inventory:manage')).toBe(
+      false,
+    );
     expect(roleHasPermission(RoleName.DIRECTOR, 'admin:queues')).toBe(false);
   });
 
@@ -150,5 +276,33 @@ describe('permission matrix', () => {
 
       expect(roleHasPermission(roleName, 'supplier_orders:manage')).toBe(false);
     }
+  });
+
+  it('separates warehouse purchase planning from physical receiving', () => {
+    expect(roleHasPermission(RoleName.HEAD, 'warehouse_purchases:plan')).toBe(
+      true,
+    );
+    expect(
+      roleHasPermission(RoleName.DIRECTOR, 'warehouse_purchases:plan'),
+    ).toBe(true);
+    expect(
+      roleHasPermission(RoleName.STOREKEEPER, 'warehouse_purchases:receive'),
+    ).toBe(true);
+
+    expect(
+      roleHasPermission(RoleName.STOREKEEPER, 'warehouse_purchases:plan'),
+    ).toBe(false);
+    expect(
+      roleHasPermission(RoleName.HEAD, 'warehouse_purchases:receive'),
+    ).toBe(false);
+    expect(
+      roleHasPermission(RoleName.DIRECTOR, 'warehouse_purchases:receive'),
+    ).toBe(false);
+    expect(roleHasPermission(RoleName.ADMIN, 'warehouse_purchases:plan')).toBe(
+      false,
+    );
+    expect(
+      roleHasPermission(RoleName.ADMIN, 'warehouse_purchases:receive'),
+    ).toBe(false);
   });
 });

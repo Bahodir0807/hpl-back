@@ -6,6 +6,7 @@ export const HPL_SELLING_COEFFICIENT = new Prisma.Decimal('2');
 
 export const CURRENCY_RATES_READ_PERMISSION = 'currency_rates:read';
 export const CURRENCY_RATES_MANAGE_PERMISSION = 'currency_rates:manage';
+export const PANEL_PRICING_MANAGE_PERMISSION = 'panel_pricing:manage';
 
 /** Development/test fixture only. Not a live market rate. */
 export const HPL_FIXTURE_CNY_USD_RATE = '0.1';

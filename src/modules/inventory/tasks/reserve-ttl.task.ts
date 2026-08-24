@@ -5,8 +5,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { InventoryService } from '../inventory.service';
 
 const RESERVE_TTL_MS = 3 * 24 * 60 * 60 * 1000;
-const AUTO_CANCEL_COMMENT =
-  'Автоматическая отмена: истек TTL резерва (3 дня)';
+const AUTO_CANCEL_COMMENT = 'Автоматическая отмена: истек TTL резерва (3 дня)';
 
 @Injectable()
 export class ReserveTtlTask {

@@ -12,6 +12,7 @@ export enum FileRelatedType {
   ORDER = 'ORDER',
   PRODUCT = 'PRODUCT',
   TASK = 'TASK',
+  QUOTE = 'QUOTE',
 }
 
 export class UploadFileDto {

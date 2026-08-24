@@ -1,12 +1,30 @@
 import { BadRequestException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
 import { PanelQuantityCalculator } from './panel-quantity-calculator.service';
 
 describe('PanelQuantityCalculator', () => {
   const calculator = new PanelQuantityCalculator();
   const standardSize = {
-    areaM2: new Prisma.Decimal('2.9768'),
+    widthMm: 1220,
+    heightMm: 2440,
   };
+  const size1830x3050 = {
+    widthMm: 1830,
+    heightMm: 3050,
+  };
+
+  it('calculates 180 sheets for 1830×3050 and 1000 m²', () => {
+    const result = calculator.calculate(1000, size1830x3050);
+
+    expect(result.sheetsCount).toBe(180);
+  });
+
+  it('always rounds a fractional sheet count up', () => {
+    const exactOneSheet = calculator.calculate(5.5815, size1830x3050);
+    const justOverOneSheet = calculator.calculate(5.5816, size1830x3050);
+
+    expect(exactOneSheet.sheetsCount).toBe(1);
+    expect(justOverOneSheet.sheetsCount).toBe(2);
+  });
 
   it('calculates sheets and waste for a standard area', () => {
     const result = calculator.calculate(15.5, standardSize);

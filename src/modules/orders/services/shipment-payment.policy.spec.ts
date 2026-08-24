@@ -8,9 +8,7 @@ import {
 
 describe('shipment-payment.policy', () => {
   it('allows shipment only when paymentStatus is PAID', () => {
-    expect(() =>
-      assertPaidForClientShipment(PaymentStatus.PAID),
-    ).not.toThrow();
+    expect(() => assertPaidForClientShipment(PaymentStatus.PAID)).not.toThrow();
   });
 
   it.each([
@@ -28,17 +26,17 @@ describe('shipment-payment.policy', () => {
   });
 
   it('treats supplier SHIPPED and DELIVERED as client shipment', () => {
-    expect(
-      isClientShipmentSupplierStatus(SupplierOrderStatus.SHIPPED),
-    ).toBe(true);
-    expect(
-      isClientShipmentSupplierStatus(SupplierOrderStatus.DELIVERED),
-    ).toBe(true);
+    expect(isClientShipmentSupplierStatus(SupplierOrderStatus.SHIPPED)).toBe(
+      true,
+    );
+    expect(isClientShipmentSupplierStatus(SupplierOrderStatus.DELIVERED)).toBe(
+      true,
+    );
     expect(
       isClientShipmentSupplierStatus(SupplierOrderStatus.READY_FOR_SHIPMENT),
     ).toBe(false);
-    expect(
-      isClientShipmentSupplierStatus(SupplierOrderStatus.DRAFT),
-    ).toBe(false);
+    expect(isClientShipmentSupplierStatus(SupplierOrderStatus.DRAFT)).toBe(
+      false,
+    );
   });
 });

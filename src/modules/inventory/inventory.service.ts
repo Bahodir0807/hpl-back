@@ -18,6 +18,7 @@ import { CreateExpectedReceiptDto } from './dto/create-expected-receipt.dto';
 import { FilterExpectedReceiptDto } from './dto/filter-expected-receipt.dto';
 import { FilterStockBalanceDto } from './dto/filter-stock-balance.dto';
 import { ReceiveExpectedReceiptDto } from './dto/receive-expected-receipt.dto';
+import { UpdateWarehousePurchaseDto } from './dto/update-warehouse-purchase.dto';
 
 type PrismaClientLike = Prisma.TransactionClient | PrismaService;
 
@@ -53,9 +54,30 @@ type StockBalanceListResult = {
 type ExpectedReceiptListItem = Prisma.ExpectedReceiptGetPayload<{
   include: {
     supplier: true;
+    createdBy: {
+      select: {
+        id: true;
+        email: true;
+        firstName: true;
+        lastName: true;
+      };
+    };
     items: {
       include: {
         product: true;
+      };
+    };
+    receiptEvents: {
+      include: {
+        items: true;
+        receivedBy: {
+          select: {
+            id: true;
+            email: true;
+            firstName: true;
+            lastName: true;
+          };
+        };
       };
     };
   };
@@ -140,10 +162,32 @@ export class InventoryService {
         where,
         include: {
           supplier: true,
+          createdBy: {
+            select: {
+              id: true,
+              email: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
           items: {
             include: {
               product: true,
             },
+          },
+          receiptEvents: {
+            include: {
+              items: true,
+              receivedBy: {
+                select: {
+                  id: true,
+                  email: true,
+                  firstName: true,
+                  lastName: true,
+                },
+              },
+            },
+            orderBy: { receivedAt: 'desc' },
           },
         },
         orderBy: { expectedDate: 'desc' },
@@ -415,9 +459,36 @@ export class InventoryService {
     tx: Prisma.TransactionClient,
     actorId?: string,
   ): Promise<void> {
+    const quantitiesByProduct = new Map<string, number>();
     for (const item of items) {
+      quantitiesByProduct.set(
+        item.productId,
+        (quantitiesByProduct.get(item.productId) ?? 0) + item.quantity,
+      );
+    }
+
+    for (const [productId, quantity] of quantitiesByProduct) {
+      const reservations = await tx.stockReservation.findMany({
+        where: {
+          orderId,
+          productId,
+          status: StockReservationStatus.ACTIVE,
+        },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+      const reservedQuantity = reservations.reduce(
+        (sum, reservation) => sum + reservation.quantity,
+        0,
+      );
+
+      if (reservedQuantity + Number.EPSILON < quantity) {
+        throw new ConflictException(
+          `Insufficient active reservation for product ${productId}`,
+        );
+      }
+
       const balance = await tx.stockBalance.findUnique({
-        where: { productId: item.productId },
+        where: { productId },
         select: {
           id: true,
           version: true,
@@ -428,20 +499,20 @@ export class InventoryService {
 
       if (!balance) {
         throw new NotFoundException(
-          `Stock balance not found for product ${item.productId}`,
+          `Stock balance not found for product ${productId}`,
         );
       }
 
       const updated = await tx.stockBalance.updateMany({
         where: {
-          productId: item.productId,
-          onHand: { gte: item.quantity },
-          reserved: { gte: item.quantity },
+          productId,
+          onHand: { gte: quantity },
+          reserved: { gte: quantity },
           version: balance.version,
         },
         data: {
-          onHand: { decrement: item.quantity },
-          reserved: { decrement: item.quantity },
+          onHand: { decrement: quantity },
+          reserved: { decrement: quantity },
           updatedBy: orderId,
           version: { increment: 1 },
         },
@@ -449,18 +520,36 @@ export class InventoryService {
 
       if (updated.count === 0) {
         throw new ConflictException(
-          `Insufficient stock or concurrent modification for product ${item.productId}`,
+          `Insufficient stock or concurrent modification for product ${productId}`,
         );
       }
 
-      await tx.stockReservation.updateMany({
-        where: {
-          orderId,
-          productId: item.productId,
-          status: StockReservationStatus.ACTIVE,
-        },
-        data: { status: StockReservationStatus.FULFILLED },
-      });
+      let remaining = quantity;
+      for (const reservation of reservations) {
+        if (remaining <= Number.EPSILON) {
+          break;
+        }
+
+        const consumed = Math.min(remaining, reservation.quantity);
+        const fullyConsumed = reservation.quantity - consumed <= Number.EPSILON;
+        const claimed = await tx.stockReservation.updateMany({
+          where: {
+            id: reservation.id,
+            status: StockReservationStatus.ACTIVE,
+            quantity: reservation.quantity,
+          },
+          data: fullyConsumed
+            ? { status: StockReservationStatus.FULFILLED }
+            : { quantity: { decrement: consumed } },
+        });
+
+        if (claimed.count === 0) {
+          throw new ConflictException(
+            `Reservation modified concurrently for product ${productId}`,
+          );
+        }
+        remaining -= consumed;
+      }
 
       await tx.auditLog.create({
         data: {
@@ -474,10 +563,10 @@ export class InventoryService {
           },
           newValue: {
             orderId,
-            productId: item.productId,
-            quantity: item.quantity,
-            onHand: balance.onHand - item.quantity,
-            reserved: balance.reserved - item.quantity,
+            productId,
+            quantity,
+            onHand: balance.onHand - quantity,
+            reserved: balance.reserved - quantity,
           },
         },
       });
@@ -486,11 +575,19 @@ export class InventoryService {
 
   async createExpectedReceipt(
     dto: CreateExpectedReceiptDto,
+    actorId?: string,
   ): Promise<ExpectedReceipt> {
-    return this.prisma.expectedReceipt.create({
+    if (dto.items.length === 0) {
+      throw new BadRequestException('Warehouse purchase must contain items');
+    }
+
+    const receipt = await this.prisma.expectedReceipt.create({
       data: {
         supplierId: dto.supplierId,
+        orderedAt: dto.orderedAt ?? new Date(),
         expectedDate: dto.expectedDate,
+        comment: dto.comment,
+        createdById: actorId,
         items: {
           create: dto.items.map((item) => ({
             productId: item.productId,
@@ -500,10 +597,156 @@ export class InventoryService {
       },
       include: {
         supplier: true,
+        createdBy: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
         items: {
           include: { product: true },
         },
+        receiptEvents: {
+          include: { items: true },
+        },
       },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        userId: actorId,
+        action: 'WAREHOUSE_PURCHASE_CREATED',
+        entityType: 'ExpectedReceipt',
+        entityId: receipt.id,
+        newValue: {
+          supplierId: receipt.supplierId,
+          orderedAt: receipt.orderedAt,
+          expectedDate: receipt.expectedDate,
+          itemCount: receipt.items.length,
+        },
+      },
+    });
+
+    return receipt;
+  }
+
+  async updateWarehousePurchase(
+    id: string,
+    dto: UpdateWarehousePurchaseDto,
+    actorId?: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const receipt = await this.lockExpectedReceipt(tx, id);
+
+      if (receipt.status === ExpectedReceiptStatus.CANCELLED) {
+        throw new BadRequestException(
+          'Cancelled warehouse purchase cannot be updated',
+        );
+      }
+
+      if (dto.items) {
+        for (const itemUpdate of dto.items) {
+          const item = receipt.items.find(
+            (receiptItem) => receiptItem.id === itemUpdate.itemId,
+          );
+
+          if (!item) {
+            throw new NotFoundException(
+              `Warehouse purchase item not found: ${itemUpdate.itemId}`,
+            );
+          }
+
+          if (itemUpdate.orderedQuantity < item.receivedQuantity) {
+            throw new BadRequestException(
+              'Ordered quantity cannot be reduced below already received quantity',
+            );
+          }
+
+          await tx.expectedReceiptItem.update({
+            where: { id: item.id },
+            data: { quantity: itemUpdate.orderedQuantity },
+          });
+        }
+      }
+
+      const updatedItems = await tx.expectedReceiptItem.findMany({
+        where: { expectedReceiptId: id },
+      });
+      const status = this.calculateReceiptStatus(updatedItems);
+
+      await tx.expectedReceipt.update({
+        where: { id },
+        data: {
+          expectedDate: dto.expectedDate,
+          comment: dto.comment,
+          status,
+        },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId: actorId,
+          action: 'WAREHOUSE_PURCHASE_UPDATED',
+          entityType: 'ExpectedReceipt',
+          entityId: id,
+          oldValue: {
+            expectedDate: receipt.expectedDate,
+            comment: receipt.comment,
+            items: receipt.items.map((item) => ({
+              itemId: item.id,
+              quantity: item.quantity,
+            })),
+          },
+          newValue: {
+            expectedDate: dto.expectedDate ?? receipt.expectedDate,
+            comment: dto.comment ?? receipt.comment,
+            items: updatedItems.map((item) => ({
+              itemId: item.id,
+              quantity: item.quantity,
+              receivedQuantity: item.receivedQuantity,
+            })),
+            status,
+          },
+        },
+      });
+
+      return this.getExpectedReceiptById(id, tx);
+    });
+  }
+
+  async cancelWarehousePurchase(id: string, actorId?: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const receipt = await this.lockExpectedReceipt(tx, id);
+
+      if (receipt.status === ExpectedReceiptStatus.CANCELLED) {
+        return this.getExpectedReceiptById(id, tx);
+      }
+
+      if (receipt.items.some((item) => item.receivedQuantity > 0)) {
+        throw new BadRequestException(
+          'Warehouse purchase cannot be cancelled after receiving begins',
+        );
+      }
+
+      await tx.expectedReceipt.update({
+        where: { id },
+        data: { status: ExpectedReceiptStatus.CANCELLED },
+      });
+
+      await tx.auditLog.create({
+        data: {
+          userId: actorId,
+          action: 'WAREHOUSE_PURCHASE_CANCELLED',
+          entityType: 'ExpectedReceipt',
+          entityId: id,
+          oldValue: { status: receipt.status },
+          newValue: { status: ExpectedReceiptStatus.CANCELLED },
+        },
+      });
+
+      return this.getExpectedReceiptById(id, tx);
     });
   }
 
@@ -512,16 +755,46 @@ export class InventoryService {
     dto: ReceiveExpectedReceiptDto,
     actorId?: string,
   ) {
-    const receipt = await this.prisma.expectedReceipt.findUnique({
-      where: { id },
-      include: { items: true },
-    });
-
-    if (!receipt) {
-      throw new NotFoundException('Expected receipt not found');
+    if (dto.items.length === 0) {
+      throw new BadRequestException('Warehouse receipt must contain items');
     }
 
     return this.prisma.$transaction(async (tx) => {
+      if (!actorId) {
+        throw new BadRequestException('Receiving actor is required');
+      }
+
+      const receipt = await this.lockExpectedReceipt(tx, id);
+
+      if (dto.clientReceiptId) {
+        const existingEvent = await tx.expectedReceiptEvent.findFirst({
+          where: {
+            expectedReceiptId: id,
+            clientReceiptId: dto.clientReceiptId,
+          },
+          select: { id: true },
+        });
+
+        if (existingEvent) {
+          return this.getExpectedReceiptById(id, tx);
+        }
+      }
+
+      if (receipt.status === ExpectedReceiptStatus.CANCELLED) {
+        throw new BadRequestException(
+          'Cancelled warehouse purchase cannot be received',
+        );
+      }
+
+      const event = await tx.expectedReceiptEvent.create({
+        data: {
+          expectedReceiptId: id,
+          receivedById: actorId,
+          comment: dto.comment,
+          clientReceiptId: dto.clientReceiptId,
+        },
+      });
+
       for (const receivedItem of dto.items) {
         const item = receipt.items.find(
           (receiptItem) => receiptItem.id === receivedItem.itemId,
@@ -533,8 +806,14 @@ export class InventoryService {
           );
         }
 
-        const newReceivedQuantity =
-          item.receivedQuantity + receivedItem.receivedQuantity;
+        const acceptedQuantity =
+          receivedItem.acceptedQuantity ?? receivedItem.receivedQuantity;
+
+        if (!acceptedQuantity || acceptedQuantity <= 0) {
+          throw new BadRequestException('Accepted quantity must be positive');
+        }
+
+        const newReceivedQuantity = item.receivedQuantity + acceptedQuantity;
 
         if (newReceivedQuantity > item.quantity) {
           throw new BadRequestException(
@@ -542,23 +821,48 @@ export class InventoryService {
           );
         }
 
-        await tx.expectedReceiptItem.update({
-          where: { id: item.id },
-          data: { receivedQuantity: newReceivedQuantity },
+        if ((receivedItem.rejectedQuantity ?? 0) < 0) {
+          throw new BadRequestException('Rejected quantity cannot be negative');
+        }
+
+        const updated = await tx.expectedReceiptItem.updateMany({
+          where: {
+            id: item.id,
+            receivedQuantity: {
+              lte: item.quantity - acceptedQuantity,
+            },
+          },
+          data: { receivedQuantity: { increment: acceptedQuantity } },
+        });
+
+        if (updated.count === 0) {
+          throw new BadRequestException(
+            'Received quantity exceeds expected quantity',
+          );
+        }
+
+        await tx.expectedReceiptEventItem.create({
+          data: {
+            receiptEventId: event.id,
+            expectedReceiptItemId: item.id,
+            productId: item.productId,
+            acceptedQuantity,
+            rejectedQuantity: receivedItem.rejectedQuantity ?? 0,
+          },
         });
 
         await this.applyReceiptQuantity(
           tx,
           item.productId,
-          receivedItem.receivedQuantity,
+          acceptedQuantity,
           actorId,
         );
       }
 
-      // Контейнер пришёл — пытаемся дорезервировать заказы в WAITING_STOCK
-      // по FIFO (кто раньше заказал, тот раньше получает товар).
       await this.processWaitingOrders(tx, actorId);
 
+      // Контейнер пришёл — пытаемся дорезервировать заказы в WAITING_STOCK
+      // по FIFO (кто раньше заказал, тот раньше получает товар).
       const updatedItems = await tx.expectedReceiptItem.findMany({
         where: { expectedReceiptId: id },
       });
@@ -574,7 +878,8 @@ export class InventoryService {
             status,
             items: dto.items.map((item) => ({
               itemId: item.itemId,
-              receivedQuantity: item.receivedQuantity,
+              acceptedQuantity: item.acceptedQuantity,
+              rejectedQuantity: item.rejectedQuantity ?? 0,
             })),
           },
         },
@@ -585,8 +890,30 @@ export class InventoryService {
         data: { status },
         include: {
           supplier: true,
+          createdBy: {
+            select: {
+              id: true,
+              email: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
           items: {
             include: { product: true },
+          },
+          receiptEvents: {
+            include: {
+              items: true,
+              receivedBy: {
+                select: {
+                  id: true,
+                  email: true,
+                  firstName: true,
+                  lastName: true,
+                },
+              },
+            },
+            orderBy: { receivedAt: 'desc' },
           },
         },
       });
@@ -596,6 +923,65 @@ export class InventoryService {
   // FIFO-раздача свежепришедшего товара заказам в WAITING_STOCK.
   // Заказ, под который не хватило товара, остаётся в WAITING_STOCK
   // и ждёт следующий контейнер — processReceipt при этом не откатывается.
+  private async getExpectedReceiptById(
+    id: string,
+    client: PrismaClientLike = this.prisma,
+  ) {
+    const receipt = await client.expectedReceipt.findUnique({
+      where: { id },
+      include: {
+        supplier: true,
+        createdBy: {
+          select: {
+            id: true,
+            email: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+        items: {
+          include: { product: true },
+        },
+        receiptEvents: {
+          include: {
+            items: true,
+            receivedBy: {
+              select: {
+                id: true,
+                email: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+          orderBy: { receivedAt: 'desc' },
+        },
+      },
+    });
+
+    if (!receipt) {
+      throw new NotFoundException('Expected receipt not found');
+    }
+
+    return receipt;
+  }
+
+  private async lockExpectedReceipt(tx: Prisma.TransactionClient, id: string) {
+    const claimed = await tx.expectedReceipt.updateMany({
+      where: { id },
+      data: { updatedAt: new Date() },
+    });
+
+    if (claimed.count === 0) {
+      throw new NotFoundException('Expected receipt not found');
+    }
+
+    return tx.expectedReceipt.findUniqueOrThrow({
+      where: { id },
+      include: { items: true },
+    });
+  }
+
   private async processWaitingOrders(
     tx: Prisma.TransactionClient,
     actorId?: string,

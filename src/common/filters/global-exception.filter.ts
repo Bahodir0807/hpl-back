@@ -17,6 +17,7 @@ type ErrorResponseBody = {
   method: string;
   message: string | string[];
   errorCode?: string;
+  details?: Record<string, unknown>;
   requestId?: string;
   stack?: string;
 };
@@ -80,6 +81,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       message: this.resolveMessage(exception),
       requestId: request.requestId,
       ...this.resolveErrorCode(exception),
+      ...this.resolveDetails(exception),
     };
 
     if (!isProduction && exception instanceof Error) {
@@ -149,6 +151,29 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       typeof response.errorCode === 'string'
     ) {
       return { errorCode: response.errorCode };
+    }
+
+    return {};
+  }
+
+  private resolveDetails(
+    exception: unknown,
+  ): Pick<ErrorResponseBody, 'details'> {
+    if (!(exception instanceof HttpException)) {
+      return {};
+    }
+
+    const response = exception.getResponse();
+
+    if (
+      typeof response === 'object' &&
+      response !== null &&
+      'details' in response &&
+      typeof response.details === 'object' &&
+      response.details !== null &&
+      !Array.isArray(response.details)
+    ) {
+      return { details: response.details as Record<string, unknown> };
     }
 
     return {};

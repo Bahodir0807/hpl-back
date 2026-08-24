@@ -1,6 +1,10 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ActivityType, CommercialQualificationStatus, LeadStatus } from '@prisma/client';
+import {
+  ActivityType,
+  CommercialQualificationStatus,
+  LeadStatus,
+} from '@prisma/client';
 import { BusinessException } from '../../common/exceptions/business.exception';
 import type { Env } from '../../config/env.schema';
 import { PrismaService } from '../prisma/prisma.service';
@@ -69,7 +73,9 @@ export class LeadVirtualStatusService {
       return 'quote_sent';
     }
 
-    if (activities.some((activity) => activity.type === ActivityType.CALCULATION)) {
+    if (
+      activities.some((activity) => activity.type === ActivityType.CALCULATION)
+    ) {
       return 'calculator_used';
     }
 
@@ -109,7 +115,9 @@ export class LeadVirtualStatusService {
       return this.poolUserIdCache;
     }
 
-    const email = this.configService.get('LEAD_POOL_USER_EMAIL', { infer: true });
+    const email = this.configService.get('LEAD_POOL_USER_EMAIL', {
+      infer: true,
+    });
     const poolUser = await this.prisma.user.findUnique({
       where: { email },
       select: { id: true },

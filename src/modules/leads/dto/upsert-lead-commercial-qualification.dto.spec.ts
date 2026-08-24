@@ -7,14 +7,25 @@ describe('UpsertLeadCommercialQualificationDto', () => {
   const completePayload = {
     supplierId: '11111111-1111-4111-8111-111111111111',
     qualityClassId: '22222222-2222-4222-8222-222222222222',
+    targetDate: '2026-10-01T00:00:00.000Z',
     decisionComment: 'Tianran Premium for facade',
   };
 
-  it('accepts supplier, quality and decision comment', async () => {
+  it('accepts supplier, quality, commercial timeline and decision comment', async () => {
     const dto = plainToInstance(
       UpsertLeadCommercialQualificationDto,
       completePayload,
     );
+    const errors = await validate(dto);
+    expect(errors).toHaveLength(0);
+  });
+
+  it('accepts Stage-2 without targetDate for current frontend compatibility', async () => {
+    const dto = plainToInstance(UpsertLeadCommercialQualificationDto, {
+      supplierId: completePayload.supplierId,
+      qualityClassId: completePayload.qualityClassId,
+      decisionComment: completePayload.decisionComment,
+    });
     const errors = await validate(dto);
     expect(errors).toHaveLength(0);
   });

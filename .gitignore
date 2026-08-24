@@ -9,3 +9,8 @@ node_modules
 dist/
 dev.db
 /uploads
+
+# Local runtime and audit artifacts
+*.log
+/tmp/
+/tmp-visual/

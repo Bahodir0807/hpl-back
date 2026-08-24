@@ -1,4 +1,9 @@
-import { SEEDED_SUPPLIER_QUALITY_MAPPINGS, panelTypeCodeForApplication } from '../pricing/hpl-quality-matrix';
+import { HPL_QUALITY_CLASS_CODES } from '../hpl-catalog';
+import {
+  CRM_SUPPLIER_CODES,
+  SEEDED_SUPPLIER_QUALITY_MAPPINGS,
+  panelTypeCodeForApplication,
+} from '../pricing/hpl-quality-matrix';
 
 describe('HPL supplier quality matrix', () => {
   const key = (
@@ -9,57 +14,57 @@ describe('HPL supplier quality matrix', () => {
 
   const seeded = new Set(
     SEEDED_SUPPLIER_QUALITY_MAPPINGS.map((mapping) =>
-      key(mapping.supplierCode, mapping.panelTypeCode, mapping.qualityClassCode),
+      key(
+        mapping.supplierCode,
+        mapping.panelTypeCode,
+        mapping.qualityClassCode,
+      ),
     ),
   );
 
-  it('confirms Tianran interior economy and exterior medium/premium', () => {
-    expect(seeded.has(key('tianran', 'interior', 'economy'))).toBe(true);
-    expect(seeded.has(key('tianran', 'exterior', 'medium'))).toBe(true);
-    expect(seeded.has(key('tianran', 'exterior', 'premium'))).toBe(true);
+  const standardTypes = [
+    'interior',
+    'exterior_with_uv',
+    'laboratory',
+    'furniture',
+  ];
+
+  it('gives every CRM manufacturer economy, medium and premium for every standard type', () => {
+    for (const supplierCode of CRM_SUPPLIER_CODES) {
+      for (const panelTypeCode of standardTypes) {
+        for (const qualityClassCode of HPL_QUALITY_CLASS_CODES) {
+          expect(
+            seeded.has(key(supplierCode, panelTypeCode, qualityClassCode)),
+          ).toBe(true);
+        }
+      }
+    }
   });
 
-  it('rejects Tianran exterior economy', () => {
-    expect(seeded.has(key('tianran', 'exterior', 'economy'))).toBe(false);
-  });
-
-  it('confirms Wuya quality is Economy only', () => {
-    const wuya = SEEDED_SUPPLIER_QUALITY_MAPPINGS.filter(
-      (mapping) => mapping.supplierCode === 'wuya',
-    );
-    expect(wuya.every((mapping) => mapping.qualityClassCode === 'economy')).toBe(
-      true,
-    );
-    expect(seeded.has(key('wuya', 'exterior', 'medium'))).toBe(false);
-    expect(seeded.has(key('wuya', 'exterior', 'premium'))).toBe(false);
-  });
-
-  it('confirms Polybet quality is Premium only', () => {
-    const polybet = SEEDED_SUPPLIER_QUALITY_MAPPINGS.filter(
-      (mapping) => mapping.supplierCode === 'polybet',
-    );
+  it('does not invent a fourth quality class', () => {
+    expect([...HPL_QUALITY_CLASS_CODES]).toEqual([
+      'economy',
+      'medium',
+      'premium',
+    ]);
     expect(
-      polybet.every((mapping) => mapping.qualityClassCode === 'premium'),
+      SEEDED_SUPPLIER_QUALITY_MAPPINGS.every((mapping) =>
+        HPL_QUALITY_CLASS_CODES.includes(mapping.qualityClassCode),
+      ),
     ).toBe(true);
-    expect(seeded.has(key('polybet', 'exterior', 'economy'))).toBe(false);
-    expect(seeded.has(key('polybet', 'interior', 'economy'))).toBe(false);
-  });
-
-  it('treats Wuya/Polybet interior+exterior applicability as a working assumption', () => {
-    expect(seeded.has(key('wuya', 'exterior', 'economy'))).toBe(true);
-    expect(seeded.has(key('wuya', 'interior', 'economy'))).toBe(true);
-    expect(seeded.has(key('polybet', 'exterior', 'premium'))).toBe(true);
-    expect(seeded.has(key('polybet', 'interior', 'premium'))).toBe(true);
   });
 
   it('does not seed Local or India matrices', () => {
     for (const mapping of SEEDED_SUPPLIER_QUALITY_MAPPINGS) {
-      expect(['tianran', 'wuya', 'polybet']).toContain(mapping.supplierCode);
+      expect([...CRM_SUPPLIER_CODES]).toContain(mapping.supplierCode);
     }
   });
 
-  it('maps INTERIOR/EXTERIOR to catalog panel type codes', () => {
+  it('maps INTERIOR/EXTERIOR_WITH_UV to catalog panel type codes', () => {
     expect(panelTypeCodeForApplication('INTERIOR')).toBe('interior');
-    expect(panelTypeCodeForApplication('EXTERIOR')).toBe('exterior');
+    expect(panelTypeCodeForApplication('EXTERIOR_WITH_UV')).toBe(
+      'exterior_with_uv',
+    );
+    expect(panelTypeCodeForApplication('EXTERIOR')).toBe('exterior_with_uv');
   });
 });

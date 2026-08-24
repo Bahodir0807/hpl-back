@@ -20,8 +20,11 @@ import {
 } from '@prisma/client';
 import { hash } from 'bcryptjs';
 import { seedServiceAccounts } from './seed/service-accounts';
-import { seedPanels, seedFixtureCnyUsdRate } from './seed/panels';
-import { seedCalculatorProduct } from './seed/calculator-product';
+import { seedFixtureCnyUsdRate } from './seed/panels';
+import {
+  printReferenceSeedReport,
+  seedReferenceConfiguration,
+} from './seed/reference';
 import { synchronizeRbac } from '../src/auth/rbac/synchronize-rbac';
 
 let prisma: PrismaClient;
@@ -1143,18 +1146,21 @@ async function main(): Promise<void> {
         userId: managerElena.id,
         period: currentMonth,
         targetAmount: new Prisma.Decimal(6_000_000),
+        currencyCode: 'UZS',
         actualAmount: new Prisma.Decimal(volgaTotal),
       },
       {
         userId: managerIgor.id,
         period: currentMonth,
         targetAmount: new Prisma.Decimal(10_000_000),
+        currencyCode: 'UZS',
         actualAmount: new Prisma.Decimal(0),
       },
       {
         userId: head.id,
         period: currentMonth,
         targetAmount: new Prisma.Decimal(25_000_000),
+        currencyCode: 'UZS',
         actualAmount: new Prisma.Decimal(volgaTotal),
       },
     ],
@@ -1182,8 +1188,8 @@ async function main(): Promise<void> {
   }
 
   await seedServiceAccounts(prisma);
-  await seedPanels(prisma);
-  await seedCalculatorProduct(prisma);
+  const referenceReport = await seedReferenceConfiguration(prisma);
+  printReferenceSeedReport(referenceReport);
 
   if (!isProduction) {
     const director = await prisma.user.findUnique({

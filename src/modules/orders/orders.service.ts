@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  HttpStatus,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -10,31 +11,30 @@ import {
   DeliveryStatus,
   ActivityType,
   DealStage,
+  FulfillmentSource,
   Order,
-  OrderItemSource,
   OrderStatus,
   Payment,
   PaymentRecordStatus,
   PaymentStatus,
   Prisma,
   ProductPriceType,
-  StockReservationStatus,
 } from '@prisma/client';
 import { InventoryService } from '../inventory/inventory.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
-import {
-  POLICY_FORBIDDEN_MESSAGE,
-} from '../../common/enums/role.enum';
+import { POLICY_FORBIDDEN_MESSAGE } from '../../common/enums/role.enum';
 import { randomBytes } from 'node:crypto';
 import { OrderPolicyService } from './services/order-policy.service';
 import { PricingPolicyService } from './services/pricing-policy.service';
 import { assertPaidForClientShipment } from './services/shipment-payment.policy';
+import { DealCompletionService } from '../deals/deal-completion.service';
 import { ConfirmPaymentDto } from './dto/confirm-payment.dto';
 import { CreateDeliveryDto } from './dto/create-delivery.dto';
 import { CreateOrderFromDealDto } from './dto/create-order-from-deal.dto';
 import { CreatePaymentDto } from './dto/create-payment.dto';
 import { FilterOrderDto } from './dto/filter-order.dto';
+import { BusinessException } from '../../common/exceptions/business.exception';
 
 const PAYMENT_CONFIRM_PERMISSION = 'payments:confirm';
 const READ_ALL_DEALS_PERMISSION = 'deals:read_all';
@@ -92,7 +92,11 @@ type OrderListItem = Prisma.OrderGetPayload<{
 }>;
 
 type OrderListResult = {
-  items: Array<OrderListItem & { _permissions: ReturnType<OrderPolicyService['getPermissions']> }>;
+  items: Array<
+    OrderListItem & {
+      _permissions: ReturnType<OrderPolicyService['getPermissions']>;
+    }
+  >;
   total: number;
   page: number;
   limit: number;
@@ -114,6 +118,7 @@ export class OrdersService {
     private readonly inventoryService: InventoryService,
     private readonly orderPolicy: OrderPolicyService,
     private readonly pricingPolicy: PricingPolicyService,
+    private readonly dealCompletion: DealCompletionService,
   ) {}
 
   async createFromDeal(
@@ -127,7 +132,6 @@ export class OrdersService {
       where: { id: dto.dealId, deletedAt: null },
       include: {
         items: true,
-        panelQuotes: { select: { id: true } },
       },
     });
 
@@ -150,83 +154,90 @@ export class OrdersService {
       throw new BadRequestException('Order can be created only from won deal');
     }
 
+    if (!deal.fulfillmentSource) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'FULFILLMENT_SOURCE_REQUIRED',
+        'Deal fulfillment source must be selected before order creation',
+      );
+    }
+
     await this.validateDealLinePricing(user, deal.items);
 
-    const isPanelCalculatorDeal = this.isPanelCalculatorDeal(deal);
+    const usesWarehouseStock =
+      deal.fulfillmentSource === FulfillmentSource.WAREHOUSE_STOCK;
 
     try {
       return await this.prisma.$transaction(async (tx) => {
-      const order = await tx.order.create({
-        data: {
-          orderNumber: this.generateOrderNumber(),
-          dealId: deal.id,
-          status: isPanelCalculatorDeal
-            ? OrderStatus.PENDING_SUPPLIER
-            : OrderStatus.WAITING_PAYMENT,
-          totalAmount: deal.totalAmount,
-          remainingAmount: deal.totalAmount,
-          paymentTerms: dto.paymentTerms,
-          promisedDate: dto.promisedDate,
-          deliveryAddress: dto.deliveryAddress,
-          items: {
-            create: deal.items.map((item) => ({
-              productId: item.productId,
-              quantity: item.quantityM2,
-              unitPrice: item.unitPrice,
-              totalPrice: item.totalPrice,
-              source: isPanelCalculatorDeal
-                ? OrderItemSource.PANEL_CALCULATOR
-                : item.source,
-            })),
+        const order = await tx.order.create({
+          data: {
+            orderNumber: this.generateOrderNumber(),
+            dealId: deal.id,
+            status: usesWarehouseStock
+              ? OrderStatus.WAITING_PAYMENT
+              : OrderStatus.PENDING_SUPPLIER,
+            totalAmount: deal.totalAmount,
+            remainingAmount: deal.totalAmount,
+            paymentTerms: dto.paymentTerms,
+            promisedDate: dto.promisedDate,
+            deliveryAddress: dto.deliveryAddress,
+            items: {
+              create: deal.items.map((item) => ({
+                productId: item.productId,
+                quantity: item.quantityM2,
+                unitPrice: item.unitPrice,
+                totalPrice: item.totalPrice,
+                source: item.source,
+              })),
+            },
           },
-        },
-        include: {
-          items: true,
-        },
-      });
+          include: {
+            items: true,
+          },
+        });
 
-      if (!isPanelCalculatorDeal) {
-        try {
-          await this.inventoryService.reserveStock(
-            order.id,
-            order.items.map((item) => ({
-              productId: item.productId,
-              quantity: item.quantity,
-            })),
-            tx,
-            currentUserId,
-          );
+        if (usesWarehouseStock) {
+          try {
+            await this.inventoryService.reserveStock(
+              order.id,
+              order.items.map((item) => ({
+                productId: item.productId,
+                quantity: item.quantity,
+              })),
+              tx,
+              currentUserId,
+            );
 
-          await Promise.all(
-            order.items.map((item) =>
-              tx.orderItem.update({
-                where: { id: item.id },
-                data: { reservedQuantity: item.quantity },
-              }),
-            ),
-          );
-        } catch (error) {
-          if (!(error instanceof BadRequestException)) {
-            throw error;
+            await Promise.all(
+              order.items.map((item) =>
+                tx.orderItem.update({
+                  where: { id: item.id },
+                  data: { reservedQuantity: item.quantity },
+                }),
+              ),
+            );
+          } catch (error) {
+            if (!(error instanceof BadRequestException)) {
+              throw error;
+            }
+
+            await tx.order.update({
+              where: { id: order.id },
+              data: { status: OrderStatus.WAITING_STOCK },
+            });
           }
-
-          await tx.order.update({
-            where: { id: order.id },
-            data: { status: OrderStatus.WAITING_STOCK },
-          });
         }
-      }
 
-      const createdOrder = await tx.order.findUnique({
-        where: { id: order.id },
-        include: orderDetailsInclude,
-      });
+        const createdOrder = await tx.order.findUnique({
+          where: { id: order.id },
+          include: orderDetailsInclude,
+        });
 
-      if (!createdOrder) {
-        throw new NotFoundException('Order not found');
-      }
+        if (!createdOrder) {
+          throw new NotFoundException('Order not found');
+        }
 
-      return createdOrder;
+        return createdOrder;
       });
     } catch (error) {
       if (this.isUniqueConstraintOn(error, 'dealId')) {
@@ -246,10 +257,7 @@ export class OrdersService {
     }
   }
 
-  async addPayment(
-    dto: CreatePaymentDto,
-    user: CurrentUser,
-  ): Promise<Payment> {
+  async addPayment(dto: CreatePaymentDto, user: CurrentUser): Promise<Payment> {
     const order = await this.prisma.order.findFirst({
       where: { id: dto.orderId, deletedAt: null },
       include: { deal: { select: { ownerId: true } } },
@@ -363,6 +371,13 @@ export class OrdersService {
         throw new ConflictException('Order is cancelled');
       }
 
+      // Lock Deal then Order so completion finalization cannot deadlock
+      // against client-delivery / installation transactions.
+      await tx.deal.update({
+        where: { id: order.dealId },
+        data: { updatedAt: new Date() },
+      });
+
       // Портативная блокировка строки заказа (write-lock на PG и SQLite,
       // FOR UPDATE в SQLite невалиден): сериализует параллельные confirm
       // разных платежей одного заказа.
@@ -472,6 +487,18 @@ export class OrdersService {
         });
       }
 
+      if (paymentStatus === PaymentStatus.PAID) {
+        await this.dealCompletion.tryFinalize(tx, order.dealId, user.id);
+        const completedOrder = await tx.order.findUnique({
+          where: { id: payment.orderId },
+          include: orderDetailsInclude,
+        });
+        if (!completedOrder) {
+          throw new NotFoundException('Order not found');
+        }
+        return completedOrder;
+      }
+
       return updatedOrder;
     });
 
@@ -506,10 +533,7 @@ export class OrdersService {
     return this.prisma.$transaction(async (tx) => {
       // Row lock: serialize vs payment confirm and concurrent deliveries.
       // Do not write a cached paymentStatus — that would clobber a concurrent PAID.
-      await tx.order.update({
-        where: { id: dto.orderId },
-        data: { updatedAt: new Date() },
-      });
+      await this.dealCompletion.lockFulfillmentRows(tx, existingOrder.dealId);
 
       const lockedOrder = await tx.order.findUnique({
         where: { id: dto.orderId },
@@ -599,12 +623,12 @@ export class OrdersService {
         user.id,
       );
 
-      await this.updateReservationFulfillment(tx, dto.orderId);
       await this.updateOrderShipmentStatus(
         tx,
         dto.orderId,
         lockedOrder.version,
       );
+      await this.dealCompletion.tryFinalize(tx, existingOrder.dealId, user.id);
 
       return delivery;
     });
@@ -657,11 +681,7 @@ export class OrdersService {
 
       // В WAITING_STOCK активных резервов нет — releaseReservation
       // просто найдёт 0 записей, вызываем безусловно.
-      await this.inventoryService.releaseReservation(
-        orderId,
-        tx,
-        user.id,
-      );
+      await this.inventoryService.releaseReservation(orderId, tx, user.id);
 
       const updated = await tx.order.updateMany({
         where: { id: orderId, version: order.version },
@@ -829,10 +849,7 @@ export class OrdersService {
       where: {
         productId: { in: productIds },
         type: {
-          in: [
-            ProductPriceType.BASE,
-            ProductPriceType.RETAIL,
-          ],
+          in: [ProductPriceType.BASE, ProductPriceType.RETAIL],
         },
         validFrom: { lte: now },
         OR: [{ validTo: null }, { validTo: { gte: now } }],
@@ -868,8 +885,7 @@ export class OrdersService {
 
     for (const item of items) {
       const basePrice =
-        basePriceMap.get(item.productId) ??
-        retailPriceMap.get(item.productId);
+        basePriceMap.get(item.productId) ?? retailPriceMap.get(item.productId);
       const purchasePrice = Number(item.purchasePriceSnapshot);
       const quantityM2 = Number(item.quantityM2);
       const effectivePrice =
@@ -911,30 +927,6 @@ export class OrdersService {
       : PaymentStatus.PARTIALLY_PAID;
   }
 
-  private async updateReservationFulfillment(
-    tx: Prisma.TransactionClient,
-    orderId: string,
-  ): Promise<void> {
-    const orderItems = await tx.orderItem.findMany({
-      where: { orderId },
-    });
-    const allDelivered = orderItems.every(
-      (item) => item.deliveredQuantity >= item.quantity,
-    );
-
-    if (!allDelivered) {
-      return;
-    }
-
-    await tx.stockReservation.updateMany({
-      where: {
-        orderId,
-        status: StockReservationStatus.ACTIVE,
-      },
-      data: { status: StockReservationStatus.FULFILLED },
-    });
-  }
-
   private async updateOrderShipmentStatus(
     tx: Prisma.TransactionClient,
     orderId: string,
@@ -971,19 +963,6 @@ export class OrdersService {
     if (updated.count === 0) {
       throw new ConflictException('Order modified concurrently');
     }
-  }
-
-  private isPanelCalculatorDeal(deal: {
-    panelQuotes: Array<{ id: string }>;
-    items: Array<{ source: OrderItemSource }>;
-  }): boolean {
-    return (
-      deal.panelQuotes.length > 0 ||
-      (deal.items.length > 0 &&
-        deal.items.every(
-          (item) => item.source === OrderItemSource.PANEL_CALCULATOR,
-        ))
-    );
   }
 
   private generateOrderNumber(): string {

@@ -13,7 +13,7 @@ import { LeadCommercialQualificationService } from './lead-commercial-qualificat
 
 describe('LeadCommercialQualificationService Stage-2', () => {
   const prisma = {
-    lead: { findFirst: jest.fn() },
+    lead: { findFirst: jest.fn(), update: jest.fn() },
     leadQualification: { findUnique: jest.fn() },
     leadCommercialQualification: {
       findUnique: jest.fn(),
@@ -42,7 +42,7 @@ describe('LeadCommercialQualificationService Stage-2', () => {
 
   const stage1 = {
     leadId: 'lead-id',
-    application: HplApplication.EXTERIOR,
+    application: HplApplication.EXTERIOR_WITH_UV,
     panelTypeId: 'exterior-type-id',
     thicknessMm: 10,
     panelSizeId: 'size-id',
@@ -86,6 +86,10 @@ describe('LeadCommercialQualificationService Stage-2', () => {
       (fn: (tx: typeof prisma) => unknown) => fn(prisma),
     );
     prisma.lead.findFirst.mockResolvedValue(ownedLead);
+    prisma.lead.update.mockResolvedValue({
+      ...ownedLead,
+      targetDate: new Date('2026-10-01T00:00:00.000Z'),
+    });
     prisma.leadQualification.findUnique.mockResolvedValue(stage1);
     prisma.leadCommercialQualification.findUnique.mockResolvedValue(null);
     prisma.supplier.findUnique.mockResolvedValue({
@@ -98,7 +102,7 @@ describe('LeadCommercialQualificationService Stage-2', () => {
     });
     prisma.panelType.findUnique.mockResolvedValue({
       id: 'exterior-type-id',
-      code: 'exterior',
+      code: 'exterior_with_uv',
       isActive: true,
     });
     prisma.supplierQualityMapping.findFirst.mockResolvedValue({
@@ -202,20 +206,53 @@ describe('LeadCommercialQualificationService Stage-2', () => {
 
   it.each([
     ['tianran', 'interior', 'economy', HplApplication.INTERIOR, true],
-    ['tianran', 'exterior', 'medium', HplApplication.EXTERIOR, true],
-    ['tianran', 'exterior', 'premium', HplApplication.EXTERIOR, true],
-    ['tianran', 'exterior', 'economy', HplApplication.EXTERIOR, false],
-    ['wuya', 'exterior', 'economy', HplApplication.EXTERIOR, true],
-    ['polybet', 'exterior', 'premium', HplApplication.EXTERIOR, true],
+    [
+      'tianran',
+      'exterior_with_uv',
+      'medium',
+      HplApplication.EXTERIOR_WITH_UV,
+      true,
+    ],
+    [
+      'tianran',
+      'exterior_with_uv',
+      'premium',
+      HplApplication.EXTERIOR_WITH_UV,
+      true,
+    ],
+    [
+      'tianran',
+      'exterior_with_uv',
+      'economy',
+      HplApplication.EXTERIOR_WITH_UV,
+      false,
+    ],
+    [
+      'wuya',
+      'exterior_with_uv',
+      'economy',
+      HplApplication.EXTERIOR_WITH_UV,
+      true,
+    ],
+    [
+      'polybet',
+      'exterior_with_uv',
+      'premium',
+      HplApplication.EXTERIOR_WITH_UV,
+      true,
+    ],
+    ['wuya', 'furniture', 'economy', HplApplication.FURNITURE, true],
+    ['tianran', 'furniture', 'medium', HplApplication.FURNITURE, true],
+    ['polybet', 'furniture', 'premium', HplApplication.FURNITURE, true],
+    ['wuya', 'furniture', 'premium', HplApplication.FURNITURE, false],
+    ['tianran', 'furniture', 'economy', HplApplication.FURNITURE, false],
+    ['wuya', 'laboratory', 'economy', HplApplication.LABORATORY, true],
+    ['tianran', 'laboratory', 'medium', HplApplication.LABORATORY, true],
+    ['polybet', 'laboratory', 'premium', HplApplication.LABORATORY, true],
+    ['polybet', 'laboratory', 'economy', HplApplication.LABORATORY, false],
   ])(
     'matrix %s + %s + %s for %s',
-    async (
-      supplierCode,
-      panelTypeCode,
-      qualityCode,
-      application,
-      allowed,
-    ) => {
+    async (supplierCode, panelTypeCode, qualityCode, application, allowed) => {
       prisma.leadQualification.findUnique.mockResolvedValue({
         ...stage1,
         application,
@@ -259,6 +296,69 @@ describe('LeadCommercialQualificationService Stage-2', () => {
       }
     },
   );
+
+  it('lets HEAD commercially qualify FURNITURE with a valid supplier line', async () => {
+    const targetDate = new Date('2026-09-15T00:00:00.000Z');
+    prisma.leadQualification.findUnique.mockResolvedValue({
+      ...stage1,
+      application: HplApplication.FURNITURE,
+      panelTypeId: 'furniture-type-id',
+    });
+    prisma.panelType.findUnique.mockResolvedValue({
+      id: 'furniture-type-id',
+      code: 'furniture',
+      isActive: true,
+    });
+    prisma.supplier.findUnique.mockResolvedValue({
+      id: 'wuya-id',
+      code: 'wuya',
+    });
+    prisma.qualityClass.findUnique.mockResolvedValue({
+      id: 'economy-id',
+      code: 'economy',
+    });
+    prisma.supplierQualityMapping.findFirst.mockResolvedValue({
+      id: 'wuya-furniture-economy',
+    });
+    prisma.leadCommercialQualification.create.mockResolvedValue({
+      ...serializedRow,
+      supplierId: 'wuya-id',
+      qualityClassId: 'economy-id',
+      mappingId: 'wuya-furniture-economy',
+      supplier: { id: 'wuya-id', code: 'wuya', name: 'Wuya' },
+      qualityClass: { id: 'economy-id', code: 'economy', nameRu: 'Эконом' },
+    });
+
+    const result = await service.confirm(
+      'lead-id',
+      {
+        supplierId: 'wuya-id',
+        qualityClassId: 'economy-id',
+        targetDate,
+        decisionComment: 'Wuya Economy for furniture HPL',
+      } as UpsertLeadCommercialQualificationDto,
+      'head-id',
+      ['leads:commercial_qualify', 'leads:read_all'],
+    );
+
+    expect(result.supplierId).toBe('wuya-id');
+    expect(result.qualityClassId).toBe('economy-id');
+    expect(result.qualityClass).toEqual(
+      expect.objectContaining({ code: 'economy', nameRu: 'Эконом' }),
+    );
+    expect(prisma.lead.update).toHaveBeenCalledWith({
+      where: { id: 'lead-id' },
+      data: { targetDate },
+    });
+    expect(prisma.leadCommercialQualification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        supplierId: 'wuya-id',
+        qualityClassId: 'economy-id',
+        mappingId: 'wuya-furniture-economy',
+      }),
+      include: expect.anything(),
+    });
+  });
 
   it('does not mutate Stage-1 customer need fields', async () => {
     await service.confirm('lead-id', dto, 'head-id', [
@@ -352,5 +452,53 @@ describe('LeadCommercialQualificationService Stage-2', () => {
         title: 'Commercial qualification updated',
       }),
     });
+  });
+
+  it('lets HEAD persist commercial timeline onto Lead.targetDate', async () => {
+    const targetDate = new Date('2026-10-15T00:00:00.000Z');
+
+    await service.confirm(
+      'lead-id',
+      { ...dto, targetDate } as UpsertLeadCommercialQualificationDto,
+      'head-id',
+      ['leads:commercial_qualify', 'leads:read_all'],
+    );
+
+    expect(prisma.lead.update).toHaveBeenCalledWith({
+      where: { id: 'lead-id' },
+      data: { targetDate },
+    });
+    expect(prisma.leadCommercialQualification.create).toHaveBeenCalled();
+  });
+
+  it('updates targetDate without rewriting a confirmed commercial decision', async () => {
+    prisma.leadCommercialQualification.findUnique.mockResolvedValue(
+      serializedRow,
+    );
+    const targetDate = new Date('2026-11-01T00:00:00.000Z');
+
+    await service.confirm(
+      'lead-id',
+      { ...dto, targetDate } as UpsertLeadCommercialQualificationDto,
+      'head-id',
+      ['leads:commercial_qualify', 'leads:read_all'],
+    );
+
+    expect(prisma.lead.update).toHaveBeenCalledWith({
+      where: { id: 'lead-id' },
+      data: { targetDate },
+    });
+    expect(prisma.leadCommercialQualification.create).not.toHaveBeenCalled();
+    expect(prisma.leadCommercialQualification.update).not.toHaveBeenCalled();
+    expect(prisma.activity.create).not.toHaveBeenCalled();
+  });
+
+  it('does not clear historical targetDate when Stage-2 omits the timeline', async () => {
+    await service.confirm('lead-id', dto, 'head-id', [
+      'leads:commercial_qualify',
+      'leads:read_all',
+    ]);
+
+    expect(prisma.lead.update).not.toHaveBeenCalled();
   });
 });
