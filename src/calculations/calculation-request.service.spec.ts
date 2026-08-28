@@ -606,4 +606,178 @@ describe('CalculationRequestService', () => {
       }),
     );
   });
+
+  it('persists a manager client note across draft save, reopen, and submit', async () => {
+    const draftRequest = {
+      id: 'request-id',
+      leadId: 'lead-id',
+      clientId: 'client-id',
+      dealId: null,
+      createdById: manager.id,
+      status: CALCULATION_REQUEST_STATUS.DRAFT,
+      notes: 'Первоначальное пожелание',
+      calculations: [{ items: [{ supplierId: null }] }],
+    };
+    const savedRequest = {
+      ...draftRequest,
+      notes: 'Сохранённое пожелание клиента',
+    };
+    const editedRequest = {
+      ...savedRequest,
+      notes: 'Изменённое пожелание клиента',
+    };
+    const submittedRequest = {
+      ...editedRequest,
+      status: CALCULATION_REQUEST_STATUS.SUBMITTED,
+    };
+
+    prisma.calculationRequest.create.mockResolvedValue({
+      id: draftRequest.id,
+      status: CALCULATION_REQUEST_STATUS.DRAFT,
+    });
+    prisma.calculationRequest.findFirst
+      .mockResolvedValueOnce(draftRequest)
+      .mockResolvedValueOnce(savedRequest)
+      .mockResolvedValueOnce(savedRequest)
+      .mockResolvedValueOnce(editedRequest)
+      .mockResolvedValueOnce(editedRequest);
+    prisma.calculationRequest.findUniqueOrThrow
+      .mockResolvedValueOnce(draftRequest)
+      .mockResolvedValueOnce(savedRequest)
+      .mockResolvedValueOnce(editedRequest)
+      .mockResolvedValueOnce(editedRequest)
+      .mockResolvedValueOnce(submittedRequest);
+    prisma.calculationRequest.update
+      .mockResolvedValueOnce(savedRequest)
+      .mockResolvedValueOnce(editedRequest);
+    prisma.calculationRequest.updateMany.mockResolvedValue({ count: 1 });
+
+    const created = await service.create(
+      {
+        leadId: 'lead-id',
+        notes: draftRequest.notes,
+        calculations: [
+          {
+            title: 'Основной расчёт',
+            items: [
+              {
+                panelTypeId: 'type-id',
+                panelSizeId: 'size-id',
+                thicknessMm: '10',
+                qualityClassId: 'economy-id',
+                requiredAreaM2: '12',
+              },
+            ],
+          },
+        ] as never,
+      },
+      manager,
+    );
+    expect(created.notes).toBe(draftRequest.notes);
+
+    const saved = await service.update(
+      'request-id',
+      { notes: savedRequest.notes },
+      manager,
+    );
+    expect(prisma.calculationRequest.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'request-id' },
+        data: { notes: savedRequest.notes },
+      }),
+    );
+    expect(saved.notes).toBe(savedRequest.notes);
+
+    const reopened = await service.findOne('request-id', manager);
+    expect(reopened.notes).toBe(savedRequest.notes);
+
+    const edited = await service.update(
+      'request-id',
+      { notes: editedRequest.notes },
+      manager,
+    );
+    expect(edited.notes).toBe(editedRequest.notes);
+
+    const reopenedAfterEdit = await service.findOne('request-id', manager);
+    expect(reopenedAfterEdit.notes).toBe(editedRequest.notes);
+
+    const submitted = await service.submit('request-id', manager);
+    expect(submitted.notes).toBe(editedRequest.notes);
+    expect(submitted.status).toBe(CALCULATION_REQUEST_STATUS.SUBMITTED);
+  });
+
+  it('allows HEAD to edit submitted technical rows and assign supplier per item', async () => {
+    prisma.calculationRequest.findFirst.mockResolvedValue({
+      id: 'request-id',
+      leadId: 'lead-id',
+      clientId: 'client-id',
+      dealId: null,
+      createdById: manager.id,
+      status: CALCULATION_REQUEST_STATUS.SUBMITTED,
+      notes: null,
+    });
+    prisma.calculationRequest.update.mockResolvedValue({
+      id: 'request-id',
+      status: CALCULATION_REQUEST_STATUS.SUBMITTED,
+      calculations: [{ items: [{ supplierId: 'supplier-a' }] }],
+    });
+
+    await service.update(
+      'request-id',
+      {
+        calculations: [
+          {
+            title: 'Reviewed group',
+            items: [
+              {
+                panelTypeId: 'type-id',
+                panelSizeId: 'size-id',
+                thicknessMm: '10',
+                qualityClassId: 'economy-id',
+                supplierId: 'supplier-a',
+                requiredAreaM2: '12',
+              },
+            ],
+          },
+        ],
+      },
+      head,
+    );
+
+    expect(
+      calculationService.prepareManagerCatalogGroup,
+    ).toHaveBeenCalledWith(
+      'lead-id',
+      expect.any(Array),
+      head,
+      { allowItemSupplier: true },
+    );
+    expect(prisma.calculationSession.deleteMany).toHaveBeenCalledWith({
+      where: { requestId: 'request-id' },
+    });
+    expect(prisma.calculationSession.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'finalized' }),
+      }),
+    );
+  });
+
+  it('does not let a Manager edit a submitted request', async () => {
+    prisma.calculationRequest.findFirst.mockResolvedValue({
+      id: 'request-id',
+      createdById: manager.id,
+      status: CALCULATION_REQUEST_STATUS.SUBMITTED,
+    });
+
+    await expect(
+      service.update('request-id', { notes: 'attempt' }, manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'CALCULATION_REQUEST_LOCKED',
+      }),
+    });
+    expect(
+      calculationService.prepareManagerCatalogGroup,
+    ).not.toHaveBeenCalled();
+  });
 });

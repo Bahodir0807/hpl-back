@@ -30,4 +30,13 @@ describe('CalculationsController legacy commercial RBAC', () => {
       ),
     ).toEqual([CALCULATION_PERMISSIONS.CREATE]);
   });
+
+  it('lets a manager update a CalculationRequest with calculations:update only', () => {
+    expect(
+      Reflect.getMetadata(
+        REQUIRED_PERMISSIONS_KEY,
+        CalculationsController.prototype.updateRequest,
+      ),
+    ).toEqual([CALCULATION_PERMISSIONS.UPDATE]);
+  });
 });

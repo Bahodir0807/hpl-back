@@ -96,7 +96,7 @@ export class CalculationsController {
   }
 
   @Patch('requests/:id')
-  @RequirePermissions(CALCULATION_PERMISSIONS.UPDATE, QUOTE_PERMISSIONS.APPROVE)
+  @RequirePermissions(CALCULATION_PERMISSIONS.UPDATE)
   @ApiOperation({
     summary: 'Update a draft request or let HEAD prepare a new Quote version',
   })

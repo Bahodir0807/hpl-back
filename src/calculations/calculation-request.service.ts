@@ -210,9 +210,13 @@ export class CalculationRequestService {
     const isQuoteRevision =
       request.status === CALCULATION_REQUEST_STATUS.QUOTED &&
       user.permissions.includes(QUOTE_PERMISSIONS.APPROVE);
-    if (!isQuoteRevision) {
+    const isHeadReviewEdit =
+      (request.status === CALCULATION_REQUEST_STATUS.SUBMITTED ||
+        request.status === CALCULATION_REQUEST_STATUS.PROCESSING) &&
+      user.permissions.includes(QUOTE_PERMISSIONS.APPROVE);
+    if (!isQuoteRevision && !isHeadReviewEdit) {
       this.assertDraft(request.status);
-    } else {
+    } else if (isQuoteRevision) {
       const latestQuote = await this.prisma.panelQuote.findFirst({
         where: { requestId: id },
         orderBy: { versionNumber: 'desc' },
@@ -239,6 +243,7 @@ export class CalculationRequestService {
               request.leadId,
               group.items,
               user,
+              { allowItemSupplier: isHeadReviewEdit },
             ),
           })),
         )
@@ -264,7 +269,10 @@ export class CalculationRequestService {
               clientId: request.clientId,
               dealId: request.dealId,
               createdById: isQuoteRevision ? user.id : request.createdById,
-              status: CALCULATION_STATUS.DRAFT,
+              status:
+                isHeadReviewEdit || isQuoteRevision
+                  ? CALCULATION_STATUS.FINALIZED
+                  : CALCULATION_STATUS.DRAFT,
               sortOrder: index,
               title: entry.group.title,
               notes: entry.group.notes,
