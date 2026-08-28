@@ -38,6 +38,15 @@ describe('quote document snapshot mapping', () => {
     ],
   };
 
+  it('does not expose internal Quote version or identifier in the document model', () => {
+    const model = buildQuoteDocumentModel(snapshot);
+
+    expect(model).not.toHaveProperty('quoteReferenceLine');
+    expect(JSON.stringify(model)).not.toContain('КП v1');
+    expect(JSON.stringify(model)).not.toContain(snapshot.id);
+    expect(JSON.stringify(model)).not.toContain(snapshot.id.slice(0, 8));
+  });
+
   it('renders КП table values from the Quote snapshot, not catalog defaults', () => {
     const model = buildQuoteDocumentModel(snapshot);
 

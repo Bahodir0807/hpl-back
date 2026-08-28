@@ -4,6 +4,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ServiceUnavailableException } from '@nestjs/common';
+import JSZip from 'jszip';
+import { fitQuoteOfferTableToPageWidth } from './quote-docx-template';
 
 const execFileAsync = promisify(execFile);
 const WORD_PDF_FORMAT = 17;
@@ -12,9 +14,9 @@ export async function convertDocxToPdf(docx: Buffer): Promise<Buffer> {
   const dir = await mkdtemp(join(tmpdir(), 'uzhpl-quote-pdf-'));
   const input = join(dir, 'quote.docx');
   const output = join(dir, 'quote.pdf');
-  await writeFile(input, docx);
 
   try {
+    await writeFile(input, await normalizeDocxForPdf(docx));
     const errors: string[] = [];
     if (process.platform === 'win32') {
       try {
@@ -45,6 +47,25 @@ export async function convertDocxToPdf(docx: Buffer): Promise<Buffer> {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
+}
+
+async function normalizeDocxForPdf(docx: Buffer): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(docx);
+  const documentFile = zip.file('word/document.xml');
+  if (!documentFile) {
+    throw new Error('Quote DOCX is missing word/document.xml');
+  }
+
+  const xml = await documentFile.async('string');
+  zip.file('word/document.xml', fitQuoteOfferTableToPageWidth(xml));
+  return Buffer.from(
+    await zip.generateAsync({
+      type: 'nodebuffer',
+      compression: 'DEFLATE',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }),
+  );
 }
 
 async function convertWithWord(

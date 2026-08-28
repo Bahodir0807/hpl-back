@@ -3,10 +3,12 @@ import JSZip from 'jszip';
 import {
   buildQuoteDocumentModel,
   QUOTE_PRICE_HEADER,
+  QUOTE_TABLE_HEADERS,
   type QuoteDocumentSnapshot,
 } from './quote-document.model';
 import {
   fillUzhplQuoteTemplate,
+  fitQuoteOfferTableToPageWidth,
   loadUzhplQuoteTemplate,
 } from './quote-docx-template';
 
@@ -137,6 +139,9 @@ describe('UZHPL DOCX template fill', () => {
     const xml = await filledXml(baseSnapshot());
     const text = documentText(xml);
 
+    for (const header of QUOTE_TABLE_HEADERS) {
+      expect(text).toContain(header);
+    }
     expect(text).toContain('1220 × 3050');
     expect(text).toContain('6 мм');
     expect(text).toContain('8 мм');
@@ -145,6 +150,26 @@ describe('UZHPL DOCX template fill', () => {
     expect(text).toContain('720 000 сум');
     expect(text).toContain('10-20 дней');
     expect(text).toContain('14-25 дней');
+  });
+
+  it('keeps the client subtitle and excludes internal Quote metadata', async () => {
+    const text = documentText(await filledXml(baseSnapshot()));
+
+    expect(text).toContain('на поставку HPL-панелей');
+    expect(text).not.toContain('КП v');
+    expect(text).not.toContain('11111111-1111-1111-1111-111111111111');
+    expect(text).not.toContain('11111111');
+  });
+
+  it('fits the offer table to the template page content width for PDF rendering', async () => {
+    const filled = await filledXml(baseSnapshot());
+    const normalized = fitQuoteOfferTableToPageWidth(filled);
+
+    expect(filled).toContain('<w:tblW w:w="9678" w:type="dxa"');
+    expect(filled).toContain('<w:tblHeader w:val="true"');
+    expect(normalized).toContain('<w:tblW w:w="9412" w:type="dxa"');
+    expect(normalized).toContain('<w:gridCol w:w="1764"');
+    expect(normalized).toContain('<w:gridCol w:w="1170"');
   });
 
   it('creates one table row per Quote item', async () => {

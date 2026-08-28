@@ -81,38 +81,167 @@ export function fillDocumentXml(
   }
 
   fillOfferTable(dom, model);
-  fillQuoteReference(dom, model.quoteReferenceLine);
+  // The template owns the client-facing subtitle. Keep it static and never
+  // inject Quote versioning or identifiers into the customer document.
   fillOfferHeading(dom, model.offerHeadingPhrase);
   fillNoteSection(dom, model.commercialNote, model.validUntilBullet);
   fillDocumentDate(dom, model.documentDateLine);
   centerAccentRule(dom);
   removeTaglineSpacerBreaks(dom);
 
+  return serializeDocumentXml(dom, xml);
+}
+
+/**
+ * Keep the source DOCX unchanged for Word users, but make the copy passed to
+ * a PDF renderer obey the actual page content width. The golden template's
+ * offer table is intentionally fixed-width; its original 9678 DXA width is
+ * wider than this template's 9412 DXA page area.
+ */
+export function fitQuoteOfferTableToPageWidth(xml: string): string {
+  const dom = new DOMParser().parseFromString(xml, 'application/xml');
+  const parseError = dom.getElementsByTagName('parsererror')[0];
+  if (parseError) {
+    throw new Error('Failed to parse UZHPL quote template XML');
+  }
+
+  const table = findOfferTable(dom);
+  if (!table) {
+    return xml;
+  }
+
+  const section = elementsByLocalName(dom, 'sectPr').at(-1);
+  const pageSize = section ? childElements(section, 'pgSz')[0] : undefined;
+  const pageMargins = section ? childElements(section, 'pgMar')[0] : undefined;
+  const pageWidth = readWordNumber(pageSize, 'w');
+  const leftMargin = readWordNumber(pageMargins, 'left');
+  const rightMargin = readWordNumber(pageMargins, 'right');
+  if (pageWidth == null || leftMargin == null || rightMargin == null) {
+    return xml;
+  }
+
+  const tableProperties = childElements(table, 'tblPr')[0];
+  const tableWidth = tableProperties
+    ? childElements(tableProperties, 'tblW')[0]
+    : undefined;
+  const tableIndent = tableProperties
+    ? Math.max(
+        0,
+        readWordNumber(childElements(tableProperties, 'tblInd')[0], 'w') ?? 0,
+      )
+    : 0;
+  const availableWidth = pageWidth - leftMargin - rightMargin - tableIndent;
+  if (!tableProperties || availableWidth <= 0) {
+    return xml;
+  }
+
+  const tableGrid = childElements(table, 'tblGrid')[0];
+  if (!tableGrid) {
+    return xml;
+  }
+  const grid = childElements(tableGrid, 'gridCol');
+  const sourceWidths = grid
+    .map((column) => readWordNumber(column, 'w'))
+    .filter((width): width is number => width != null && width > 0);
+  const sourceWidth = sourceWidths.reduce((sum, width) => sum + width, 0);
+  if (sourceWidth <= availableWidth || sourceWidths.length === 0) {
+    return xml;
+  }
+
+  const targetWidths = scaleWidths(sourceWidths, availableWidth);
+  if (tableWidth) {
+    setWordNumber(tableWidth, 'w', availableWidth);
+    tableWidth.setAttribute('w:type', 'dxa');
+  }
+
+  const gridColumns = childElements(tableGrid, 'gridCol');
+  gridColumns.forEach((column, index) => {
+    const width = targetWidths[index];
+    if (width != null) {
+      setWordNumber(column, 'w', width);
+    }
+  });
+
+  for (const row of childElements(table, 'tr')) {
+    let gridIndex = 0;
+    for (const cell of childElements(row, 'tc')) {
+      const cellProperties = childElements(cell, 'tcPr')[0];
+      const span = Math.max(
+        1,
+        cellProperties
+          ? (readWordNumber(
+              childElements(cellProperties, 'gridSpan')[0],
+              'val',
+            ) ?? 1)
+          : 1,
+      );
+      const width = targetWidths
+        .slice(gridIndex, gridIndex + span)
+        .reduce((sum, value) => sum + value, 0);
+      const cellWidth = cellProperties
+        ? childElements(cellProperties, 'tcW')[0]
+        : undefined;
+      if (cellWidth && width > 0) {
+        setWordNumber(cellWidth, 'w', width);
+        cellWidth.setAttribute('w:type', 'dxa');
+      }
+      gridIndex += span;
+    }
+  }
+
+  return serializeDocumentXml(dom, xml);
+}
+
+function serializeDocumentXml(dom: XmlDocument, sourceXml: string): string {
   const serialized = new XMLSerializer().serializeToString(dom);
   if (serialized.startsWith('<?xml')) {
     return serialized;
   }
 
-  const newline = xml.startsWith(`${XML_DECLARATION}\r\n`) ? '\r\n' : '\n';
+  const newline = sourceXml.startsWith(`${XML_DECLARATION}\r\n`)
+    ? '\r\n'
+    : '\n';
   return `${XML_DECLARATION}${newline}${serialized}`;
 }
 
-function fillQuoteReference(
-  dom: XmlDocument,
-  quoteReferenceLine: string,
-): void {
-  const subtitle = findParagraph(
-    dom,
-    (text) => normalizeSpace(text) === 'на поставку HPL-панелей',
+function scaleWidths(sourceWidths: number[], targetWidth: number): number[] {
+  const sourceWidth = sourceWidths.reduce((sum, width) => sum + width, 0);
+  const scaled = sourceWidths.map(
+    (width) => (width * targetWidth) / sourceWidth,
   );
-  if (!subtitle) {
-    throw new Error('UZHPL quote template is missing the quote subtitle');
+  const result = scaled.map((width) => Math.floor(width));
+  let remainder = targetWidth - result.reduce((sum, width) => sum + width, 0);
+  const order = scaled
+    .map((width, index) => ({ index, fraction: width - Math.floor(width) }))
+    .sort((left, right) => right.fraction - left.fraction);
+  for (let index = 0; remainder > 0; index += 1) {
+    result[order[index % order.length].index] += 1;
+    remainder -= 1;
   }
-  replaceParagraphText(
-    dom,
-    subtitle,
-    `${quoteReferenceLine} · на поставку HPL-панелей`,
-  );
+  return result;
+}
+
+function readWordNumber(
+  element: XmlElement | undefined,
+  attribute: string,
+): number | null {
+  if (!element) {
+    return null;
+  }
+  const raw = element.getAttribute(`w:${attribute}`);
+  const value = Number(raw);
+  if (!raw || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
+}
+
+function setWordNumber(
+  element: XmlElement,
+  attribute: string,
+  value: number,
+): void {
+  element.setAttribute(`w:${attribute}`, String(value));
 }
 
 /**
@@ -197,8 +326,13 @@ function markHeaderRowRepeat(dom: XmlDocument, header: XmlElement): void {
     trPr = dom.createElement('w:trPr');
     header.insertBefore(trPr, header.firstChild);
   }
-  if (!childElements(trPr, 'tblHeader')[0]) {
-    trPr.appendChild(dom.createElement('w:tblHeader'));
+  const repeatHeader = childElements(trPr, 'tblHeader')[0];
+  if (repeatHeader) {
+    repeatHeader.setAttribute('w:val', 'true');
+  } else {
+    const newRepeatHeader = dom.createElement('w:tblHeader');
+    newRepeatHeader.setAttribute('w:val', 'true');
+    trPr.appendChild(newRepeatHeader);
   }
 }
 

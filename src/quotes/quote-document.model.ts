@@ -98,7 +98,6 @@ export type QuoteDocumentTableRow = {
 };
 
 export type QuoteDocumentModel = {
-  quoteReferenceLine: string;
   offerHeading: string;
   offerHeadingPhrase: string;
   priceHeader: string;
@@ -325,7 +324,6 @@ export function buildQuoteDocumentModel(
   const tableRows = buildGroupedTableRows(quote.items, itemRows);
 
   return {
-    quoteReferenceLine: `КП v${quote.versionNumber ?? 1} · ${quote.id.slice(0, 8)}`,
     offerHeading: quoteOfferHeading(application),
     offerHeadingPhrase: quoteOfferHeadingPhrase(application),
     priceHeader: QUOTE_PRICE_HEADER,
