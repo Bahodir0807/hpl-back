@@ -14,3 +14,5 @@ dev.db
 *.log
 /tmp/
 /tmp-visual/
+scripts/dto-debug.ts
+test/dto-debug.spec.ts
