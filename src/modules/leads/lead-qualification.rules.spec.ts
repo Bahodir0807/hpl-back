@@ -52,6 +52,42 @@ describe('Stage-1 qualification rules', () => {
     ).not.toThrow();
   });
 
+  it('allows incomplete technical data for every item in a multi-item qualification', () => {
+    expect(() =>
+      assertStage1QualificationComplete({
+        ...complete,
+        items: [
+          {
+            application: HplApplication.EXTERIOR_WITH_UV,
+            requiredAreaM2: 10,
+          },
+          {
+            application: HplApplication.INTERIOR,
+            requiredAreaM2: 20,
+          },
+        ],
+      }),
+    ).not.toThrow();
+  });
+
+  it('accepts an empty items list when installation is known', () => {
+    expect(() =>
+      assertStage1QualificationComplete({
+        ...complete,
+        items: [],
+      }),
+    ).not.toThrow();
+  });
+
+  it('still requires an application and positive area for each item', () => {
+    expect(() =>
+      assertStage1QualificationComplete({
+        ...complete,
+        items: [{ application: HplApplication.INTERIOR, requiredAreaM2: 0 }],
+      }),
+    ).toThrow(BadRequestException);
+  });
+
   it('treats null installationRequired as different from false', () => {
     expect(() =>
       assertStage1QualificationComplete({
@@ -65,11 +101,11 @@ describe('Stage-1 qualification rules', () => {
         ...complete,
         installationRequired: null,
       });
-    } catch (error) {
+    } catch (error: unknown) {
       expect(error).toBeInstanceOf(BadRequestException);
       expect((error as BadRequestException).getResponse()).toEqual(
         expect.objectContaining({
-          missingFields: expect.arrayContaining(['installationRequired']),
+          missingFields: ['installationRequired'],
         }),
       );
     }

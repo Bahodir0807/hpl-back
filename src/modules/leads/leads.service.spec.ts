@@ -96,6 +96,52 @@ describe('LeadsService authorization', () => {
     );
   });
 
+  it('reopens ProjectObject stage/deadline and qualification vent-facade answers', async () => {
+    const expectedDate = new Date('2026-11-15T00:00:00.000Z');
+    prisma.lead.findFirst.mockResolvedValue({
+      ...ownedLead,
+      assignmentHistory: [],
+      projectObject: {
+        id: 'object-id',
+        name: 'Школа №12',
+        address: 'Ташкент',
+        stage: 'Скоро фасад',
+        expectedDate,
+      },
+      qualification: {
+        ventFacadeExists: true,
+        ventFacadeKitRequired: false,
+      },
+    });
+
+    const result = await service.findOne('lead-id', 'owner-id', ['leads:read']);
+
+    expect(prisma.lead.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: expect.objectContaining({
+          projectObject: {
+            select: expect.objectContaining({
+              stage: true,
+              expectedDate: true,
+            }),
+          },
+        }),
+      }),
+    );
+    expect(result.projectObject).toEqual(
+      expect.objectContaining({
+        stage: 'Скоро фасад',
+        expectedDate,
+      }),
+    );
+    expect(result.qualification).toEqual(
+      expect.objectContaining({
+        ventFacadeExists: true,
+        ventFacadeKitRequired: false,
+      }),
+    );
+  });
+
   it('persists server-derived structured loss data and creates HEAD recovery for PRICE', async () => {
     prisma.$transaction.mockImplementation(
       (fn: (tx: typeof prisma) => unknown) => fn(prisma),

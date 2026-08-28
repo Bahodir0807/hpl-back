@@ -89,4 +89,78 @@ describe('UpsertLeadQualificationDto commercial isolation', () => {
     expect(errors).toHaveLength(0);
     expect(dto.installationRequired).toBe(false);
   });
+
+  it('accepts an explicit empty items array so the last HPL item can be deleted', async () => {
+    const dto = plainToInstance(UpsertLeadQualificationDto, { items: [] });
+
+    expect(await validate(dto)).toHaveLength(0);
+    expect(dto.items).toEqual([]);
+  });
+
+  it('accepts items with customer color intent and without thickness or size', async () => {
+    const dto = plainToInstance(UpsertLeadQualificationDto, {
+      items: [
+        {
+          application: 'INTERIOR',
+          colorName: 'тёмно-серый',
+          requiredAreaM2: 12.5,
+          thicknessMm: null,
+          panelSizeId: null,
+          customWidthMm: null,
+          customHeightMm: null,
+        },
+      ],
+    });
+
+    expect(await validate(dto)).toHaveLength(0);
+    expect(dto.items?.[0]).toMatchObject({
+      application: HplApplication.INTERIOR,
+      colorName: 'тёмно-серый',
+      requiredAreaM2: 12.5,
+      thicknessMm: null,
+      panelSizeId: null,
+      customWidthMm: null,
+      customHeightMm: null,
+    });
+  });
+
+  it('rejects contradictory urgent and willingToWait values', async () => {
+    const dto = plainToInstance(UpsertLeadQualificationDto, {
+      urgent: true,
+      willingToWait: true,
+    });
+
+    const errors = await validate(dto);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(JSON.stringify(errors)).toContain(
+      'urgent and willingToWait cannot both be true',
+    );
+  });
+
+  it('maps optional vent-facade answers at qualification level', () => {
+    const dto = Object.assign(new UpsertLeadQualificationDto(), {
+      ventFacadeExists: false,
+      ventFacadeKitRequired: true,
+    });
+
+    expect(mapQualificationWriteData(dto)).toEqual({
+      ventFacadeExists: false,
+      ventFacadeKitRequired: true,
+    });
+  });
+
+  it.each([true, false, null] as const)(
+    'maps ventFacadeExists=%s including explicit null unknown',
+    (value) => {
+      const dto = Object.assign(new UpsertLeadQualificationDto(), {
+        ventFacadeExists: value,
+        ventFacadeKitRequired: value,
+      });
+
+      expect(mapQualificationWriteData(dto)).toEqual({
+        ventFacadeExists: value,
+        ventFacadeKitRequired: value,
+      });
+    },
+  );
 });

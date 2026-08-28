@@ -1,6 +1,7 @@
 import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
+  IsArray,
   IsEnum,
   IsInt,
   IsNumber,
@@ -15,12 +16,14 @@ import {
   Validate,
   ValidateIf,
   ValidationArguments,
+  ValidateNested,
   ValidatorConstraint,
   ValidatorConstraintInterface,
 } from 'class-validator';
 import { HplApplication } from '@prisma/client';
 import { canonicalizeHplApplication } from '../../../panels/hpl-catalog';
 import { transformThicknessInput } from '../../../panels/hpl-thickness';
+import { UpsertLeadQualificationItemDto } from './upsert-lead-qualification-item.dto';
 
 export const FORBIDDEN_COMMERCIAL_QUALIFICATION_KEYS = [
   'supplierId',
@@ -59,9 +62,30 @@ export class NoCommercialQualificationFieldsConstraint implements ValidatorConst
   }
 }
 
+@ValidatorConstraint({
+  name: 'qualificationUrgencyMutualExclusion',
+  async: false,
+})
+export class QualificationUrgencyMutualExclusionConstraint implements ValidatorConstraintInterface {
+  validate(_: unknown, args: ValidationArguments): boolean {
+    const obj = args.object as Pick<
+      UpsertLeadQualificationDto,
+      'urgent' | 'willingToWait'
+    >;
+    return !(obj.urgent === true && obj.willingToWait === true);
+  }
+
+  defaultMessage(): string {
+    return 'urgent and willingToWait cannot both be true';
+  }
+}
+
 export class UpsertLeadQualificationDto {
   @Validate(NoCommercialQualificationFieldsConstraint)
   private readonly commercialIsolationGuard = true;
+
+  @Validate(QualificationUrgencyMutualExclusionConstraint)
+  private readonly urgencyMutualExclusionGuard = true;
 
   @IsOptional()
   @Transform(({ value }: { value: unknown }) => {
@@ -97,13 +121,31 @@ export class UpsertLeadQualificationDto {
   panelSizeId?: string | null;
 
   @IsOptional()
-  @Type(() => Number)
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || value === '') {
+      return null;
+    }
+    return Number(value);
+  })
+  @ValidateIf((_, value) => value !== null && value !== undefined)
   @IsInt()
   @Min(1)
   customWidthMm?: number | null;
 
   @IsOptional()
-  @Type(() => Number)
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || value === '') {
+      return null;
+    }
+    return Number(value);
+  })
+  @ValidateIf((_, value) => value !== null && value !== undefined)
   @IsInt()
   @Min(1)
   customHeightMm?: number | null;
@@ -149,10 +191,26 @@ export class UpsertLeadQualificationDto {
   willingToWait?: boolean | null;
 
   @IsOptional()
+  @ValidateIf((_, value) => value !== null && value !== undefined)
+  @IsBoolean()
+  ventFacadeExists?: boolean | null;
+
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null && value !== undefined)
+  @IsBoolean()
+  ventFacadeKitRequired?: boolean | null;
+
+  @IsOptional()
   @IsString()
   @MaxLength(4000)
   @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim() : value,
   )
   customerRequirements?: string | null;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => UpsertLeadQualificationItemDto)
+  items?: UpsertLeadQualificationItemDto[];
 }

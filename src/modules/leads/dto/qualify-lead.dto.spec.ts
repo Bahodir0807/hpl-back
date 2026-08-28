@@ -29,6 +29,32 @@ describe('QualifyLeadDto', () => {
     expect(errors).toHaveLength(0);
   });
 
+  it('accepts optional object stage and expected date without using lead targetDate', async () => {
+    const dto = plainToInstance(QualifyLeadDto, {
+      ...completePayload,
+      objectStage: 'Скоро фасад',
+      objectExpectedDate: '2026-10-15T00:00:00.000Z',
+    });
+
+    expect(await validate(dto)).toHaveLength(0);
+    expect(dto.objectStage).toBe('Скоро фасад');
+    expect(dto.objectExpectedDate).toEqual(
+      new Date('2026-10-15T00:00:00.000Z'),
+    );
+  });
+
+  it('accepts clearing object stage and expected date with null', async () => {
+    const dto = plainToInstance(QualifyLeadDto, {
+      ...completePayload,
+      objectStage: null,
+      objectExpectedDate: null,
+    });
+
+    expect(await validate(dto)).toHaveLength(0);
+    expect(dto.objectStage).toBeNull();
+    expect(dto.objectExpectedDate).toBeNull();
+  });
+
   it('rejects supplier, quality, amount, timeline, FX, coefficient and discount injection', async () => {
     const dto = plainToInstance(QualifyLeadDto, {
       ...completePayload,

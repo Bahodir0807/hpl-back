@@ -57,7 +57,15 @@ const leadRelationsInclude = Prisma.validator<Prisma.LeadInclude>()({
     },
   },
   client: { select: { id: true, name: true } },
-  projectObject: { select: { id: true, name: true } },
+  projectObject: {
+    select: {
+      id: true,
+      name: true,
+      address: true,
+      stage: true,
+      expectedDate: true,
+    },
+  },
   contact: { select: { id: true, firstName: true, lastName: true } },
   deal: { select: { id: true, title: true } },
   qualification: {
@@ -72,6 +80,23 @@ const leadRelationsInclude = Prisma.validator<Prisma.LeadInclude>()({
           widthMm: true,
           heightMm: true,
           areaM2: true,
+        },
+      },
+      items: {
+        orderBy: { sortOrder: 'asc' },
+        include: {
+          panelType: {
+            select: { id: true, code: true, displayNameRu: true },
+          },
+          panelSize: {
+            select: {
+              id: true,
+              displayName: true,
+              widthMm: true,
+              heightMm: true,
+              areaM2: true,
+            },
+          },
         },
       },
     },
@@ -386,6 +411,33 @@ export class LeadsService {
           }
         }
 
+        const projectObject = await tx.projectObject.findUnique({
+          where: { id: dto.projectObjectId },
+          select: { id: true, clientId: true },
+        });
+        if (!projectObject || projectObject.clientId !== dto.clientId) {
+          throw new BadRequestException(
+            'projectObjectId does not belong to clientId',
+          );
+        }
+
+        if (
+          dto.objectStage !== undefined ||
+          dto.objectExpectedDate !== undefined
+        ) {
+          await tx.projectObject.update({
+            where: { id: projectObject.id },
+            data: {
+              ...(dto.objectStage !== undefined
+                ? { stage: dto.objectStage }
+                : {}),
+              ...(dto.objectExpectedDate !== undefined
+                ? { expectedDate: dto.objectExpectedDate }
+                : {}),
+            },
+          });
+        }
+
         if (dto.qualification) {
           await this.leadQualificationService.upsertInTx(
             tx,
@@ -398,6 +450,7 @@ export class LeadsService {
 
         const stage1 = await tx.leadQualification.findUnique({
           where: { leadId: id },
+          include: { items: { orderBy: { sortOrder: 'asc' } } },
         });
         this.leadQualificationService.assertStage1Complete(stage1);
 

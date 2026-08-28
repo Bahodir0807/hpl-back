@@ -1,6 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
 import { HplApplication, LeadQualification, Prisma } from '@prisma/client';
-import { hasPositiveThickness } from '../../panels/hpl-thickness';
 
 export type Stage1QualificationInput = {
   application?: HplApplication | null;
@@ -31,7 +30,22 @@ export type Stage1CompleteQualification = Pick<
   | 'requiredAreaM2'
   | 'installationRequired'
   | 'customerRequirements'
->;
+> & {
+  items?: Array<
+    Pick<
+      Stage1QualificationInput,
+      | 'application'
+      | 'panelTypeId'
+      | 'thicknessMm'
+      | 'panelSizeId'
+      | 'customWidthMm'
+      | 'customHeightMm'
+      | 'colorCode'
+      | 'colorName'
+      | 'requiredAreaM2'
+    >
+  >;
+};
 
 function hasText(value: string | null | undefined): boolean {
   return Boolean(value?.trim());
@@ -70,19 +84,52 @@ export function hasRequestedColor(
 export function assertStage1QualificationComplete(
   data: Stage1CompleteQualification | null | undefined,
 ): void {
+  if (!data) {
+    assertStage1ItemComplete(data);
+    return;
+  } else if (data.items !== undefined) {
+    // An explicit empty list is a valid manager save: no HPL positions yet.
+    for (const item of data.items) {
+      assertStage1ItemComplete(item);
+    }
+  } else {
+    assertStage1ItemComplete(data);
+  }
+
+  if (
+    data?.installationRequired === null ||
+    data?.installationRequired === undefined
+  ) {
+    throw new BadRequestException({
+      message: 'Lead Stage-1 HPL qualification is incomplete',
+      missingFields: ['installationRequired'],
+    });
+  }
+}
+
+function assertStage1ItemComplete(
+  data:
+    | Pick<
+        Stage1QualificationInput,
+        | 'application'
+        | 'panelTypeId'
+        | 'thicknessMm'
+        | 'panelSizeId'
+        | 'customWidthMm'
+        | 'customHeightMm'
+        | 'colorCode'
+        | 'colorName'
+        | 'requiredAreaM2'
+      >
+    | null
+    | undefined,
+): void {
   const missingFields: string[] = [];
 
   if (!data) {
     throw new BadRequestException({
       message: 'Lead Stage-1 HPL qualification is incomplete',
-      missingFields: [
-        'application',
-        'thicknessMm',
-        'dimensions',
-        'color',
-        'requiredAreaM2',
-        'installationRequired',
-      ],
+      missingFields: ['application', 'requiredAreaM2'],
     });
   }
 
@@ -90,28 +137,9 @@ export function assertStage1QualificationComplete(
     missingFields.push('application');
   }
 
-  if (!hasPositiveThickness(data.thicknessMm)) {
-    missingFields.push('thicknessMm');
-  }
-
-  if (!hasRequestedDimensions(data)) {
-    missingFields.push('dimensions');
-  }
-
-  if (!hasRequestedColor(data)) {
-    missingFields.push('color');
-  }
-
   const requiredArea = toPositiveNumber(data.requiredAreaM2);
   if (requiredArea === null || requiredArea <= 0) {
     missingFields.push('requiredAreaM2');
-  }
-
-  if (
-    data.installationRequired === null ||
-    data.installationRequired === undefined
-  ) {
-    missingFields.push('installationRequired');
   }
 
   if (missingFields.length > 0) {

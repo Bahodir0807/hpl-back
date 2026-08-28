@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   NotFoundException,
@@ -155,5 +156,247 @@ describe('LeadQualificationService', () => {
         'lead_qualification_updated',
       ),
     ).rejects.toThrow('panelTypeId is invalid or inactive');
+  });
+
+  it('clears legacy scalars and persists an explicit empty items array', async () => {
+    const qualification = {
+      id: 'qualification-id',
+      leadId: 'lead-a',
+      application: null,
+      panelTypeId: null,
+      thicknessMm: null,
+      panelSizeId: null,
+      customWidthMm: null,
+      customHeightMm: null,
+      colorCode: null,
+      colorName: null,
+      requiredAreaM2: null,
+      installationRequired: false,
+      stockOnly: null,
+      urgent: false,
+      willingToWait: false,
+      ventFacadeExists: null,
+      ventFacadeKitRequired: null,
+      customerRequirements: null,
+      createdAt: new Date('2026-08-28T00:00:00.000Z'),
+      updatedAt: new Date('2026-08-28T00:00:00.000Z'),
+      panelType: null,
+      panelSize: null,
+      items: [],
+    };
+    const tx = {
+      leadQualification: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'qualification-id',
+          application: HplApplication.INTERIOR,
+          thicknessMm: null,
+          panelTypeId: 'type-id',
+          urgent: false,
+          willingToWait: false,
+        }),
+        upsert: jest.fn().mockResolvedValue(qualification),
+        findUniqueOrThrow: jest.fn().mockResolvedValue(qualification),
+      },
+      leadQualificationItem: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'old-item' }]),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      activity: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const dto = Object.assign(new UpsertLeadQualificationDto(), {
+      application: HplApplication.INTERIOR,
+      panelTypeId: 'type-id',
+      requiredAreaM2: 12,
+      items: [],
+    });
+
+    const result = await service.upsertInTx(
+      tx as never,
+      'lead-a',
+      dto,
+      'manager-a',
+      'lead_qualification_updated',
+    );
+
+    expect(tx.leadQualification.upsert).toHaveBeenCalledTimes(1);
+    const [[upsertCall]] = tx.leadQualification.upsert.mock
+      .calls as unknown as [
+      {
+        create: Record<string, unknown>;
+        update: Record<string, unknown>;
+      },
+    ][];
+    expect(upsertCall.create).toMatchObject({
+      application: null,
+      panelTypeId: null,
+      thicknessMm: null,
+      panelSizeId: null,
+      requiredAreaM2: null,
+    });
+    expect(upsertCall.update).toMatchObject({
+      application: null,
+      panelTypeId: null,
+      thicknessMm: null,
+      panelSizeId: null,
+      requiredAreaM2: null,
+    });
+    expect(tx.leadQualificationItem.deleteMany).toHaveBeenCalledWith({
+      where: { qualificationId: 'qualification-id' },
+    });
+    expect(result).toMatchObject({
+      items: [],
+      ventFacadeExists: null,
+      ventFacadeKitRequired: null,
+    });
+  });
+
+  it('rejects a partial urgent toggle that would preserve willingToWait=true', async () => {
+    const tx = {
+      leadQualification: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'qualification-id',
+          application: null,
+          thicknessMm: null,
+          panelTypeId: null,
+          urgent: false,
+          willingToWait: true,
+        }),
+        upsert: jest.fn(),
+      },
+    };
+    const dto = Object.assign(new UpsertLeadQualificationDto(), {
+      urgent: true,
+    });
+
+    await expect(
+      service.upsertInTx(
+        tx as never,
+        'lead-a',
+        dto,
+        'manager-a',
+        'lead_qualification_updated',
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(tx.leadQualification.upsert).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [true, false],
+    [false, true],
+    [null, null],
+  ] as const)(
+    'persists ventFacadeExists=%s and ventFacadeKitRequired=%s on upsert',
+    async (ventFacadeExists, ventFacadeKitRequired) => {
+      const qualification = {
+        id: 'qualification-id',
+        leadId: 'lead-a',
+        application: null,
+        panelTypeId: null,
+        thicknessMm: null,
+        panelSizeId: null,
+        customWidthMm: null,
+        customHeightMm: null,
+        colorCode: null,
+        colorName: null,
+        requiredAreaM2: null,
+        installationRequired: true,
+        stockOnly: null,
+        urgent: false,
+        willingToWait: false,
+        ventFacadeExists,
+        ventFacadeKitRequired,
+        customerRequirements: null,
+        createdAt: new Date('2026-08-28T00:00:00.000Z'),
+        updatedAt: new Date('2026-08-28T00:00:00.000Z'),
+        panelType: null,
+        panelSize: null,
+        items: [],
+      };
+      const tx = {
+        leadQualification: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          upsert: jest.fn().mockResolvedValue(qualification),
+          findUniqueOrThrow: jest.fn().mockResolvedValue(qualification),
+        },
+        leadQualificationItem: {
+          findMany: jest.fn().mockResolvedValue([]),
+          deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        },
+        activity: { create: jest.fn().mockResolvedValue({}) },
+      };
+      const dto = Object.assign(new UpsertLeadQualificationDto(), {
+        installationRequired: true,
+        ventFacadeExists,
+        ventFacadeKitRequired,
+        items: [],
+      });
+
+      const result = await service.upsertInTx(
+        tx as never,
+        'lead-a',
+        dto,
+        'manager-a',
+        'lead_qualification_updated',
+      );
+
+      const [[upsertCall]] = tx.leadQualification.upsert.mock
+        .calls as unknown as [
+        {
+          create: Record<string, unknown>;
+          update: Record<string, unknown>;
+        },
+      ][];
+      expect(upsertCall.create).toMatchObject({
+        ventFacadeExists,
+        ventFacadeKitRequired,
+      });
+      expect(upsertCall.update).toMatchObject({
+        ventFacadeExists,
+        ventFacadeKitRequired,
+      });
+      expect(result).toMatchObject({
+        ventFacadeExists,
+        ventFacadeKitRequired,
+      });
+    },
+  );
+
+  it('reopens persisted false and null vent-facade answers', async () => {
+    prisma.lead.findFirst.mockResolvedValue(ownedLead);
+    prisma.leadQualification.findUnique.mockResolvedValue({
+      id: 'qualification-id',
+      leadId: 'lead-a',
+      application: null,
+      panelTypeId: null,
+      thicknessMm: null,
+      panelSizeId: null,
+      customWidthMm: null,
+      customHeightMm: null,
+      colorCode: null,
+      colorName: null,
+      requiredAreaM2: null,
+      installationRequired: false,
+      stockOnly: null,
+      urgent: false,
+      willingToWait: true,
+      ventFacadeExists: false,
+      ventFacadeKitRequired: null,
+      customerRequirements: null,
+      createdAt: new Date('2026-08-28T00:00:00.000Z'),
+      updatedAt: new Date('2026-08-28T00:00:00.000Z'),
+      panelType: null,
+      panelSize: null,
+      items: [],
+    });
+
+    await expect(
+      service.get('lead-a', 'manager-a', ['leads:read']),
+    ).resolves.toMatchObject({
+      leadId: 'lead-a',
+      qualification: {
+        ventFacadeExists: false,
+        ventFacadeKitRequired: null,
+      },
+    });
   });
 });

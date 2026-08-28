@@ -1,11 +1,13 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
+  IsDate,
   IsOptional,
   IsString,
   IsUUID,
   MaxLength,
   MinLength,
   Validate,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import {
@@ -26,6 +28,40 @@ export class QualifyLeadDto {
 
   @IsUUID()
   projectObjectId!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null) {
+      return null;
+    }
+    return typeof value === 'string' ? value.trim() : value;
+  })
+  objectStage?: string | null;
+
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || value === '') {
+      return null;
+    }
+    if (value instanceof Date) {
+      return value;
+    }
+    if (typeof value === 'string' || typeof value === 'number') {
+      return new Date(value);
+    }
+    return value;
+  })
+  @ValidateIf((_, value) => value !== null && value !== undefined)
+  @IsDate()
+  objectExpectedDate?: Date | null;
 
   @IsString()
   @MinLength(1)

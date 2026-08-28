@@ -19,6 +19,10 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     contact: {
       findUnique: jest.fn(),
     },
+    projectObject: {
+      findUnique: jest.fn(),
+      update: jest.fn(),
+    },
     leadQualification: {
       findUnique: jest.fn(),
     },
@@ -104,6 +108,11 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
       id: 'contact-id',
       clientId: 'client-id',
     });
+    prisma.projectObject.findUnique.mockResolvedValue({
+      id: 'object-id',
+      clientId: 'client-id',
+    });
+    prisma.projectObject.update.mockResolvedValue({});
     prisma.lead.updateMany.mockResolvedValue({ count: 1 });
     prisma.lead.update.mockResolvedValue({});
     prisma.deal.create.mockResolvedValue({ id: 'deal-id', title: 'Lobby HPL' });
@@ -386,6 +395,85 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
         }),
       }),
     );
+  });
+
+  it('updates the selected project object stage and expected date in the qualification transaction', async () => {
+    const objectExpectedDate = new Date('2026-11-15T00:00:00.000Z');
+
+    await service.qualify(
+      'lead-id',
+      {
+        ...qualifyDto,
+        objectStage: 'Скоро фасад',
+        objectExpectedDate,
+      } as QualifyLeadDto,
+      'owner-id',
+      ['leads:qualify'],
+    );
+
+    expect(prisma.projectObject.findUnique).toHaveBeenCalledWith({
+      where: { id: 'object-id' },
+      select: { id: true, clientId: true },
+    });
+    expect(prisma.projectObject.update).toHaveBeenCalledWith({
+      where: { id: 'object-id' },
+      data: {
+        stage: 'Скоро фасад',
+        expectedDate: objectExpectedDate,
+      },
+    });
+    expect(prisma.lead.updateMany).toHaveBeenCalled();
+  });
+
+  it.each([
+    [true, false],
+    [false, true],
+    [null, null],
+  ] as const)(
+    'passes ventFacadeExists=%s and ventFacadeKitRequired=%s into the nested qualification upsert',
+    async (ventFacadeExists, ventFacadeKitRequired) => {
+      await service.qualify(
+        'lead-id',
+        {
+          ...qualifyDto,
+          qualification: {
+            installationRequired: true,
+            ventFacadeExists,
+            ventFacadeKitRequired,
+            items: [],
+          },
+        } as QualifyLeadDto,
+        'owner-id',
+        ['leads:qualify'],
+      );
+
+      expect(leadQualificationService.upsertInTx).toHaveBeenCalledWith(
+        prisma,
+        'lead-id',
+        expect.objectContaining({
+          installationRequired: true,
+          ventFacadeExists,
+          ventFacadeKitRequired,
+          items: [],
+        }),
+        'owner-id',
+        'lead_qualification_completed',
+      );
+    },
+  );
+
+  it('rejects a project object that belongs to another client before qualification is written', async () => {
+    prisma.projectObject.findUnique.mockResolvedValue({
+      id: 'object-id',
+      clientId: 'other-client',
+    });
+
+    await expect(
+      service.qualify('lead-id', qualifyDto, 'owner-id', ['leads:qualify']),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.projectObject.update).not.toHaveBeenCalled();
+    expect(leadQualificationService.upsertInTx).not.toHaveBeenCalled();
+    expect(prisma.lead.updateMany).not.toHaveBeenCalled();
   });
 
   it('rolls back Stage-1 when contactId does not belong to the client', async () => {

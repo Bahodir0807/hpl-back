@@ -4,6 +4,7 @@ import {
   serializeThicknessMm,
 } from '../../panels/hpl-thickness';
 import { UpsertLeadQualificationDto } from './dto/upsert-lead-qualification.dto';
+import { UpsertLeadQualificationItemDto } from './dto/upsert-lead-qualification-item.dto';
 
 const QUALIFICATION_KEYS = [
   'application',
@@ -19,10 +20,22 @@ const QUALIFICATION_KEYS = [
   'stockOnly',
   'urgent',
   'willingToWait',
+  'ventFacadeExists',
+  'ventFacadeKitRequired',
   'customerRequirements',
 ] as const;
 
-type QualificationWriteKey = (typeof QUALIFICATION_KEYS)[number];
+const QUALIFICATION_ITEM_KEYS = [
+  'application',
+  'panelTypeId',
+  'thicknessMm',
+  'panelSizeId',
+  'customWidthMm',
+  'customHeightMm',
+  'colorCode',
+  'colorName',
+  'requiredAreaM2',
+] as const;
 
 export type LeadQualificationWriteData = {
   application?: UpsertLeadQualificationDto['application'];
@@ -38,7 +51,21 @@ export type LeadQualificationWriteData = {
   stockOnly?: boolean | null;
   urgent?: boolean | null;
   willingToWait?: boolean | null;
+  ventFacadeExists?: boolean | null;
+  ventFacadeKitRequired?: boolean | null;
   customerRequirements?: string | null;
+};
+
+export type LeadQualificationItemWriteData = {
+  application?: UpsertLeadQualificationItemDto['application'];
+  panelTypeId?: string | null;
+  thicknessMm?: Prisma.Decimal | null;
+  panelSizeId?: string | null;
+  customWidthMm?: number | null;
+  customHeightMm?: number | null;
+  colorCode?: string | null;
+  colorName?: string | null;
+  requiredAreaM2?: number | null;
 };
 
 export function mapQualificationWriteData(
@@ -58,7 +85,35 @@ export function mapQualificationWriteData(
 
     if (key === 'thicknessMm') {
       data.thicknessMm =
-        value === null ? null : parseThicknessMm(value as string | null);
+        value === null
+          ? null
+          : parseThicknessMm(value as string | number | null);
+      continue;
+    }
+
+    (data as Record<string, unknown>)[key] = value;
+  }
+
+  return data;
+}
+
+export function mapQualificationItemWriteData(
+  dto: UpsertLeadQualificationItemDto,
+): LeadQualificationItemWriteData {
+  const data: LeadQualificationItemWriteData = {};
+
+  for (const key of QUALIFICATION_ITEM_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(dto, key)) {
+      continue;
+    }
+
+    const value = dto[key];
+    if (value === undefined) {
+      continue;
+    }
+
+    if (key === 'thicknessMm') {
+      data.thicknessMm = value === null ? null : parseThicknessMm(value);
       continue;
     }
 
@@ -78,7 +133,7 @@ export function toCalculationRequirementPrefill(qualification: {
   colorCode: string | null;
   colorName: string | null;
   requiredAreaM2: Prisma.Decimal | null;
-  installationRequired: boolean | null;
+  installationRequired?: boolean | null;
 }): {
   application: string | null;
   panelTypeId: string | null;
@@ -101,8 +156,14 @@ export function toCalculationRequirementPrefill(qualification: {
     colorCode: qualification.colorCode,
     colorName: qualification.colorName,
     requiredAreaM2: qualification.requiredAreaM2?.toString() ?? null,
-    installationRequired: qualification.installationRequired,
+    installationRequired: qualification.installationRequired ?? null,
   };
+}
+
+export function toCalculationRequirementPrefills(
+  items: Array<Parameters<typeof toCalculationRequirementPrefill>[0]>,
+) {
+  return items.map(toCalculationRequirementPrefill);
 }
 
 export function serializeLeadQualification(qualification: {
@@ -121,6 +182,8 @@ export function serializeLeadQualification(qualification: {
   stockOnly: boolean | null;
   urgent: boolean | null;
   willingToWait: boolean | null;
+  ventFacadeExists: boolean | null;
+  ventFacadeKitRequired: boolean | null;
   customerRequirements: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -132,8 +195,29 @@ export function serializeLeadQualification(qualification: {
     heightMm: number;
     areaM2: Prisma.Decimal;
   } | null;
+  items?: Array<{
+    id: string;
+    sortOrder: number;
+    application: string | null;
+    panelTypeId: string | null;
+    thicknessMm: Prisma.Decimal | number | string | null;
+    panelSizeId: string | null;
+    customWidthMm: number | null;
+    customHeightMm: number | null;
+    colorCode: string | null;
+    colorName: string | null;
+    requiredAreaM2: Prisma.Decimal | null;
+    panelType?: { id: string; code: string; displayNameRu: string } | null;
+    panelSize?: {
+      id: string;
+      displayName: string;
+      widthMm: number;
+      heightMm: number;
+      areaM2: Prisma.Decimal;
+    } | null;
+  }>;
 }) {
-  return {
+  const serialized = {
     id: qualification.id,
     leadId: qualification.leadId,
     application: qualification.application,
@@ -149,6 +233,8 @@ export function serializeLeadQualification(qualification: {
     stockOnly: qualification.stockOnly,
     urgent: qualification.urgent,
     willingToWait: qualification.willingToWait,
+    ventFacadeExists: qualification.ventFacadeExists,
+    ventFacadeKitRequired: qualification.ventFacadeKitRequired,
     customerRequirements: qualification.customerRequirements,
     createdAt: qualification.createdAt,
     updatedAt: qualification.updatedAt,
@@ -160,4 +246,32 @@ export function serializeLeadQualification(qualification: {
         }
       : null,
   };
+
+  if (qualification.items !== undefined) {
+    return {
+      ...serialized,
+      items: qualification.items.map((item) => ({
+        id: item.id,
+        sortOrder: item.sortOrder,
+        application: item.application,
+        panelTypeId: item.panelTypeId,
+        thicknessMm: serializeThicknessMm(item.thicknessMm),
+        panelSizeId: item.panelSizeId,
+        customWidthMm: item.customWidthMm,
+        customHeightMm: item.customHeightMm,
+        colorCode: item.colorCode,
+        colorName: item.colorName,
+        requiredAreaM2: item.requiredAreaM2?.toString() ?? null,
+        panelType: item.panelType ?? null,
+        panelSize: item.panelSize
+          ? {
+              ...item.panelSize,
+              areaM2: item.panelSize.areaM2.toString(),
+            }
+          : null,
+      })),
+    };
+  }
+
+  return serialized;
 }

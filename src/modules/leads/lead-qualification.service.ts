@@ -10,6 +10,7 @@ import {
   ActivityType,
   HplApplication,
   Lead,
+  LeadQualification,
   LeadStatus,
   Prisma,
 } from '@prisma/client';
@@ -17,6 +18,7 @@ import { BusinessException } from '../../common/exceptions/business.exception';
 import { PrismaService } from '../prisma/prisma.service';
 import { UpsertLeadQualificationDto } from './dto/upsert-lead-qualification.dto';
 import {
+  mapQualificationItemWriteData,
   mapQualificationWriteData,
   serializeLeadQualification,
   toCalculationRequirementPrefill,
@@ -48,9 +50,53 @@ const qualificationInclude =
         isActive: true,
       },
     },
+    items: {
+      orderBy: { sortOrder: 'asc' },
+      include: {
+        panelType: {
+          select: { id: true, code: true, displayNameRu: true },
+        },
+        panelSize: {
+          select: {
+            id: true,
+            displayName: true,
+            widthMm: true,
+            heightMm: true,
+            areaM2: true,
+          },
+        },
+      },
+    },
   });
 
 type PrismaTx = Prisma.TransactionClient;
+
+function toLegacyItemMirror(
+  item: ReturnType<typeof mapQualificationItemWriteData> | undefined,
+) {
+  return {
+    application: item?.application ?? null,
+    panelTypeId: item?.panelTypeId ?? null,
+    thicknessMm: item?.thicknessMm ?? null,
+    panelSizeId: item?.panelSizeId ?? null,
+    customWidthMm: item?.customWidthMm ?? null,
+    customHeightMm: item?.customHeightMm ?? null,
+    colorCode: item?.colorCode ?? null,
+    colorName: item?.colorName ?? null,
+    requiredAreaM2: item?.requiredAreaM2 ?? null,
+  };
+}
+
+function assertUrgencyMutualExclusion(
+  urgent: boolean | null | undefined,
+  willingToWait: boolean | null | undefined,
+): void {
+  if (urgent === true && willingToWait === true) {
+    throw new BadRequestException(
+      'urgent and willingToWait cannot both be true',
+    );
+  }
+}
 
 @Injectable()
 export class LeadQualificationService {
@@ -75,6 +121,13 @@ export class LeadQualificationService {
       requirementPrefill: qualification
         ? toCalculationRequirementPrefill(qualification)
         : null,
+      ...(qualification?.items
+        ? {
+            requirementPrefills: qualification.items.map(
+              toCalculationRequirementPrefill,
+            ),
+          }
+        : {}),
     };
   }
 
@@ -116,47 +169,107 @@ export class LeadQualificationService {
     currentUserId: string,
     activityAction: string,
   ) {
-    assertCustomDimensionsPair(dto);
+    const items = dto.items;
+    if (items === undefined) {
+      assertCustomDimensionsPair(dto);
+    }
     const writeData = mapQualificationWriteData(dto);
     const existing = await tx.leadQualification.findUnique({
       where: { leadId },
       select: {
+        id: true,
         application: true,
         thicknessMm: true,
         panelTypeId: true,
+        urgent: true,
+        willingToWait: true,
       },
     });
-    const mergedApplication =
-      writeData.application !== undefined
-        ? writeData.application
-        : existing?.application;
-    const mergedThickness =
-      writeData.thicknessMm !== undefined
-        ? writeData.thicknessMm
-        : existing?.thicknessMm;
-    if (mergedThickness != null) {
-      const thicknessResult = validateHplThickness(
-        mergedApplication,
-        mergedThickness,
-      );
-      if (!thicknessResult.ok) {
-        throw new BusinessException(
-          HttpStatus.BAD_REQUEST,
-          thicknessResult.errorCode,
-          thicknessResult.message,
+
+    if (items !== undefined) {
+      const firstItem = items[0]
+        ? mapQualificationItemWriteData(items[0])
+        : undefined;
+      Object.assign(writeData, toLegacyItemMirror(firstItem));
+
+      for (const item of items) {
+        assertCustomDimensionsPair(item);
+        const itemData = mapQualificationItemWriteData(item);
+        const itemApplication = itemData.application ?? null;
+
+        if (itemData.thicknessMm != null) {
+          const thicknessResult = validateHplThickness(
+            itemApplication,
+            itemData.thicknessMm,
+          );
+          if (!thicknessResult.ok) {
+            throw new BusinessException(
+              HttpStatus.BAD_REQUEST,
+              thicknessResult.errorCode,
+              thicknessResult.message,
+            );
+          }
+          itemData.thicknessMm = thicknessResult.thicknessMm;
+        }
+
+        await this.assertCatalogReferences(tx, itemData, itemApplication);
+      }
+    } else {
+      const mergedApplication =
+        writeData.application !== undefined
+          ? writeData.application
+          : existing?.application;
+      const mergedThickness =
+        writeData.thicknessMm !== undefined
+          ? writeData.thicknessMm
+          : existing?.thicknessMm;
+      if (mergedThickness != null) {
+        const thicknessResult = validateHplThickness(
+          mergedApplication,
+          mergedThickness,
         );
+        if (!thicknessResult.ok) {
+          throw new BusinessException(
+            HttpStatus.BAD_REQUEST,
+            thicknessResult.errorCode,
+            thicknessResult.message,
+          );
+        }
+        if (writeData.thicknessMm !== undefined) {
+          writeData.thicknessMm = thicknessResult.thicknessMm;
+        }
       }
-      if (writeData.thicknessMm !== undefined) {
-        writeData.thicknessMm = thicknessResult.thicknessMm;
-      }
+      await this.assertCatalogReferences(tx, writeData, mergedApplication);
     }
-    await this.assertCatalogReferences(tx, writeData, mergedApplication);
+
+    if (
+      writeData.urgent !== undefined ||
+      writeData.willingToWait !== undefined
+    ) {
+      assertUrgencyMutualExclusion(
+        writeData.urgent !== undefined ? writeData.urgent : existing?.urgent,
+        writeData.willingToWait !== undefined
+          ? writeData.willingToWait
+          : existing?.willingToWait,
+      );
+    }
 
     const qualification = await this.upsertQualificationRow(
       tx,
       leadId,
       writeData,
     );
+
+    let qualificationWithItems = qualification;
+    if (items !== undefined) {
+      await this.syncQualificationItems(tx, qualification.id, items);
+      qualificationWithItems = await tx.leadQualification.findUniqueOrThrow({
+        where: { id: qualification.id },
+        include: qualificationInclude,
+      });
+    } else {
+      await this.syncLegacyQualificationItem(tx, qualification);
+    }
 
     await tx.activity.create({
       data: {
@@ -167,16 +280,96 @@ export class LeadQualificationService {
         content: 'Stage-1 HPL qualification updated',
         metadata: {
           action: activityAction,
-          application: qualification.application,
-          installationRequired: qualification.installationRequired,
-          stockOnly: qualification.stockOnly,
-          urgent: qualification.urgent,
-          willingToWait: qualification.willingToWait,
+          application: qualificationWithItems.application,
+          installationRequired: qualificationWithItems.installationRequired,
+          stockOnly: qualificationWithItems.stockOnly,
+          urgent: qualificationWithItems.urgent,
+          willingToWait: qualificationWithItems.willingToWait,
         },
       },
     });
 
-    return serializeLeadQualification(qualification);
+    return serializeLeadQualification(qualificationWithItems);
+  }
+
+  private async syncQualificationItems(
+    tx: PrismaTx,
+    qualificationId: string,
+    items: NonNullable<UpsertLeadQualificationDto['items']>,
+  ): Promise<void> {
+    const existing = await tx.leadQualificationItem.findMany({
+      where: { qualificationId },
+      select: { id: true },
+    });
+    const existingIds = new Set(existing.map((item) => item.id));
+    const requestedIds = items
+      .map((item) => item.id)
+      .filter((id): id is string => Boolean(id));
+
+    for (const id of requestedIds) {
+      if (!existingIds.has(id)) {
+        throw new BadRequestException(
+          `Lead qualification item ${id} does not belong to this qualification`,
+        );
+      }
+    }
+
+    await tx.leadQualificationItem.deleteMany({
+      where: {
+        qualificationId,
+        ...(requestedIds.length ? { id: { notIn: requestedIds } } : {}),
+      },
+    });
+
+    for (const [sortOrder, item] of items.entries()) {
+      const data = {
+        ...mapQualificationItemWriteData(item),
+        sortOrder,
+      };
+      if (item.id) {
+        await tx.leadQualificationItem.update({
+          where: { id: item.id },
+          data,
+        });
+      } else {
+        await tx.leadQualificationItem.create({
+          data: {
+            qualificationId,
+            ...data,
+          },
+        });
+      }
+    }
+  }
+
+  private async syncLegacyQualificationItem(
+    tx: PrismaTx,
+    qualification: LeadQualification,
+  ): Promise<void> {
+    const items = await tx.leadQualificationItem.findMany({
+      where: { qualificationId: qualification.id },
+      select: { id: true },
+      take: 2,
+    });
+    if (items.length !== 1) {
+      return;
+    }
+
+    await tx.leadQualificationItem.update({
+      where: { id: items[0].id },
+      data: {
+        sortOrder: 0,
+        application: qualification.application,
+        panelTypeId: qualification.panelTypeId,
+        thicknessMm: qualification.thicknessMm,
+        panelSizeId: qualification.panelSizeId,
+        customWidthMm: qualification.customWidthMm,
+        customHeightMm: qualification.customHeightMm,
+        colorCode: qualification.colorCode,
+        colorName: qualification.colorName,
+        requiredAreaM2: qualification.requiredAreaM2,
+      },
+    });
   }
 
   private async upsertQualificationRow(

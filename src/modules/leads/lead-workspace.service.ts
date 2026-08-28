@@ -43,6 +43,23 @@ const leadWorkspaceInclude = Prisma.validator<Prisma.LeadInclude>()({
           areaM2: true,
         },
       },
+      items: {
+        orderBy: { sortOrder: 'asc' },
+        include: {
+          panelType: {
+            select: { id: true, code: true, displayNameRu: true },
+          },
+          panelSize: {
+            select: {
+              id: true,
+              displayName: true,
+              widthMm: true,
+              heightMm: true,
+              areaM2: true,
+            },
+          },
+        },
+      },
     },
   },
   commercialQualification: {
@@ -184,11 +201,25 @@ export class LeadWorkspaceService {
                   areaM2: lead.qualification.panelSize.areaM2.toString(),
                 }
               : null,
+            items: lead.qualification.items.map((item) => ({
+              ...item,
+              thicknessMm: item.thicknessMm?.toString() ?? null,
+              requiredAreaM2: item.requiredAreaM2?.toString() ?? null,
+              panelSize: item.panelSize
+                ? {
+                    ...item.panelSize,
+                    areaM2: item.panelSize.areaM2.toString(),
+                  }
+                : null,
+            })),
           }
         : null,
       requirementPrefill: lead.qualification
         ? toCalculationRequirementPrefill(lead.qualification)
         : null,
+      requirementPrefills: lead.qualification
+        ? lead.qualification.items.map(toCalculationRequirementPrefill)
+        : [],
       commercialQualification: lead.commercialQualification ?? null,
       commercialPrefill: lead.commercialQualification
         ? toCommercialPrefill(lead.commercialQualification)

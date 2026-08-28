@@ -693,27 +693,30 @@ model LeadQualification {
   id     String @id @default(uuid())
   leadId String @unique
 
-  application          HplApplication?
-  panelTypeId          String?
-  thicknessMm          Decimal?        @db.Decimal(6, 2)
-  panelSizeId          String?
-  customWidthMm        Int?
-  customHeightMm       Int?
-  colorCode            String?
-  colorName            String?
-  requiredAreaM2       Decimal?        @db.Decimal(10, 4)
-  installationRequired Boolean?
-  stockOnly            Boolean?
-  urgent               Boolean?
-  willingToWait        Boolean?
-  customerRequirements String?
+  application           HplApplication?
+  panelTypeId           String?
+  thicknessMm           Decimal?        @db.Decimal(6, 2)
+  panelSizeId           String?
+  customWidthMm         Int?
+  customHeightMm        Int?
+  colorCode             String?
+  colorName             String?
+  requiredAreaM2        Decimal?        @db.Decimal(10, 4)
+  installationRequired  Boolean?
+  stockOnly             Boolean?
+  urgent                Boolean?
+  willingToWait         Boolean?
+  ventFacadeExists      Boolean?
+  ventFacadeKitRequired Boolean?
+  customerRequirements  String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  lead      Lead       @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  panelType PanelType? @relation(fields: [panelTypeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
-  panelSize PanelSize? @relation(fields: [panelSizeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  lead      Lead                    @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  panelType PanelType?              @relation(fields: [panelTypeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  panelSize PanelSize?              @relation(fields: [panelSizeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  items     LeadQualificationItem[]
 
   @@index([application])
   @@index([panelTypeId])
@@ -721,6 +724,31 @@ model LeadQualification {
   @@index([installationRequired])
   @@index([stockOnly])
   @@index([urgent])
+}
+
+model LeadQualificationItem {
+  id              String          @id @default(uuid())
+  qualificationId String
+  sortOrder       Int             @default(0)
+  application     HplApplication?
+  panelTypeId     String?
+  thicknessMm     Decimal?        @db.Decimal(6, 2)
+  panelSizeId     String?
+  customWidthMm   Int?
+  customHeightMm  Int?
+  colorCode       String?
+  colorName       String?
+  requiredAreaM2  Decimal?        @db.Decimal(10, 4)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  qualification LeadQualification @relation(fields: [qualificationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  panelType     PanelType?        @relation(fields: [panelTypeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  panelSize     PanelSize?        @relation(fields: [panelSizeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([qualificationId, sortOrder])
+  @@index([panelTypeId])
+  @@index([panelSizeId])
 }
 
 model LeadCommercialQualification {
@@ -1423,6 +1451,7 @@ model PanelType {
   qualityMappings      SupplierQualityMapping[]
   calculationLineItems CalculationLineItem[]
   qualifications       LeadQualification[]
+  qualificationItems   LeadQualificationItem[]
 }
 
 model PanelSize {
@@ -1436,6 +1465,7 @@ model PanelSize {
 
   calculationLineItems CalculationLineItem[]
   qualifications       LeadQualification[]
+  qualificationItems   LeadQualificationItem[]
 
   @@unique([widthMm, heightMm])
 }
@@ -1633,6 +1663,8 @@ model CalculationLineItem {
   supplierId            String?
   qualityClassId        String
   colorId               String?
+  colorCode             String?
+  colorName             String?
   coating               String?
   texture               String?
   note                  String?
