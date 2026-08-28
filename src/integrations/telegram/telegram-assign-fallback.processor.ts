@@ -9,13 +9,13 @@ import type { TelegramAssignFallbackJob } from './telegram.types';
 export class TelegramAssignFallbackProcessor extends WorkerHost {
   private readonly logger = new Logger(TelegramAssignFallbackProcessor.name);
 
-  constructor(
-    private readonly adminHandler: TelegramAdminHandlerService,
-  ) {
+  constructor(private readonly adminHandler: TelegramAdminHandlerService) {
     super();
   }
 
-  async process(job: Job<TelegramAssignFallbackJob>): Promise<{ status: string }> {
+  async process(
+    job: Job<TelegramAssignFallbackJob>,
+  ): Promise<{ status: string }> {
     this.logger.log(`Fallback assign for lead ${job.data.leadId}`);
     await this.adminHandler.assignLeastLoadedManager(job.data.leadId);
     return { status: 'ok' };

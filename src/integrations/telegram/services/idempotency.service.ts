@@ -37,7 +37,10 @@ export class IdempotencyService {
     });
   }
 
-  async markProcessed(id: string, error?: string): Promise<InboundWebhookEvent> {
+  async markProcessed(
+    id: string,
+    error?: string,
+  ): Promise<InboundWebhookEvent> {
     return this.prisma.inboundWebhookEvent.update({
       where: { id },
       data: {

@@ -55,7 +55,10 @@ export class TelegramIncomingProcessor extends WorkerHost {
       return { status: 'ok' };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Job ${job.id} failed: ${message}`, error instanceof Error ? error.stack : undefined);
+      this.logger.error(
+        `Job ${job.id} failed: ${message}`,
+        error instanceof Error ? error.stack : undefined,
+      );
       await this.idempotency.markFailedByExternalId(
         TELEGRAM_SOURCE,
         externalId,

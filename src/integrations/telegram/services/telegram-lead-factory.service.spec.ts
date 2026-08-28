@@ -1,10 +1,6 @@
 import { ConfigService } from '@nestjs/config';
 import { Test, TestingModule } from '@nestjs/testing';
-import {
-  ClientStatus,
-  ClientType,
-  Lead,
-} from '@prisma/client';
+import { ClientStatus, ClientType, Lead } from '@prisma/client';
 import { PrismaService } from '../../../modules/prisma/prisma.service';
 import { TelegramLeadFactory } from './telegram-lead-factory.service';
 import { TelegramBotService } from './telegram-bot.service';
@@ -205,7 +201,9 @@ describe('TelegramLeadFactory', () => {
     });
 
     const leadQualificationCreate = jest.fn().mockResolvedValue({});
-    const panelTypeFindFirst = jest.fn().mockResolvedValue({ id: 'pt-interior' });
+    const panelTypeFindFirst = jest
+      .fn()
+      .mockResolvedValue({ id: 'pt-interior' });
 
     prisma.$transaction.mockImplementation(async (callback) =>
       callback({

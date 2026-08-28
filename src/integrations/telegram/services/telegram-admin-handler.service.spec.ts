@@ -127,7 +127,9 @@ describe('TelegramAdminHandlerService', () => {
     });
     prisma.$transaction.mockImplementation(async (callback) => {
       await callback({
-        telegramLeadMetadata: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        telegramLeadMetadata: {
+          updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        },
         lead: { update: jest.fn() },
         leadAssignmentHistory: { create: jest.fn() },
         activity: { create: jest.fn() },

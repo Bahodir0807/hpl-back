@@ -1,11 +1,7 @@
 import { InjectQueue } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import {
-  ActivityType,
-  LeadStatus,
-  RoleName,
-} from '@prisma/client';
+import { ActivityType, LeadStatus, RoleName } from '@prisma/client';
 import { Queue } from 'bullmq';
 import { QUEUE_NAMES } from '../../../common/queues/queue.constants';
 import type { Env } from '../../../config/env.schema';
@@ -85,7 +81,12 @@ export class TelegramAdminHandlerService {
           }
         : undefined;
 
-    await this.assignManager(leadId, manager.id, context, 'telegram_assign_fallback');
+    await this.assignManager(
+      leadId,
+      manager.id,
+      context,
+      'telegram_assign_fallback',
+    );
   }
 
   async assignManager(
@@ -530,7 +531,9 @@ export class TelegramAdminHandlerService {
   }
 
   private async getPoolUser() {
-    const email = this.configService.get('LEAD_POOL_USER_EMAIL', { infer: true });
+    const email = this.configService.get('LEAD_POOL_USER_EMAIL', {
+      infer: true,
+    });
 
     return this.prisma.user.findUniqueOrThrow({
       where: { email },

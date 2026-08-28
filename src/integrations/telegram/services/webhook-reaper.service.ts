@@ -36,10 +36,7 @@ export class WebhookReaperService {
 
     for (const event of stuck) {
       if (event.attempts >= MAX_REAP_ATTEMPTS) {
-        await this.idempotency.markProcessed(
-          event.id,
-          'Max retries exceeded',
-        );
+        await this.idempotency.markProcessed(event.id, 'Max retries exceeded');
         this.logger.warn(
           `Webhook event ${event.id} (${event.externalId}) marked failed after ${MAX_REAP_ATTEMPTS} attempts`,
         );

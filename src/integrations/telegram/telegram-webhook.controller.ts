@@ -1,11 +1,5 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import {
-  Body,
-  Controller,
-  Post,
-  Res,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Post, Res, UseGuards } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Prisma } from '@prisma/client';
 import { Queue } from 'bullmq';

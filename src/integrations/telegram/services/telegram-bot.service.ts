@@ -46,7 +46,9 @@ export class TelegramBotService {
     private readonly http: HttpService,
     private readonly configService: ConfigService<Env, true>,
   ) {
-    this.botToken = this.configService.get('TELEGRAM_BOT_TOKEN', { infer: true });
+    this.botToken = this.configService.get('TELEGRAM_BOT_TOKEN', {
+      infer: true,
+    });
     this.isProduction =
       this.configService.get('NODE_ENV', { infer: true }) === 'production';
 
@@ -150,9 +152,10 @@ export class TelegramBotService {
     const rows: Array<Array<Record<string, string>>> = page.map(
       (manager, index) => [
         {
-          text: offset === 0 && page.length === 1
-            ? 'Назначить на менеджера'
-            : `Назначить: ${manager.displayName}`,
+          text:
+            offset === 0 && page.length === 1
+              ? 'Назначить на менеджера'
+              : `Назначить: ${manager.displayName}`,
           callback_data: `assign:${compactLeadId}:${offset + index}`,
         },
       ],
@@ -236,10 +239,12 @@ export class TelegramBotService {
     const visibleManagers = managers.slice(0, 3);
 
     for (let index = 0; index < visibleManagers.length; index += 2) {
-      const row = visibleManagers.slice(index, index + 2).map((manager, offset) => ({
-        text: `👤 ${manager.displayName}`,
-        callback_data: `a|${compactLeadId}|${index + offset}`,
-      }));
+      const row = visibleManagers
+        .slice(index, index + 2)
+        .map((manager, offset) => ({
+          text: `👤 ${manager.displayName}`,
+          callback_data: `a|${compactLeadId}|${index + offset}`,
+        }));
       rows.push(row);
     }
 
