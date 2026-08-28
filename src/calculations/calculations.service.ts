@@ -74,6 +74,8 @@ export type CalculatedLineItem = {
   supplierId: string | null;
   qualityClassId: string;
   colorId: string | null;
+  colorCode: string | null;
+  colorName: string | null;
   coating: string | null;
   texture: string | null;
   note: string | null;
@@ -100,6 +102,8 @@ export function toPersistedLineItem(item: CalculatedLineItem) {
     supplierId: item.supplierId,
     qualityClassId: item.qualityClassId,
     colorId: item.colorId,
+    colorCode: item.colorCode,
+    colorName: item.colorName,
     coating: item.coating,
     texture: item.texture,
     note: item.note,
@@ -141,6 +145,8 @@ type ResolvedCalculationItem = {
   supplierId: string | null;
   qualityClassId: string;
   colorId?: string;
+  colorCode?: string | null;
+  colorName?: string | null;
   coating?: string | null;
   texture?: string | null;
   note?: string | null;
@@ -161,6 +167,8 @@ type LineGeometry = {
   supplierId: string | null;
   qualityClassId: string;
   colorId: string | null;
+  colorCode: string | null;
+  colorName: string | null;
   coating: string | null;
   texture: string | null;
   note: string | null;
@@ -474,6 +482,7 @@ export class CalculationService {
     leadId: string,
     items: CalculationItemDto[],
     user: CurrentUser,
+    options: { allowItemSupplier?: boolean } = {},
   ): Promise<{
     lead: LeadForHplCalculation;
     cnyUsdRate: null;
@@ -481,7 +490,11 @@ export class CalculationService {
   }> {
     this.assertManualPurchasePriceAccess(items, user);
     const lead = await this.guardLeadForCalculationRequest(leadId, user);
-    const resolved = this.deriveManagerCatalogItems(items, lead.qualification);
+    const resolved = this.deriveManagerCatalogItems(
+      items,
+      lead.qualification,
+      options,
+    );
     const calculatedItems = await Promise.all(
       resolved.map((item, index) => this.snapshotManagerItem(item, index)),
     );
@@ -506,6 +519,8 @@ export class CalculationService {
       supplierId: item.supplierId,
       qualityClassId: item.qualityClassId,
       colorId: geometry.colorId,
+      colorCode: geometry.colorCode,
+      colorName: geometry.colorName,
       coating: geometry.coating,
       texture: geometry.texture,
       note: geometry.note,
@@ -579,6 +594,8 @@ export class CalculationService {
       supplierId: item.supplierId,
       qualityClassId: item.qualityClassId,
       colorId: geometry.colorId,
+      colorCode: geometry.colorCode,
+      colorName: geometry.colorName,
       coating: geometry.coating,
       texture: geometry.texture,
       note: geometry.note,
@@ -641,6 +658,17 @@ export class CalculationService {
         : Promise.resolve(null),
     ]);
 
+    let rawColor: { colorCode: string; colorName: string } | null = null;
+    if (!color && item.colorCode && item.supplierId) {
+      rawColor = await this.prisma.panelColor.findFirst({
+        where: {
+          supplierId: item.supplierId,
+          colorCode: item.colorCode,
+        },
+        select: { colorCode: true, colorName: true },
+      });
+    }
+
     if (!panelType) {
       throw new BusinessException(
         HttpStatus.BAD_REQUEST,
@@ -696,6 +724,14 @@ export class CalculationService {
       );
     }
 
+    if (item.colorCode && item.supplierId && !color && !rawColor) {
+      throw new BusinessException(
+        HttpStatus.BAD_REQUEST,
+        'COLOR_SUPPLIER_MISMATCH',
+        'Выбранный декор не найден у выбранного поставщика',
+      );
+    }
+
     const thicknessResult = validateHplThickness(application, item.thicknessMm);
     if (!thicknessResult.ok) {
       throw new BusinessException(
@@ -734,6 +770,10 @@ export class CalculationService {
       supplierId: item.supplierId,
       qualityClassId: item.qualityClassId,
       colorId: item.colorId ?? null,
+      colorCode:
+        color?.colorCode ?? rawColor?.colorCode ?? item.colorCode ?? null,
+      colorName:
+        color?.colorName ?? rawColor?.colorName ?? item.colorName ?? null,
       coating: item.coating?.trim() || null,
       texture: item.texture?.trim() || null,
       note: item.note?.trim() || null,
@@ -752,6 +792,7 @@ export class CalculationService {
   private deriveManagerCatalogItems(
     items: CalculationItemDto[],
     qualification: LeadQualification | null,
+    options: { allowItemSupplier?: boolean } = {},
   ): ResolvedCalculationItem[] {
     return items.map((item) => {
       const thicknessMm = parseThicknessMm(resolveThicknessMm(item));
@@ -782,10 +823,14 @@ export class CalculationService {
         panelTypeId: item.panelTypeId,
         panelSizeId: item.panelSizeId,
         thicknessMm,
-        supplierId: null,
+        supplierId: options.allowItemSupplier
+          ? (item.supplierId ?? null)
+          : null,
         qualityClassId: item.qualityClassId,
         requiredAreaM2: item.requiredAreaM2,
         colorId: item.colorId,
+        colorCode: item.colorCode,
+        colorName: item.colorName,
         coating: item.coating,
         texture: item.texture,
         note: item.note,
@@ -873,6 +918,8 @@ export class CalculationService {
         supplierId: commercial.supplierId,
         qualityClassId: commercial.qualityClassId,
         colorId: item.colorId,
+        colorCode: item.colorCode,
+        colorName: item.colorName,
         coating: item.coating,
         texture: item.texture,
         note: item.note,
@@ -913,6 +960,8 @@ export class CalculationService {
       qualityClassId: dto.qualityClassId,
       requiredAreaM2: dto.requiredAreaM2,
       colorId: dto.colorId,
+      colorCode: dto.colorCode,
+      colorName: dto.colorName,
       coating: dto.coating,
       texture: dto.texture,
       customTypeDescription: dto.customTypeDescription,
@@ -953,7 +1002,9 @@ export class CalculationService {
     const lead = await this.prisma.lead.findFirst({
       where: { id: leadId, deletedAt: null },
       include: {
-        qualification: true,
+        qualification: {
+          include: { items: { orderBy: { sortOrder: 'asc' } } },
+        },
         commercialQualification: true,
       },
     });
@@ -1009,7 +1060,9 @@ export class CalculationService {
     const lead = await this.prisma.lead.findFirst({
       where: { id: leadId, deletedAt: null },
       include: {
-        qualification: true,
+        qualification: {
+          include: { items: { orderBy: { sortOrder: 'asc' } } },
+        },
         commercialQualification: true,
       },
     });

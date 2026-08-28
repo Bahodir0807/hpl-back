@@ -494,6 +494,79 @@ describe('QuotesService', () => {
     expect(createData.items.create[0]?.totalPrice).toBeNull();
   });
 
+  it('preserves different suppliers for different request items', async () => {
+    const firstItem = {
+      ...calculation.items[0],
+      panelTypeId: 'type-id',
+      panelSizeId: 'size-id',
+      qualityClassId: 'quality-id',
+      panelSize: {
+        ...calculation.items[0].panelSize,
+        widthMm: 1220,
+        heightMm: 2440,
+      },
+      supplierId: 'supplier-a',
+      supplier: { id: 'supplier-a', code: 'supplier-a', name: 'Supplier A' },
+      color: null,
+      colorCode: null,
+      colorName: null,
+      supplierPricePerM2: new Prisma.Decimal(0),
+      clientPricePerM2: new Prisma.Decimal(0),
+      pricePerM2: new Prisma.Decimal(0),
+      pricePerSheet: new Prisma.Decimal(0),
+      totalPrice: new Prisma.Decimal(0),
+    };
+    const secondItem = {
+      ...firstItem,
+      supplierId: 'supplier-b',
+      supplier: { id: 'supplier-b', code: 'supplier-b', name: 'Supplier B' },
+      requiredAreaM2: new Prisma.Decimal('25'),
+    };
+    const requestGroup = {
+      ...calculation,
+      requestId: 'request-id',
+      title: 'Technical request',
+      notes: null,
+      sortOrder: 0,
+      totalAmount: new Prisma.Decimal(0),
+      cnyUsdRate: null,
+      commercialSupplierId: null,
+      commercialQualityClassId: null,
+      commercialConfirmedAt: null,
+      items: [firstItem, secondItem],
+    };
+    prisma.calculationSession.findFirst.mockResolvedValue({
+      ...requestGroup,
+      request: { quotes: [], calculations: [requestGroup] },
+    });
+    prisma.supplierQualityMapping.findFirst.mockResolvedValue({
+      id: 'mapping-id',
+    });
+
+    await service.createFromCalculation('calc-id', {}, headCommercial);
+
+    const createData = prisma.panelQuote.create.mock.calls[0][0].data as {
+      items: {
+        create: Array<{
+          supplierCode: string;
+          supplierName: string;
+          totalPrice: Prisma.Decimal | null;
+        }>;
+      };
+    };
+    expect(createData.items.create).toHaveLength(2);
+    expect(createData.items.create).toEqual([
+      expect.objectContaining({
+        supplierCode: 'supplier-a',
+        supplierName: 'Supplier A',
+      }),
+      expect.objectContaining({
+        supplierCode: 'supplier-b',
+        supplierName: 'Supplier B',
+      }),
+    ]);
+  });
+
   it('copies calculation pricing snapshot onto the quote without catalog lookup', async () => {
     prisma.calculationSession.findFirst.mockResolvedValue({
       ...calculation,

@@ -113,6 +113,16 @@ export class CalculationItemDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(64)
+  colorCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  colorName?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(120)
   coating?: string;
 

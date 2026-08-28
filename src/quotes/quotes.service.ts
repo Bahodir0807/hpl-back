@@ -142,6 +142,8 @@ type QuoteSnapshotItem = {
     colorName: string;
     supplierId: string;
   } | null;
+  colorCode?: string | null;
+  colorName?: string | null;
   thicknessMm: Prisma.Decimal;
   requiredAreaM2: Prisma.Decimal;
   sheetsCount: number;
@@ -265,7 +267,10 @@ export class QuotesService {
     let referencePricingComplete = true;
 
     if (calculation.requestId) {
-      if (!dto.supplierId) {
+      const hasMissingItemSupplier = groups.some((group) =>
+        group.items.some((item) => !item.supplier?.id),
+      );
+      if (!dto.supplierId && hasMissingItemSupplier) {
         throw new BusinessException(
           HttpStatus.BAD_REQUEST,
           'QUOTE_SUPPLIER_REQUIRED',
@@ -1717,21 +1722,28 @@ export class QuotesService {
 
   private async priceCalculationRequestGroups(
     groups: QuoteSnapshotGroup[],
-    supplierId: string,
+    fallbackSupplierId?: string,
   ): Promise<{
     groups: QuoteSnapshotGroup[];
     cnyUsdRate: Prisma.Decimal | null;
     referencePricingComplete: boolean;
   }> {
-    const supplier = await this.prisma.supplier.findUnique({
-      where: { id: supplierId },
-    });
-    if (!supplier) {
-      throw new BusinessException(
-        HttpStatus.BAD_REQUEST,
-        'SUPPLIER_NOT_FOUND',
-        'Выбранный поставщик не найден',
-      );
+    const supplierCache = new Map<
+      string,
+      NonNullable<QuoteSnapshotItem['supplier']>
+    >();
+    if (fallbackSupplierId) {
+      const fallbackSupplier = await this.prisma.supplier.findUnique({
+        where: { id: fallbackSupplierId },
+      });
+      if (!fallbackSupplier) {
+        throw new BusinessException(
+          HttpStatus.BAD_REQUEST,
+          'SUPPLIER_NOT_FOUND',
+          'Выбранный поставщик не найден',
+        );
+      }
+      supplierCache.set(fallbackSupplier.id, fallbackSupplier);
     }
 
     const pricedGroups: QuoteSnapshotGroup[] = [];
@@ -1739,6 +1751,33 @@ export class QuotesService {
     for (const group of groups) {
       const pricedItems: QuoteSnapshotItem[] = [];
       for (const item of group.items) {
+        const effectiveSupplierId = item.supplier?.id ?? fallbackSupplierId;
+        if (!effectiveSupplierId) {
+          throw new BusinessException(
+            HttpStatus.BAD_REQUEST,
+            'QUOTE_SUPPLIER_REQUIRED',
+            'Перед созданием КП HEAD должен выбрать поставщика для каждой позиции',
+          );
+        }
+
+        let supplier = item.supplier;
+        if (!supplier || supplier.id !== effectiveSupplierId) {
+          supplier = supplierCache.get(effectiveSupplierId) ?? null;
+          if (!supplier) {
+            const loadedSupplier = await this.prisma.supplier.findUnique({
+              where: { id: effectiveSupplierId },
+            });
+            if (!loadedSupplier) {
+              throw new BusinessException(
+                HttpStatus.BAD_REQUEST,
+                'SUPPLIER_NOT_FOUND',
+                'Выбранный поставщик не найден',
+              );
+            }
+            supplierCache.set(loadedSupplier.id, loadedSupplier);
+            supplier = loadedSupplier;
+          }
+        }
         const application = applicationForPanelTypeCode(item.panelType.code);
         const isCustomType = item.panelType.code === HPL_CUSTOM_PANEL_TYPE_CODE;
 
@@ -1791,6 +1830,23 @@ export class QuotesService {
             'COLOR_SUPPLIER_MISMATCH',
             'Выбранный декор недоступен у выбранного поставщика',
           );
+        }
+
+        if (item.colorCode && !item.color) {
+          const matchingColor = await this.prisma.panelColor.findFirst({
+            where: {
+              supplierId: supplier.id,
+              colorCode: item.colorCode,
+            },
+            select: { id: true },
+          });
+          if (!matchingColor) {
+            throw new BusinessException(
+              HttpStatus.BAD_REQUEST,
+              'COLOR_SUPPLIER_MISMATCH',
+              'Сохранённый декор не найден у выбранного поставщика',
+            );
+          }
         }
 
         pricedItems.push({
@@ -1860,8 +1916,8 @@ export class QuotesService {
           supplierName: item.supplier.name,
           qualityClassCode: item.qualityClass.code,
           qualityClassName: item.qualityClass.nameRu,
-          colorCode: item.color?.colorCode ?? null,
-          colorName: item.color?.colorName ?? null,
+          colorCode: item.color?.colorCode ?? item.colorCode ?? null,
+          colorName: item.color?.colorName ?? item.colorName ?? null,
           coating: item.coating ?? null,
           texture: item.texture ?? null,
           note: item.note ?? null,
