@@ -25,6 +25,28 @@ import {
 import { FilterCalculationRequestsDto } from './dto/filter-calculation-requests.dto';
 import { UpdateCalculationRequestDto } from './dto/update-calculation-request.dto';
 import { QUOTE_PERMISSIONS } from '../quotes/quote.constants';
+import {
+  mapQualificationItemToRequestItem,
+  panelTypeCodeFromApplication,
+  qualificationItemsForRequest,
+  type PersistableQualificationRequestItem,
+  type QualificationRequestSource,
+} from './qualification-request-items';
+
+type PrismaTx = Prisma.TransactionClient;
+
+export type QualificationRequestSyncResult = {
+  requestId: string | null;
+  outcome: 'created' | 'updated' | 'skipped';
+  notifySubmitted: boolean;
+};
+
+export type QualificationRequestLeadSnapshot = {
+  id: string;
+  clientId: string | null;
+  projectObjectId: string | null;
+  dealId: string | null;
+};
 
 const requestInclude = Prisma.validator<Prisma.CalculationRequestInclude>()({
   calculations: {
@@ -36,7 +58,7 @@ const requestInclude = Prisma.validator<Prisma.CalculationRequestInclude>()({
         include: {
           panelType: { select: { code: true, displayNameRu: true } },
           panelSize: { select: { displayName: true, areaM2: true } },
-          supplier: { select: { code: true, name: true } },
+          supplier: { select: { id: true, code: true, name: true } },
           qualityClass: { select: { code: true, nameRu: true } },
           color: { select: { colorCode: true, colorName: true } },
         },
@@ -84,6 +106,71 @@ export class CalculationRequestService {
     private readonly prisma: PrismaService,
     private readonly calculationService: CalculationService,
   ) {}
+
+  async syncFromQualificationInTx(
+    tx: PrismaTx,
+    lead: QualificationRequestLeadSnapshot,
+    qualification: QualificationRequestSource | null,
+    actorUserId: string,
+  ): Promise<QualificationRequestSyncResult> {
+    await tx.$executeRaw`
+      SELECT pg_advisory_xact_lock(hashtext(${`calc-req-qual:${lead.id}`}))
+    `;
+
+    const existing = await tx.calculationRequest.findFirst({
+      where: { leadId: lead.id, deletedAt: null },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+    if (existing) {
+      return {
+        requestId: existing.id,
+        outcome: 'skipped',
+        notifySubmitted: false,
+      };
+    }
+
+    const items = await this.buildQualificationRequestItems(tx, qualification);
+    const leadRecord = await tx.lead.findUnique({
+      where: { id: lead.id },
+      select: { managerCommercialNote: true },
+    });
+    const notes = leadRecord?.managerCommercialNote?.trim() || null;
+
+    const request = await tx.calculationRequest.create({
+      data: {
+        leadId: lead.id,
+        clientId: lead.clientId,
+        dealId: lead.dealId,
+        createdById: actorUserId,
+        status: CALCULATION_REQUEST_STATUS.DRAFT,
+        notes,
+      },
+    });
+    await this.createQualificationSession(tx, {
+      requestId: request.id,
+      lead,
+      createdById: actorUserId,
+      items,
+    });
+    return {
+      requestId: request.id,
+      outcome: 'created',
+      notifySubmitted: false,
+    };
+  }
+
+  async notifyRequestSubmittedSafe(
+    requestId: string,
+    leadId: string,
+  ): Promise<void> {
+    await this.safePostCommit(
+      'calculation request submitted notification',
+      async () => {
+        await this.notifyRequestSubmitted(requestId, leadId);
+      },
+    );
+  }
 
   async create(
     dto: CreateCalculationRequestDto,
@@ -243,7 +330,11 @@ export class CalculationRequestService {
               request.leadId,
               group.items,
               user,
-              { allowItemSupplier: isHeadReviewEdit },
+              {
+                allowIncomplete:
+                  isHeadReviewEdit ||
+                  request.status === CALCULATION_REQUEST_STATUS.DRAFT,
+              },
             ),
           })),
         )
@@ -302,6 +393,7 @@ export class CalculationRequestService {
     id: string,
     user: CurrentUser,
   ): Promise<CalculationRequestWithGroups> {
+    this.assertSubmitAccess(user);
     const request = await this.findOne(id, user);
     this.assertWriteAccess(request.createdById, user);
     this.assertDraft(request.status);
@@ -348,53 +440,137 @@ export class CalculationRequestService {
       );
     }
 
-    await this.safePostCommit(
-      'calculation request submitted notification',
-      async () => {
-        const recipients = await this.prisma.user.findMany({
-          where: {
-            isActive: true,
-            OR: [
-              {
-                roles: {
-                  some: {
-                    role: {
-                      permissions: {
-                        some: {
-                          permission: { slug: QUOTE_PERMISSIONS.APPROVE },
-                        },
-                      },
+    await this.notifyRequestSubmittedSafe(claimed.id, claimed.leadId);
+
+    return claimed;
+  }
+
+  private async notifyRequestSubmitted(
+    requestId: string,
+    leadId: string,
+  ): Promise<void> {
+    const recipients = await this.prisma.user.findMany({
+      where: {
+        isActive: true,
+        OR: [
+          {
+            roles: {
+              some: {
+                role: {
+                  permissions: {
+                    some: {
+                      permission: { slug: QUOTE_PERMISSIONS.APPROVE },
                     },
                   },
                 },
               },
-              {
-                permissions: {
-                  some: {
-                    permission: { slug: QUOTE_PERMISSIONS.APPROVE },
-                  },
-                },
-              },
-            ],
+            },
           },
-          select: { id: true },
-        });
-        if (recipients.length > 0) {
-          await this.prisma.notification.createMany({
-            data: recipients.map((recipient) => ({
-              userId: recipient.id,
-              title: 'Calculation request submitted',
-              message: `Calculation request #${claimed.id.slice(0, 8)} is ready for commercial pricing`,
-              type: 'calculation_request_submitted',
-              relatedType: 'Lead',
-              relatedId: claimed.leadId,
-            })),
-          });
-        }
+          {
+            permissions: {
+              some: {
+                permission: { slug: QUOTE_PERMISSIONS.APPROVE },
+              },
+            },
+          },
+        ],
       },
-    );
+      select: { id: true },
+    });
+    if (recipients.length === 0) {
+      return;
+    }
 
-    return claimed;
+    await this.prisma.notification.createMany({
+      data: recipients.map((recipient) => ({
+        userId: recipient.id,
+        title: 'Calculation request submitted',
+        message: `Calculation request #${requestId.slice(0, 8)} is ready for commercial pricing`,
+        type: 'calculation_request_submitted',
+        relatedType: 'Lead',
+        relatedId: leadId,
+      })),
+    });
+  }
+
+  private async buildQualificationRequestItems(
+    tx: PrismaTx,
+    qualification: QualificationRequestSource | null,
+  ) {
+    const sources = qualificationItemsForRequest(qualification);
+    const items: PersistableQualificationRequestItem[] = [];
+    for (const [sortOrder, item] of sources.entries()) {
+      const panelTypeId = await this.resolvePanelTypeId(tx, item);
+      const panelSize = item.panelSizeId
+        ? await tx.panelSize.findFirst({
+            where: { id: item.panelSizeId },
+            select: { widthMm: true, heightMm: true },
+          })
+        : null;
+      items.push(
+        mapQualificationItemToRequestItem(item, sortOrder, {
+          panelTypeId,
+          panelSize,
+        }),
+      );
+    }
+    return items;
+  }
+
+  private async resolvePanelTypeId(
+    tx: PrismaTx,
+    item: {
+      panelTypeId?: string | null;
+      application?: string | null;
+    },
+  ): Promise<string | null> {
+    if (item.panelTypeId) {
+      return item.panelTypeId;
+    }
+
+    const code = panelTypeCodeFromApplication(item.application);
+    if (!code) {
+      return null;
+    }
+
+    const panelType = await tx.panelType.findFirst({
+      where: { code, isActive: true },
+      select: { id: true },
+    });
+    return panelType?.id ?? null;
+  }
+
+  private async createQualificationSession(
+    tx: PrismaTx,
+    input: {
+      requestId: string;
+      lead: QualificationRequestLeadSnapshot;
+      createdById: string;
+      items: Awaited<
+        ReturnType<CalculationRequestService['buildQualificationRequestItems']>
+      >;
+    },
+  ): Promise<void> {
+    await tx.calculationSession.create({
+      data: {
+        requestId: input.requestId,
+        leadId: input.lead.id,
+        clientId: input.lead.clientId,
+        projectObjectId: input.lead.projectObjectId,
+        dealId: input.lead.dealId,
+        createdById: input.createdById,
+        status: CALCULATION_STATUS.DRAFT,
+        sortOrder: 0,
+        title: 'Расчёт №1',
+        totalAmount: new Prisma.Decimal(0),
+        displayCurrency: HPL_SELLING_CURRENCY,
+        cnyUsdRate: null,
+        sellingCoefficient: HPL_SELLING_COEFFICIENT,
+        items: {
+          create: input.items,
+        },
+      },
+    });
   }
 
   private async safePostCommit(
@@ -461,6 +637,22 @@ export class CalculationRequestService {
       HttpStatus.FORBIDDEN,
       'FORBIDDEN',
       'Недостаточно прав для создания запроса расчёта',
+    );
+  }
+
+  private assertSubmitAccess(user: CurrentUser): void {
+    if (
+      user.permissions.includes(CALCULATION_PERMISSIONS.CREATE) &&
+      user.permissions.includes(CALCULATION_PERMISSIONS.UPDATE) &&
+      user.permissions.includes(QUOTE_PERMISSIONS.CLIENT_ACCEPT)
+    ) {
+      return;
+    }
+
+    throw new BusinessException(
+      HttpStatus.FORBIDDEN,
+      'FORBIDDEN',
+      'Отправить расчёт руководителю может только менеджер',
     );
   }
 

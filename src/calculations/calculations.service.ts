@@ -68,21 +68,22 @@ export type CalculationWithItems = Prisma.CalculationSessionGetPayload<{
 }>;
 
 export type CalculatedLineItem = {
-  panelTypeId: string;
-  panelSizeId: string;
-  thicknessMm: Prisma.Decimal;
+  panelTypeId: string | null;
+  panelSizeId: string | null;
+  thicknessMm: Prisma.Decimal | null;
   supplierId: string | null;
-  qualityClassId: string;
+  qualityClassId: string | null;
   colorId: string | null;
   colorCode: string | null;
   colorName: string | null;
   coating: string | null;
   texture: string | null;
+  decor: string | null;
   note: string | null;
   customTypeDescription: string | null;
   customWidthMm: number | null;
   customHeightMm: number | null;
-  requiredAreaM2: Prisma.Decimal;
+  requiredAreaM2: Prisma.Decimal | null;
   sheetsCount: number;
   supplierPricePerM2: Prisma.Decimal;
   clientPricePerM2: Prisma.Decimal;
@@ -93,6 +94,11 @@ export type CalculatedLineItem = {
   sortOrder: number;
   areaM2: Prisma.Decimal;
 };
+
+function optionalLineText(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
 
 export function toPersistedLineItem(item: CalculatedLineItem) {
   return {
@@ -106,6 +112,7 @@ export function toPersistedLineItem(item: CalculatedLineItem) {
     colorName: item.colorName,
     coating: item.coating,
     texture: item.texture,
+    decor: item.decor,
     note: item.note,
     customTypeDescription: item.customTypeDescription,
     customWidthMm: item.customWidthMm,
@@ -139,21 +146,22 @@ type CommercialDecision = {
 };
 
 type ResolvedCalculationItem = {
-  panelTypeId: string;
-  panelSizeId: string;
-  thicknessMm: Prisma.Decimal;
+  panelTypeId: string | null;
+  panelSizeId: string | null;
+  thicknessMm: Prisma.Decimal | null;
   supplierId: string | null;
-  qualityClassId: string;
-  colorId?: string;
+  qualityClassId: string | null;
+  colorId?: string | null;
   colorCode?: string | null;
   colorName?: string | null;
   coating?: string | null;
   texture?: string | null;
+  decor?: string | null;
   note?: string | null;
   customTypeDescription?: string | null;
   customWidthMm?: number | null;
   customHeightMm?: number | null;
-  requiredAreaM2: string;
+  requiredAreaM2: string | null;
   purchasePricePerM2Cny?: Prisma.Decimal;
 };
 
@@ -482,7 +490,7 @@ export class CalculationService {
     leadId: string,
     items: CalculationItemDto[],
     user: CurrentUser,
-    options: { allowItemSupplier?: boolean } = {},
+    options: { allowIncomplete?: boolean } = {},
   ): Promise<{
     lead: LeadForHplCalculation;
     cnyUsdRate: null;
@@ -509,7 +517,24 @@ export class CalculationService {
     // A CalculationRequest is a technical snapshot, not a commercial
     // calculation. In particular, the selected type intentionally overrides
     // the old Lead application and no purchase-price lookup happens here.
-    const geometry = await this.resolveLineGeometry(item);
+    if (
+      !item.panelTypeId ||
+      !item.panelSizeId ||
+      !item.qualityClassId ||
+      !item.requiredAreaM2 ||
+      item.thicknessMm == null
+    ) {
+      return this.snapshotIncompleteRequestItem(item, sortOrder);
+    }
+
+    const geometry = await this.resolveLineGeometry({
+      ...item,
+      panelTypeId: item.panelTypeId,
+      panelSizeId: item.panelSizeId,
+      qualityClassId: item.qualityClassId,
+      thicknessMm: item.thicknessMm,
+      requiredAreaM2: item.requiredAreaM2,
+    });
     const unpriced = new Prisma.Decimal(0);
 
     return {
@@ -523,6 +548,7 @@ export class CalculationService {
       colorName: geometry.colorName,
       coating: geometry.coating,
       texture: geometry.texture,
+      decor: optionalLineText(item.decor),
       note: geometry.note,
       customTypeDescription: geometry.customTypeDescription,
       customWidthMm: geometry.customWidthMm,
@@ -537,6 +563,44 @@ export class CalculationService {
       wastePercent: geometry.wastePercent,
       sortOrder,
       areaM2: geometry.coveredAreaM2,
+    };
+  }
+
+  private snapshotIncompleteRequestItem(
+    item: ResolvedCalculationItem,
+    sortOrder: number,
+  ): CalculatedLineItem {
+    const unpriced = new Prisma.Decimal(0);
+    const requiredAreaM2 = item.requiredAreaM2
+      ? new Prisma.Decimal(item.requiredAreaM2).toDecimalPlaces(4)
+      : null;
+
+    return {
+      panelTypeId: item.panelTypeId,
+      panelSizeId: item.panelSizeId,
+      thicknessMm: item.thicknessMm,
+      supplierId: item.supplierId,
+      qualityClassId: item.qualityClassId,
+      colorId: item.colorId ?? null,
+      colorCode: optionalLineText(item.colorCode),
+      colorName: optionalLineText(item.colorName),
+      coating: optionalLineText(item.coating),
+      texture: optionalLineText(item.texture),
+      decor: optionalLineText(item.decor),
+      note: optionalLineText(item.note),
+      customTypeDescription: optionalLineText(item.customTypeDescription),
+      customWidthMm: item.customWidthMm ?? null,
+      customHeightMm: item.customHeightMm ?? null,
+      requiredAreaM2,
+      sheetsCount: 0,
+      supplierPricePerM2: unpriced,
+      clientPricePerM2: unpriced,
+      pricePerM2: unpriced,
+      pricePerSheet: unpriced,
+      totalPrice: unpriced,
+      wastePercent: unpriced,
+      sortOrder,
+      areaM2: requiredAreaM2 ?? unpriced,
     };
   }
 
@@ -568,7 +632,7 @@ export class CalculationService {
     sortOrder: number,
     cnyUsdRate: Prisma.Decimal,
   ): Promise<CalculatedLineItem> {
-    if (!item.supplierId) {
+    if (!item.supplierId || !item.qualityClassId) {
       throw new BusinessException(
         HttpStatus.BAD_REQUEST,
         'SUPPLIER_REQUIRED_FOR_PRICING',
@@ -598,6 +662,7 @@ export class CalculationService {
       colorName: geometry.colorName,
       coating: geometry.coating,
       texture: geometry.texture,
+      decor: optionalLineText(item.decor),
       note: geometry.note,
       customTypeDescription: geometry.customTypeDescription,
       customWidthMm: geometry.customWidthMm,
@@ -619,6 +684,20 @@ export class CalculationService {
     item: ResolvedCalculationItem,
     application?: HplApplication | null,
   ): Promise<LineGeometry> {
+    if (
+      !item.panelTypeId ||
+      !item.panelSizeId ||
+      !item.requiredAreaM2 ||
+      !item.qualityClassId ||
+      item.thicknessMm == null
+    ) {
+      throw new BusinessException(
+        HttpStatus.BAD_REQUEST,
+        'CALCULATION_PREFILL_INCOMPLETE',
+        MANAGER_CALCULATION_ITEM_REQUIRED_MESSAGE,
+      );
+    }
+
     const requiredArea = new Prisma.Decimal(item.requiredAreaM2);
 
     if (requiredArea.lte(0)) {
@@ -792,18 +871,18 @@ export class CalculationService {
   private deriveManagerCatalogItems(
     items: CalculationItemDto[],
     qualification: LeadQualification | null,
-    options: { allowItemSupplier?: boolean } = {},
+    options: { allowIncomplete?: boolean } = {},
   ): ResolvedCalculationItem[] {
     return items.map((item) => {
       const thicknessMm = parseThicknessMm(resolveThicknessMm(item));
       assertCustomDimensionsPair(item);
-      if (
+      const incomplete =
         !item.panelTypeId ||
         !item.panelSizeId ||
         !item.qualityClassId ||
         !item.requiredAreaM2 ||
-        thicknessMm == null
-      ) {
+        thicknessMm == null;
+      if (incomplete && !options.allowIncomplete) {
         throw new BusinessException(
           HttpStatus.BAD_REQUEST,
           'CALCULATION_PREFILL_INCOMPLETE',
@@ -811,7 +890,10 @@ export class CalculationService {
         );
       }
 
-      if (new Prisma.Decimal(item.requiredAreaM2).lt(0)) {
+      if (
+        item.requiredAreaM2 &&
+        new Prisma.Decimal(item.requiredAreaM2).lt(0)
+      ) {
         throw new BusinessException(
           HttpStatus.BAD_REQUEST,
           'INVALID_AREA',
@@ -820,19 +902,18 @@ export class CalculationService {
       }
 
       return {
-        panelTypeId: item.panelTypeId,
-        panelSizeId: item.panelSizeId,
+        panelTypeId: item.panelTypeId ?? null,
+        panelSizeId: item.panelSizeId ?? null,
         thicknessMm,
-        supplierId: options.allowItemSupplier
-          ? (item.supplierId ?? null)
-          : null,
-        qualityClassId: item.qualityClassId,
-        requiredAreaM2: item.requiredAreaM2,
-        colorId: item.colorId,
+        supplierId: item.supplierId ?? null,
+        qualityClassId: item.qualityClassId ?? null,
+        requiredAreaM2: item.requiredAreaM2 ?? null,
+        colorId: item.colorId ?? null,
         colorCode: item.colorCode,
         colorName: item.colorName,
         coating: item.coating,
         texture: item.texture,
+        decor: item.decor,
         note: item.note,
         customTypeDescription:
           item.customTypeDescription ?? qualification?.customerRequirements,
@@ -922,6 +1003,7 @@ export class CalculationService {
         colorName: item.colorName,
         coating: item.coating,
         texture: item.texture,
+        decor: item.decor,
         note: item.note,
         customTypeDescription: item.customTypeDescription,
         customWidthMm: item.customWidthMm,
@@ -964,6 +1046,7 @@ export class CalculationService {
       colorName: dto.colorName,
       coating: dto.coating,
       texture: dto.texture,
+      decor: dto.decor,
       customTypeDescription: dto.customTypeDescription,
       customWidthMm: dto.customWidthMm,
       customHeightMm: dto.customHeightMm,

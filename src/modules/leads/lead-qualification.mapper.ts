@@ -34,6 +34,8 @@ const QUALIFICATION_ITEM_KEYS = [
   'customHeightMm',
   'colorCode',
   'colorName',
+  'coating',
+  'texture',
   'requiredAreaM2',
 ] as const;
 
@@ -65,6 +67,8 @@ export type LeadQualificationItemWriteData = {
   customHeightMm?: number | null;
   colorCode?: string | null;
   colorName?: string | null;
+  coating?: string | null;
+  texture?: string | null;
   requiredAreaM2?: number | null;
 };
 
@@ -132,6 +136,8 @@ export function toCalculationRequirementPrefill(qualification: {
   customHeightMm: number | null;
   colorCode: string | null;
   colorName: string | null;
+  coating?: string | null;
+  texture?: string | null;
   requiredAreaM2: Prisma.Decimal | null;
   installationRequired?: boolean | null;
 }): {
@@ -206,6 +212,8 @@ export function serializeLeadQualification(qualification: {
     customHeightMm: number | null;
     colorCode: string | null;
     colorName: string | null;
+    coating: string | null;
+    texture: string | null;
     requiredAreaM2: Prisma.Decimal | null;
     panelType?: { id: string; code: string; displayNameRu: string } | null;
     panelSize?: {
@@ -261,6 +269,8 @@ export function serializeLeadQualification(qualification: {
         customHeightMm: item.customHeightMm,
         colorCode: item.colorCode,
         colorName: item.colorName,
+        coating: item.coating,
+        texture: item.texture,
         requiredAreaM2: item.requiredAreaM2?.toString() ?? null,
         panelType: item.panelType ?? null,
         panelSize: item.panelSize

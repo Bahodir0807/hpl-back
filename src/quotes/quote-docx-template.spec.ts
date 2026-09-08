@@ -2,11 +2,15 @@ import { Prisma } from '@prisma/client';
 import JSZip from 'jszip';
 import {
   buildQuoteDocumentModel,
+  CUSTOMER_QUOTE_SUBTITLE,
+  CUSTOMER_QUOTE_TITLE,
+  customerDocumentMetaViolations,
   QUOTE_PRICE_HEADER,
   QUOTE_TABLE_HEADERS,
   type QuoteDocumentSnapshot,
 } from './quote-document.model';
 import {
+  fillDocumentXml,
   fillUzhplQuoteTemplate,
   fitQuoteOfferTableToPageWidth,
   loadUzhplQuoteTemplate,
@@ -153,23 +157,88 @@ describe('UZHPL DOCX template fill', () => {
   });
 
   it('keeps the client subtitle and excludes internal Quote metadata', async () => {
-    const text = documentText(await filledXml(baseSnapshot()));
+    const quote = baseSnapshot({
+      id: '58e6f812-aaaa-4bbb-8ccc-ddddeeeeffff',
+      versionNumber: 7,
+    });
+    const text = documentText(await filledXml(quote));
 
-    expect(text).toContain('на поставку HPL-панелей');
+    expect(text).toContain(CUSTOMER_QUOTE_TITLE);
+    expect(text).toContain(CUSTOMER_QUOTE_SUBTITLE);
+    expect(text).not.toContain('КП v1');
+    expect(text).not.toContain('КП v7');
     expect(text).not.toContain('КП v');
-    expect(text).not.toContain('11111111-1111-1111-1111-111111111111');
-    expect(text).not.toContain('11111111');
+    expect(text).not.toContain(quote.id);
+    expect(text).not.toContain(quote.id.slice(0, 8));
+    expect(customerDocumentMetaViolations(text, quote)).toEqual([]);
+  });
+
+  it('renders a one-item Quote with a clean customer header', async () => {
+    const quote = baseSnapshot({
+      id: '58e6f812-aaaa-4bbb-8ccc-ddddeeeeffff',
+      versionNumber: 1,
+      items: [baseSnapshot().items[0]],
+    });
+    const text = documentText(await filledXml(quote));
+
+    expect(text).toContain(CUSTOMER_QUOTE_TITLE);
+    expect(text).toContain(CUSTOMER_QUOTE_SUBTITLE);
+    expect(text).toContain('6 мм');
+    expect(text).not.toContain('8 мм');
+    expect(text).not.toContain('КП v');
+    expect(text).not.toContain(quote.id);
+    expect(text).not.toContain(quote.id.slice(0, 8));
+  });
+
+  it('strips a legacy КП v prefix from the customer subtitle', async () => {
+    const originalZip = await JSZip.loadAsync(loadUzhplQuoteTemplate());
+    const originalXml = await originalZip
+      .file('word/document.xml')
+      ?.async('string');
+    if (!originalXml) {
+      throw new Error('template is missing document.xml');
+    }
+
+    const polluted = originalXml.replace(
+      '>на поставку <',
+      '>КП v1 · 58e6f812 · на поставку <',
+    );
+    expect(documentText(polluted)).toContain('КП v1 · 58e6f812');
+
+    const quote = baseSnapshot({
+      id: '58e6f812-aaaa-4bbb-8ccc-ddddeeeeffff',
+      versionNumber: 1,
+    });
+    const filled = fillDocumentXml(polluted, buildQuoteDocumentModel(quote));
+    const text = documentText(filled);
+
+    expect(text).toContain(CUSTOMER_QUOTE_TITLE);
+    expect(text).toContain(CUSTOMER_QUOTE_SUBTITLE);
+    expect(text).not.toContain('КП v');
+    expect(text).not.toContain(quote.id.slice(0, 8));
+    expect(customerDocumentMetaViolations(text, quote)).toEqual([]);
   });
 
   it('fits the offer table to the template page content width for PDF rendering', async () => {
-    const filled = await filledXml(baseSnapshot());
+    const quote = baseSnapshot({
+      id: '58e6f812-aaaa-4bbb-8ccc-ddddeeeeffff',
+      versionNumber: 2,
+    });
+    const filled = await filledXml(quote);
     const normalized = fitQuoteOfferTableToPageWidth(filled);
+    const pdfSourceText = documentText(normalized);
 
     expect(filled).toContain('<w:tblW w:w="9678" w:type="dxa"');
     expect(filled).toContain('<w:tblHeader w:val="true"');
     expect(normalized).toContain('<w:tblW w:w="9412" w:type="dxa"');
     expect(normalized).toContain('<w:gridCol w:w="1764"');
     expect(normalized).toContain('<w:gridCol w:w="1170"');
+    expect(pdfSourceText).toContain(CUSTOMER_QUOTE_TITLE);
+    expect(pdfSourceText).toContain(CUSTOMER_QUOTE_SUBTITLE);
+    expect(pdfSourceText).not.toContain('КП v');
+    expect(pdfSourceText).not.toContain(quote.id);
+    expect(pdfSourceText).not.toContain(quote.id.slice(0, 8));
+    expect(customerDocumentMetaViolations(pdfSourceText, quote)).toEqual([]);
   });
 
   it('creates one table row per Quote item', async () => {

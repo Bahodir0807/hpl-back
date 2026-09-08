@@ -20,6 +20,9 @@ export const QUOTE_TABLE_HEADERS = [
   'Доставка',
 ] as const;
 
+export const CUSTOMER_QUOTE_TITLE = 'КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ';
+export const CUSTOMER_QUOTE_SUBTITLE = 'на поставку HPL-панелей';
+
 export const QUOTE_OFFER_HEADING_PREFIX = 'Предложение на поставку';
 export const QUOTE_OFFER_HEADING_GENERIC =
   'Предложение на поставку HPL-панелей';
@@ -297,6 +300,41 @@ export function formatQuoteThickness(
 
 export function money(value: { toString(): string } | number): string {
   return Number(value.toString()).toFixed(2);
+}
+
+const QUOTE_VERSION_LABEL = /КП v\d+/i;
+const UUID_PATTERN =
+  /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/**
+ * Customer-facing DOCX/PDF body must not include CRM version labels or Quote ids.
+ * Internal Quote.versionNumber remains in the database and API.
+ */
+export function customerDocumentMetaViolations(
+  text: string,
+  quote?: Pick<QuoteDocumentSnapshot, 'id' | 'versionNumber'>,
+): string[] {
+  const violations: string[] = [];
+  if (QUOTE_VERSION_LABEL.test(text)) {
+    violations.push('quote-version-label');
+  }
+  if (UUID_PATTERN.test(text)) {
+    violations.push('quote-uuid');
+  }
+  if (quote?.id && text.includes(quote.id)) {
+    violations.push('quote-id');
+  }
+  const shortId = quote?.id?.slice(0, 8);
+  if (shortId && text.includes(shortId)) {
+    violations.push('quote-short-id');
+  }
+  if (
+    quote?.versionNumber != null &&
+    text.includes(`КП v${quote.versionNumber}`)
+  ) {
+    violations.push('quote-version-number');
+  }
+  return [...new Set(violations)];
 }
 
 export function buildQuoteDocumentModel(

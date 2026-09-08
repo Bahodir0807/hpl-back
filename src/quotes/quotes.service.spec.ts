@@ -251,7 +251,7 @@ describe('QuotesService', () => {
     expect(panelPriceCalculator.calculate).not.toHaveBeenCalled();
   });
 
-  it('requires HEAD to select a supplier before pricing a manager request', async () => {
+  it('requires each request item to have a supplier before creating a QuoteDraft', async () => {
     const technicalItem = {
       ...calculation.items[0],
       panelTypeId: 'type-id',
@@ -313,8 +313,8 @@ describe('QuotesService', () => {
         widthMm: 1220,
         heightMm: 2440,
       },
-      supplierId: null,
-      supplier: null,
+      supplierId: 'supplier-id',
+      supplier: { id: 'supplier-id', code: 'wuya', name: 'Wuya' },
       color: {
         ...calculation.items[0].color,
         supplierId: 'supplier-id',
@@ -345,11 +345,7 @@ describe('QuotesService', () => {
     prisma.supplierQualityMapping.findFirst.mockResolvedValueOnce(null);
 
     await expect(
-      service.createFromCalculation(
-        'calc-id',
-        { supplierId: 'supplier-id' },
-        headCommercial,
-      ),
+      service.createFromCalculation('calc-id', {}, headCommercial),
     ).rejects.toMatchObject({
       response: expect.objectContaining({
         errorCode: 'INVALID_QUALITY_MAPPING',
@@ -370,11 +366,7 @@ describe('QuotesService', () => {
     );
 
     await expect(
-      service.createFromCalculation(
-        'calc-id',
-        { supplierId: 'supplier-id' },
-        headCommercial,
-      ),
+      service.createFromCalculation('calc-id', {}, headCommercial),
     ).resolves.toEqual(expect.objectContaining({ status: QUOTE_STATUS.DRAFT }));
 
     const createData = prisma.panelQuote.create.mock.calls[0][0].data as {
@@ -416,8 +408,8 @@ describe('QuotesService', () => {
         widthMm: 1220,
         heightMm: 2440,
       },
-      supplierId: null,
-      supplier: null,
+      supplierId: 'supplier-id',
+      supplier: { id: 'supplier-id', code: 'wuya', name: 'Wuya' },
       color: {
         ...calculation.items[0].color,
         supplierId: 'supplier-id',
@@ -446,11 +438,7 @@ describe('QuotesService', () => {
       request: { quotes: [], calculations: [requestGroup] },
     });
 
-    await service.createFromCalculation(
-      'calc-id',
-      { supplierId: 'supplier-id' },
-      headCommercial,
-    );
+    await service.createFromCalculation('calc-id', {}, headCommercial);
 
     expect(panelPriceCalculator.calculate).not.toHaveBeenCalled();
     expect(prisma.supplierQualityMapping.findFirst).toHaveBeenCalledWith({
@@ -565,6 +553,87 @@ describe('QuotesService', () => {
         supplierName: 'Supplier B',
       }),
     ]);
+  });
+
+  it('ignores a legacy global supplierId and keeps mixed item suppliers', async () => {
+    const firstItem = {
+      ...calculation.items[0],
+      panelTypeId: 'type-id',
+      panelSizeId: 'size-id',
+      qualityClassId: 'quality-id',
+      panelSize: {
+        ...calculation.items[0].panelSize,
+        widthMm: 1220,
+        heightMm: 2440,
+      },
+      supplierId: 'supplier-a',
+      supplier: { id: 'supplier-a', code: 'supplier-a', name: 'Supplier A' },
+      color: null,
+      colorCode: null,
+      colorName: null,
+      supplierPricePerM2: new Prisma.Decimal(0),
+      clientPricePerM2: new Prisma.Decimal(0),
+      pricePerM2: new Prisma.Decimal(0),
+      pricePerSheet: new Prisma.Decimal(0),
+      totalPrice: new Prisma.Decimal(0),
+    };
+    const secondItem = {
+      ...firstItem,
+      supplierId: 'supplier-b',
+      supplier: { id: 'supplier-b', code: 'supplier-b', name: 'Supplier B' },
+      requiredAreaM2: new Prisma.Decimal('25'),
+    };
+    const requestGroup = {
+      ...calculation,
+      requestId: 'request-id',
+      title: 'Technical request',
+      notes: null,
+      sortOrder: 0,
+      totalAmount: new Prisma.Decimal(0),
+      cnyUsdRate: null,
+      commercialSupplierId: null,
+      commercialQualityClassId: null,
+      commercialConfirmedAt: null,
+      items: [firstItem, secondItem],
+    };
+    prisma.calculationSession.findFirst.mockResolvedValue({
+      ...requestGroup,
+      request: { quotes: [], calculations: [requestGroup] },
+    });
+    prisma.supplierQualityMapping.findFirst.mockResolvedValue({
+      id: 'mapping-id',
+    });
+
+    await service.createFromCalculation(
+      'calc-id',
+      { supplierId: 'global-supplier' },
+      headCommercial,
+    );
+
+    const createData = prisma.panelQuote.create.mock.calls[0][0].data as {
+      items: {
+        create: Array<{
+          supplierCode: string;
+          supplierName: string;
+        }>;
+      };
+    };
+    expect(createData.items.create).toEqual([
+      expect.objectContaining({
+        supplierCode: 'supplier-a',
+        supplierName: 'Supplier A',
+      }),
+      expect.objectContaining({
+        supplierCode: 'supplier-b',
+        supplierName: 'Supplier B',
+      }),
+    ]);
+    expect(
+      createData.items.create.map((item) => item.supplierCode),
+    ).not.toContain('global-supplier');
+    expect(prisma.supplier.findUnique).not.toHaveBeenCalledWith({
+      where: { id: 'global-supplier' },
+    });
   });
 
   it('copies calculation pricing snapshot onto the quote without catalog lookup', async () => {
@@ -733,10 +802,8 @@ describe('QuotesService', () => {
     await service.createFromCalculation(
       'calc-id',
       {
-        productionDaysFrom: 10,
-        productionDaysTo: 20,
-        deliveryDaysFrom: 14,
-        deliveryDaysTo: 25,
+        productionTerms: '15–20 рабочих дней',
+        deliveryTerms: 'Ориентировочно 4 недели после утверждения декора',
         validUntil,
         documentDate: forgedDocumentDate,
       } as never,
@@ -744,18 +811,24 @@ describe('QuotesService', () => {
     );
 
     const createData = prisma.panelQuote.create.mock.calls[0][0].data as {
-      productionDaysFrom: number;
-      productionDaysTo: number;
-      deliveryDaysFrom: number;
-      deliveryDaysTo: number;
+      productionTerms: string | null;
+      deliveryTerms: string | null;
+      productionDaysFrom: number | null;
+      productionDaysTo: number | null;
+      deliveryDaysFrom: number | null;
+      deliveryDaysTo: number | null;
       validUntil: Date;
       documentDate: Date;
       commercialNote: string | null;
     };
-    expect(createData.productionDaysFrom).toBe(10);
-    expect(createData.productionDaysTo).toBe(20);
-    expect(createData.deliveryDaysFrom).toBe(14);
-    expect(createData.deliveryDaysTo).toBe(25);
+    expect(createData.productionTerms).toBe('15–20 рабочих дней');
+    expect(createData.deliveryTerms).toBe(
+      'Ориентировочно 4 недели после утверждения декора',
+    );
+    expect(createData.productionDaysFrom).toBeNull();
+    expect(createData.productionDaysTo).toBeNull();
+    expect(createData.deliveryDaysFrom).toBeNull();
+    expect(createData.deliveryDaysTo).toBeNull();
     expect(createData.validUntil).toEqual(validUntil);
     expect(createData.documentDate.getTime()).not.toBe(
       forgedDocumentDate.getTime(),
@@ -766,9 +839,41 @@ describe('QuotesService', () => {
     expect(createData.commercialNote).toBeNull();
   });
 
-  it('copies the Lead Manager note only into Quote.internalCommercialNote at convert', async () => {
+  it('copies CalculationRequest notes into Quote.internalCommercialNote at convert', async () => {
     prisma.calculationSession.findFirst.mockResolvedValue({
       ...calculation,
+      request: {
+        notes:
+          'Клиент хочет жёлтый декор, окончательный цвет согласовать перед заказом.',
+        quotes: [],
+        calculations: [calculation],
+      },
+      lead: {
+        ...calculation.lead,
+        managerCommercialNote: null,
+      },
+    });
+
+    await service.createFromCalculation('calc-id', {}, headCommercial);
+
+    const createData = prisma.panelQuote.create.mock.calls[0][0].data as {
+      commercialNote: string | null;
+      internalCommercialNote: string | null;
+    };
+    expect(createData.commercialNote).toBeNull();
+    expect(createData.internalCommercialNote).toBe(
+      'Клиент хочет жёлтый декор, окончательный цвет согласовать перед заказом.',
+    );
+  });
+
+  it('does not copy a leftover Lead manager note when CalculationRequest notes are empty', async () => {
+    prisma.calculationSession.findFirst.mockResolvedValue({
+      ...calculation,
+      request: {
+        notes: null,
+        quotes: [],
+        calculations: [calculation],
+      },
       lead: {
         ...calculation.lead,
         managerCommercialNote: 'Пожелания клиента: CIP Tashkent',
@@ -782,9 +887,7 @@ describe('QuotesService', () => {
       internalCommercialNote: string | null;
     };
     expect(createData.commercialNote).toBeNull();
-    expect(createData.internalCommercialNote).toBe(
-      'Пожелания клиента: CIP Tashkent',
-    );
+    expect(createData.internalCommercialNote).toBeNull();
   });
 
   it('forbids MANAGER from overriding the Lead note snapshot at convert', async () => {
@@ -968,6 +1071,52 @@ describe('QuotesService', () => {
     expect(updateData.cnyUsdRate).toBeUndefined();
     expect(updateData.sellingCoefficient).toBeUndefined();
     expect(updateData.documentDate).toBeUndefined();
+  });
+
+  it('saves text production/delivery terms and clears numeric duplicates', async () => {
+    const draft = {
+      id: 'quote-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.DRAFT,
+      productionDaysFrom: 10,
+      productionDaysTo: 20,
+      deliveryDaysFrom: 14,
+      deliveryDaysTo: 25,
+      items: [],
+    };
+    prisma.panelQuote.findUnique.mockResolvedValue(draft);
+    prisma.panelQuote.update.mockResolvedValue({
+      ...draft,
+      productionTerms: '15–20 рабочих дней',
+      deliveryTerms: 'Ориентировочно 4 недели после утверждения декора',
+      productionDaysFrom: null,
+      productionDaysTo: null,
+      deliveryDaysFrom: null,
+      deliveryDaysTo: null,
+    });
+
+    await service.updateCommercialTerms(
+      'quote-id',
+      {
+        productionTerms: '15–20 рабочих дней',
+        deliveryTerms: 'Ориентировочно 4 недели после утверждения декора',
+        validUntil: new Date('2026-09-01T00:00:00.000Z'),
+      },
+      headCommercial,
+    );
+
+    expect(prisma.panelQuote.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          productionTerms: '15–20 рабочих дней',
+          deliveryTerms: 'Ориентировочно 4 недели после утверждения декора',
+          productionDaysFrom: null,
+          productionDaysTo: null,
+          deliveryDaysFrom: null,
+          deliveryDaysTo: null,
+        }),
+      }),
+    );
   });
 
   it('forbids MANAGER from updating client-facing terms on a draft', async () => {

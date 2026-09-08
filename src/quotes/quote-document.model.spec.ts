@@ -1,6 +1,9 @@
 import { Prisma } from '@prisma/client';
 import {
   buildQuoteDocumentModel,
+  customerDocumentMetaViolations,
+  CUSTOMER_QUOTE_SUBTITLE,
+  CUSTOMER_QUOTE_TITLE,
   formatQuoteDayRange,
   formatQuoteDocumentDate,
   formatQuoteRuDate,
@@ -39,12 +42,47 @@ describe('quote document snapshot mapping', () => {
   };
 
   it('does not expose internal Quote version or identifier in the document model', () => {
-    const model = buildQuoteDocumentModel(snapshot);
+    const identified = {
+      ...snapshot,
+      id: '58e6f812-aaaa-4bbb-8ccc-ddddeeeeffff',
+      versionNumber: 1,
+    };
+    const model = buildQuoteDocumentModel(identified);
+    const serialized = JSON.stringify(model);
 
     expect(model).not.toHaveProperty('quoteReferenceLine');
-    expect(JSON.stringify(model)).not.toContain('КП v1');
-    expect(JSON.stringify(model)).not.toContain(snapshot.id);
-    expect(JSON.stringify(model)).not.toContain(snapshot.id.slice(0, 8));
+    expect(serialized).not.toContain('КП v1');
+    expect(serialized).not.toContain(identified.id);
+    expect(serialized).not.toContain(identified.id.slice(0, 8));
+    expect(customerDocumentMetaViolations(serialized, identified)).toEqual([]);
+    expect(identified.versionNumber).toBe(1);
+  });
+
+  it('flags customer-facing version labels and ids', () => {
+    const quote = {
+      ...snapshot,
+      id: '58e6f812-aaaa-4bbb-8ccc-ddddeeeeffff',
+      versionNumber: 1,
+    };
+
+    expect(
+      customerDocumentMetaViolations(
+        `${CUSTOMER_QUOTE_TITLE}\nКП v1 · 58e6f812 · ${CUSTOMER_QUOTE_SUBTITLE}`,
+        quote,
+      ),
+    ).toEqual(
+      expect.arrayContaining([
+        'quote-version-label',
+        'quote-short-id',
+        'quote-version-number',
+      ]),
+    );
+    expect(
+      customerDocumentMetaViolations(
+        `${CUSTOMER_QUOTE_TITLE}\n${CUSTOMER_QUOTE_SUBTITLE}`,
+        quote,
+      ),
+    ).toEqual([]);
   });
 
   it('renders КП table values from the Quote snapshot, not catalog defaults', () => {
@@ -170,6 +208,26 @@ describe('quote document snapshot mapping', () => {
     expect(formatQuoteDocumentDate(new Date('2026-08-14T00:00:00.000Z'))).toBe(
       '14 Августа  2026 г.',
     );
+  });
+
+  it('prefers text commercial terms and uses numeric ranges only as a legacy fallback', () => {
+    const withText = buildQuoteDocumentModel({
+      ...snapshot,
+      productionTerms: '15–20 рабочих дней',
+      deliveryTerms: 'Ориентировочно 4 недели после утверждения декора',
+      productionDaysFrom: 10,
+      productionDaysTo: 20,
+      deliveryDaysFrom: 14,
+      deliveryDaysTo: 25,
+    });
+    expect(withText.itemRows[0]?.[4]).toBe('15–20 рабочих дней');
+    expect(withText.itemRows[0]?.[5]).toBe(
+      'Ориентировочно 4 недели после утверждения декора',
+    );
+
+    const legacyNumeric = buildQuoteDocumentModel(snapshot);
+    expect(legacyNumeric.itemRows[0]?.[4]).toBe('10-20 дней');
+    expect(legacyNumeric.itemRows[0]?.[5]).toBe('14-25 дней');
   });
 
   it('uses the automatic Quote createdAt date even if documentDate was forged', () => {

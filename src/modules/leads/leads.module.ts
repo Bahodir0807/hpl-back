@@ -7,8 +7,10 @@ import { LeadManagerCommercialNoteService } from './lead-manager-commercial-note
 import { LeadQualificationService } from './lead-qualification.service';
 import { LeadsController } from './leads.controller';
 import { LeadsService } from './leads.service';
+import { CalculationsModule } from '../../calculations/calculations.module';
 
 @Module({
+  imports: [CalculationsModule],
   controllers: [LeadsController, LeadWorkspaceController],
   providers: [
     LeadsService,

@@ -123,6 +123,20 @@ export class CalculationItemDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(255)
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || value === '') {
+      return undefined;
+    }
+    return typeof value === 'string' ? value.trim() : value;
+  })
+  decor?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(120)
   coating?: string;
 

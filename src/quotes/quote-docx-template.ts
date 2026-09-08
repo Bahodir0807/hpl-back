@@ -9,8 +9,11 @@ import {
 } from '@xmldom/xmldom';
 import JSZip from 'jszip';
 import {
+  CUSTOMER_QUOTE_SUBTITLE,
+  CUSTOMER_QUOTE_TITLE,
   QUOTE_OFFER_HEADING_PREFIX,
   QUOTE_TABLE_HEADERS,
+  customerDocumentMetaViolations,
   type QuoteDocumentModel,
 } from './quote-document.model';
 
@@ -81,15 +84,35 @@ export function fillDocumentXml(
   }
 
   fillOfferTable(dom, model);
-  // The template owns the client-facing subtitle. Keep it static and never
-  // inject Quote versioning or identifiers into the customer document.
+  // Table section heading only ("Предложение на поставку …"). The client
+  // header subtitle is owned by the golden template and must stay static.
   fillOfferHeading(dom, model.offerHeadingPhrase);
   fillNoteSection(dom, model.commercialNote, model.validUntilBullet);
   fillDocumentDate(dom, model.documentDateLine);
   centerAccentRule(dom);
   removeTaglineSpacerBreaks(dom);
+  preserveCustomerSubtitle(dom);
 
-  return serializeDocumentXml(dom, xml);
+  const serialized = serializeDocumentXml(dom, xml);
+  const visibleText = xmlDocumentText(serialized);
+  const violations = customerDocumentMetaViolations(visibleText);
+  if (violations.length > 0) {
+    throw new Error(
+      `Customer Quote document contains internal CRM metadata: ${violations.join(', ')}`,
+    );
+  }
+  if (!visibleText.includes(CUSTOMER_QUOTE_TITLE)) {
+    throw new Error(
+      'Customer Quote document is missing КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ',
+    );
+  }
+  if (!visibleText.includes(CUSTOMER_QUOTE_SUBTITLE)) {
+    throw new Error(
+      'Customer Quote document is missing the static HPL subtitle',
+    );
+  }
+
+  return serialized;
 }
 
 /**
@@ -378,6 +401,40 @@ function centerAccentRule(dom: XmlDocument): void {
   ind.setAttribute('w:left', '0');
   ind.setAttribute('w:right', '0');
   ind.setAttribute('w:firstLine', '0');
+}
+
+function preserveCustomerSubtitle(dom: XmlDocument): void {
+  const subtitle =
+    findParagraph(dom, (text) => {
+      const normalized = normalizeSpace(text);
+      return (
+        normalized === CUSTOMER_QUOTE_SUBTITLE ||
+        (/^КП v\d+\s*·/i.test(normalized) &&
+          normalized.includes(CUSTOMER_QUOTE_SUBTITLE))
+      );
+    }) ??
+    findParagraph(
+      dom,
+      (text) =>
+        normalizeSpace(text).includes(CUSTOMER_QUOTE_SUBTITLE) &&
+        !normalizeSpace(text).includes(QUOTE_OFFER_HEADING_PREFIX),
+    );
+  if (!subtitle) {
+    throw new Error('UZHPL quote template is missing the customer subtitle');
+  }
+
+  const current = normalizeSpace(elementText(subtitle));
+  if (current === CUSTOMER_QUOTE_SUBTITLE) {
+    return;
+  }
+
+  replaceParagraphText(dom, subtitle, CUSTOMER_QUOTE_SUBTITLE);
+}
+
+function xmlDocumentText(xml: string): string {
+  return [...xml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+    .map((match) => match[1])
+    .join('');
 }
 
 function fillOfferHeading(dom: XmlDocument, phrase: string): void {

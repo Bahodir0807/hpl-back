@@ -260,9 +260,11 @@ export class QuotesService {
       'Срок доставки: укажите целые дни > 0, от ≤ до',
     );
 
-    let groups: QuoteSnapshotGroup[] = calculation.request?.calculations?.length
-      ? calculation.request.calculations
-      : [calculation];
+    let groups: QuoteSnapshotGroup[] = (
+      calculation.request?.calculations?.length
+        ? calculation.request.calculations
+        : [calculation]
+    ) as QuoteSnapshotGroup[];
     let quoteCnyUsdRate: Prisma.Decimal | null = null;
     let referencePricingComplete = true;
 
@@ -270,17 +272,14 @@ export class QuotesService {
       const hasMissingItemSupplier = groups.some((group) =>
         group.items.some((item) => !item.supplier?.id),
       );
-      if (!dto.supplierId && hasMissingItemSupplier) {
+      if (hasMissingItemSupplier) {
         throw new BusinessException(
           HttpStatus.BAD_REQUEST,
           'QUOTE_SUPPLIER_REQUIRED',
-          'Перед коммерческим расчётом руководитель должен выбрать поставщика',
+          'Перед созданием КП у каждой позиции должен быть выбран поставщик',
         );
       }
-      const priced = await this.priceCalculationRequestGroups(
-        groups,
-        dto.supplierId,
-      );
+      const priced = await this.priceCalculationRequestGroups(groups);
       groups = priced.groups;
       quoteCnyUsdRate = null;
       referencePricingComplete = priced.referencePricingComplete;
@@ -348,14 +347,22 @@ export class QuotesService {
           commercialNote: dto.commercialNote?.trim() || null,
           internalCommercialNote:
             dto.internalCommercialNote?.trim() ||
-            calculation.lead?.managerCommercialNote?.trim() ||
+            calculation.request?.notes?.trim() ||
             null,
           productionTerms: dto.productionTerms?.trim() || null,
           deliveryTerms: dto.deliveryTerms?.trim() || null,
-          productionDaysFrom: dto.productionDaysFrom ?? null,
-          productionDaysTo: dto.productionDaysTo ?? null,
-          deliveryDaysFrom: dto.deliveryDaysFrom ?? null,
-          deliveryDaysTo: dto.deliveryDaysTo ?? null,
+          productionDaysFrom: dto.productionTerms?.trim()
+            ? null
+            : (dto.productionDaysFrom ?? null),
+          productionDaysTo: dto.productionTerms?.trim()
+            ? null
+            : (dto.productionDaysTo ?? null),
+          deliveryDaysFrom: dto.deliveryTerms?.trim()
+            ? null
+            : (dto.deliveryDaysFrom ?? null),
+          deliveryDaysTo: dto.deliveryTerms?.trim()
+            ? null
+            : (dto.deliveryDaysTo ?? null),
           documentDate: new Date(),
           validUntil,
           items: { create: quoteItems },
@@ -787,9 +794,13 @@ export class QuotesService {
     }
     if (dto.productionTerms !== undefined) {
       data.productionTerms = dto.productionTerms.trim() || null;
+      data.productionDaysFrom = null;
+      data.productionDaysTo = null;
     }
     if (dto.deliveryTerms !== undefined) {
       data.deliveryTerms = dto.deliveryTerms.trim() || null;
+      data.deliveryDaysFrom = null;
+      data.deliveryDaysTo = null;
     }
 
     if (Object.keys(data).length === 0) {
@@ -1104,7 +1115,7 @@ export class QuotesService {
         );
       }
       const corrected = await this.priceCalculationRequestGroups(
-        request.calculations,
+        request.calculations as QuoteSnapshotGroup[],
         supplier.id,
       );
       nextVersionItems = this.snapshotQuoteItems(
@@ -1756,11 +1767,26 @@ export class QuotesService {
           throw new BusinessException(
             HttpStatus.BAD_REQUEST,
             'QUOTE_SUPPLIER_REQUIRED',
-            'Перед созданием КП HEAD должен выбрать поставщика для каждой позиции',
+            'Перед созданием КП у каждой позиции должен быть выбран поставщик',
           );
         }
 
         let supplier = item.supplier;
+        if (
+          !item.panelTypeId ||
+          !item.panelType ||
+          !item.panelSizeId ||
+          item.thicknessMm == null ||
+          !item.qualityClassId ||
+          item.requiredAreaM2 == null
+        ) {
+          throw new BusinessException(
+            HttpStatus.BAD_REQUEST,
+            'CALCULATION_PREFILL_INCOMPLETE',
+            'Перед созданием КП руководитель должен дополнить технические данные позиций',
+          );
+        }
+
         if (!supplier || supplier.id !== effectiveSupplierId) {
           supplier = supplierCache.get(effectiveSupplierId) ?? null;
           if (!supplier) {
@@ -1900,7 +1926,7 @@ export class QuotesService {
           throw new BusinessException(
             HttpStatus.BAD_REQUEST,
             'QUOTE_SUPPLIER_REQUIRED',
-            'Перед созданием КП руководитель должен выбрать поставщика',
+            'Перед созданием КП у каждой позиции должен быть выбран поставщик',
           );
         }
         rows.push({
@@ -2278,6 +2304,8 @@ export class QuotesService {
       dto.productionDaysTo !== undefined ||
       dto.deliveryDaysFrom !== undefined ||
       dto.deliveryDaysTo !== undefined ||
+      dto.productionTerms !== undefined ||
+      dto.deliveryTerms !== undefined ||
       dto.validUntil !== undefined
     );
   }

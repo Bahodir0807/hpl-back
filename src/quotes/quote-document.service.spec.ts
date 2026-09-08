@@ -20,7 +20,8 @@ describe('QuoteDocumentService', () => {
   });
 
   const quote = {
-    id: '11111111-1111-1111-1111-111111111111',
+    id: '58e6f812-aaaa-4bbb-8ccc-ddddeeeeffff',
+    versionNumber: 7,
     createdAt: new Date('2026-08-18T00:00:00.000Z'),
     validUntil: new Date('2026-09-01T00:00:00.000Z'),
     totalAmount: new Prisma.Decimal('1250.50'),
@@ -77,6 +78,11 @@ describe('QuoteDocumentService', () => {
       .map((match) => match[1])
       .join('');
     expect(text).toContain(QUOTE_PRICE_HEADER);
+    expect(text).toContain('КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ');
+    expect(text).toContain('на поставку HPL-панелей');
+    expect(text).not.toContain('КП v');
+    expect(text).not.toContain(quote.id);
+    expect(text).not.toContain(quote.id.slice(0, 8));
     expect(text).toContain('100 USD');
     expect(text).not.toContain('112 USD');
     expect(text).toContain('14-25 дней');
@@ -113,6 +119,11 @@ describe('QuoteDocumentService', () => {
       .map((match) => match[1])
       .join('');
     expect(pdfSourceText).toContain(QUOTE_PRICE_HEADER);
+    expect(pdfSourceText).toContain('КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ');
+    expect(pdfSourceText).toContain('на поставку HPL-панелей');
+    expect(pdfSourceText).not.toContain('КП v');
+    expect(pdfSourceText).not.toContain(quote.id);
+    expect(pdfSourceText).not.toContain(quote.id.slice(0, 8));
     expect(pdfSourceText).toContain('100 USD');
     expect(pdfSourceText).not.toContain('112 USD');
     expect(prisma.currencyRate.findFirst).not.toHaveBeenCalled();

@@ -53,6 +53,11 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     assertStage1Complete: jest.fn(),
   };
 
+  const calculationRequestService = {
+    syncFromQualificationInTx: jest.fn(),
+    notifyRequestSubmittedSafe: jest.fn(),
+  };
+
   const ownedLead = {
     id: 'lead-id',
     title: 'Lobby HPL',
@@ -86,6 +91,7 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     service = new LeadsService(
       prisma as never,
       leadQualificationService as never,
+      calculationRequestService as never,
     );
     prisma.$transaction.mockImplementation(
       (fn: (tx: typeof prisma) => unknown) => fn(prisma),
@@ -123,6 +129,14 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     prisma.notification.create.mockResolvedValue({});
     prisma.lead.findUnique.mockResolvedValue(qualifiedLead);
     prisma.lead.findUniqueOrThrow.mockResolvedValue(qualifiedLead);
+    calculationRequestService.syncFromQualificationInTx.mockResolvedValue({
+      requestId: 'request-id',
+      outcome: 'created',
+      notifySubmitted: false,
+    });
+    calculationRequestService.notifyRequestSubmittedSafe.mockResolvedValue(
+      undefined,
+    );
   });
 
   it('transitions a complete Stage-1 lead to QUALIFIED and creates its Deal', async () => {
@@ -197,6 +211,12 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
         title: 'Stage 2 commercial qualification required',
       }),
     });
+    expect(
+      calculationRequestService.syncFromQualificationInTx,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      calculationRequestService.notifyRequestSubmittedSafe,
+    ).not.toHaveBeenCalled();
   });
 
   it('assigns the Stage-2 handoff to owner.managerId when a supervisor exists', async () => {
@@ -274,10 +294,15 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     expect(prisma.lead.updateMany).toHaveBeenCalled();
   });
 
-  it('returns the existing QUALIFIED lead on a repeated qualify without side effects', async () => {
+  it('returns the existing QUALIFIED lead on a repeated qualify without duplicate Deal or request side effects', async () => {
     prisma.lead.findFirst.mockResolvedValue({
       ...ownedLead,
       status: LeadStatus.QUALIFIED,
+    });
+    calculationRequestService.syncFromQualificationInTx.mockResolvedValue({
+      requestId: 'request-id',
+      outcome: 'skipped',
+      notifySubmitted: false,
     });
 
     const result = await service.qualify('lead-id', qualifyDto, 'owner-id', [
@@ -285,11 +310,16 @@ describe('LeadsService.qualify Stage-1 lifecycle', () => {
     ]);
 
     expect(result.status).toBe(LeadStatus.QUALIFIED);
-    expect(prisma.$transaction).not.toHaveBeenCalled();
     expect(prisma.task.create).not.toHaveBeenCalled();
     expect(prisma.activity.create).not.toHaveBeenCalled();
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
     expect(prisma.deal.create).not.toHaveBeenCalled();
+    expect(
+      calculationRequestService.syncFromQualificationInTx,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      calculationRequestService.notifyRequestSubmittedSafe,
+    ).not.toHaveBeenCalled();
   });
 
   it('does not create a duplicate Deal when two qualifies race', async () => {

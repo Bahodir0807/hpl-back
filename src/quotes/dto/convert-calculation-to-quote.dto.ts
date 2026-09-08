@@ -10,7 +10,11 @@ import {
 import { QuoteClientFacingTermsDto } from './quote-client-facing-terms.dto';
 
 export class ConvertCalculationToQuoteDto extends QuoteClientFacingTermsDto {
-  /** Required when converting a manager CalculationRequest; ignored for legacy priced calculations. */
+  /**
+   * Deprecated. Request → QuoteDraft uses CalculationLineItem.supplierId only.
+   * Accepted for API compatibility and ignored: it never fills missing items
+   * and never overrides per-item suppliers.
+   */
   @IsOptional()
   @IsUUID()
   supplierId?: string;

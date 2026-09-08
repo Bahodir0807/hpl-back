@@ -47,6 +47,8 @@ export class QuoteDocumentService implements OnModuleInit {
   ): Promise<{ buffer: Buffer; filename: string }> {
     const stored = await this.readStoredPdf(quoteId);
     if (stored) {
+      // Finalized Quotes keep the PDF created at finalize. Historical files are
+      // not rewritten. New Quotes / new versions persist a new File row.
       return stored;
     }
 

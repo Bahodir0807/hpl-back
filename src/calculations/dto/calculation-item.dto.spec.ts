@@ -98,10 +98,20 @@ describe('CalculationItemDto manager technical fields', () => {
     expect(dto.calculations[0]?.items[0]?.supplierId).toBeUndefined();
   });
 
-  it('rejects unknown fields such as decor under forbidNonWhitelisted', async () => {
+  it('accepts arbitrary Decor text independently of PanelColor', async () => {
+    const dto = plainToInstance(CalculationItemDto, {
+      ...catalogItem,
+      decor: 'Concrete Grey 7016',
+    });
+    const errors = await validate(dto);
+    expect(errors).toHaveLength(0);
+    expect(dto.decor).toBe('Concrete Grey 7016');
+  });
+
+  it('rejects unknown fields such as fooBar under forbidNonWhitelisted', async () => {
     await expect(
       validationPipe.transform(
-        { ...catalogItem, decor: 'White Oak' },
+        { ...catalogItem, fooBar: 'nope' },
         { type: 'body', metatype: CalculationItemDto },
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
@@ -115,7 +125,7 @@ describe('CalculationItemDto manager technical fields', () => {
           calculations: [
             {
               title: 'Group 1',
-              items: [{ ...catalogItem, decor: 'White Oak' }],
+              items: [{ ...catalogItem, fooBar: 'White Oak' }],
             },
           ],
         },

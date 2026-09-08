@@ -946,16 +946,18 @@ describe('CalculationService manager catalog sheetsCount', () => {
     expect(priceCalc.calculate).not.toHaveBeenCalled();
   });
 
-  it('ignores a legacy supplierId in manager request input', async () => {
+  it('persists manager-selected item supplierId without pricing', async () => {
     const result = await service.prepareManagerCatalogGroup(
       catalogLead.id,
       [{ ...catalogItem, supplierId: 'manager-selected-supplier' }],
       manager,
     );
 
-    expect(result.calculatedItems[0]?.supplierId).toBeNull();
-    expect(prisma.supplierQualityMapping.findFirst).not.toHaveBeenCalled();
+    expect(result.calculatedItems[0]?.supplierId).toBe(
+      'manager-selected-supplier',
+    );
     expect(priceCalc.calculate).not.toHaveBeenCalled();
+    expect(result.calculatedItems[0]?.totalPrice.toString()).toBe('0');
   });
 
   it('recalculates quantity when requiredAreaM2 changes', async () => {
@@ -1068,5 +1070,63 @@ describe('CalculationService manager catalog sheetsCount', () => {
       }),
     );
     expect(priceCalc.calculate).not.toHaveBeenCalled();
+  });
+
+  it('lets HEAD persist incomplete items with coating, texture and arbitrary Decor', async () => {
+    const result = await service.prepareManagerCatalogGroup(
+      catalogLead.id,
+      [
+        {
+          colorName: 'Черный',
+          coating: 'Матовый',
+          texture: 'Гладкий',
+          decor: 'Black Woodgrain X2',
+          requiredAreaM2: '4',
+        },
+      ],
+      manager,
+      { allowIncomplete: true },
+    );
+
+    expect(result.calculatedItems[0]).toEqual(
+      expect.objectContaining({
+        panelTypeId: null,
+        panelSizeId: null,
+        qualityClassId: null,
+        thicknessMm: null,
+        colorName: 'Черный',
+        coating: 'Матовый',
+        texture: 'Гладкий',
+        decor: 'Black Woodgrain X2',
+        requiredAreaM2: new Prisma.Decimal('4'),
+      }),
+    );
+    expect(prisma.panelType.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('keeps customer color separate from Decor on a complete HEAD snapshot', async () => {
+    const result = await service.prepareManagerCatalogGroup(
+      catalogLead.id,
+      [
+        {
+          ...catalogItem,
+          colorName: 'Серый',
+          coating: 'Матовый',
+          texture: 'Под камень',
+          decor: 'Concrete Grey 7016',
+        },
+      ],
+      manager,
+      { allowIncomplete: true },
+    );
+
+    expect(result.calculatedItems[0]).toEqual(
+      expect.objectContaining({
+        colorName: 'Серый',
+        coating: 'Матовый',
+        texture: 'Под камень',
+        decor: 'Concrete Grey 7016',
+      }),
+    );
   });
 });

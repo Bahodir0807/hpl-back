@@ -628,6 +628,657 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(audits).toHaveLength(1);
   });
 
+  it('Stage-1 qualify auto-creates one DRAFT CalculationRequest from HPL items', async () => {
+    const created = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Auto request ${RUN_ID}`,
+        source: 'email',
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(created).id;
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'furniture' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1220, heightMm: 2440 },
+    });
+    const qualification = {
+      installationRequired: false,
+      customerRequirements: 'Two zones, one incomplete',
+      items: [
+        {
+          application: 'FURNITURE',
+          panelTypeId: panelType.id,
+          panelSizeId: panelSize.id,
+          thicknessMm: 0.8,
+          colorCode: 'W100',
+          colorName: 'White',
+          coating: 'Матовый',
+          texture: 'Под камень',
+          requiredAreaM2: 12.5,
+        },
+        {
+          application: 'FURNITURE',
+          panelTypeId: panelType.id,
+          colorName: 'Черный',
+          coating: '',
+          texture: 'Гладкий',
+          requiredAreaM2: 4,
+        },
+        {
+          application: 'FURNITURE',
+          panelTypeId: panelType.id,
+          thicknessMm: 1.2,
+          colorName: 'без точного RAL',
+          requiredAreaM2: 7,
+        },
+      ],
+    };
+
+    const qualifyPayload = {
+      clientId: context.clientId,
+      contactId: context.contactId,
+      projectObjectId: context.projectObjectId,
+      needDescription: 'HPL furniture for lobby',
+      decisionMakerContact: 'Chief architect',
+      qualification,
+    };
+    await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send(qualifyPayload)
+      .expect(201);
+
+    const afterFirstQualify = await prisma.calculationRequest.findMany({
+      where: { leadId, deletedAt: null },
+      include: {
+        calculations: {
+          where: { deletedAt: null },
+          include: { items: { orderBy: { sortOrder: 'asc' } } },
+        },
+      },
+    });
+    expect(afterFirstQualify).toHaveLength(1);
+    expect(afterFirstQualify[0].status).toBe('draft');
+    expect(afterFirstQualify[0].submittedById).toBeNull();
+    expect(afterFirstQualify[0].submittedAt).toBeNull();
+    const initialItems = afterFirstQualify[0].calculations[0]?.items ?? [];
+    expect(initialItems).toHaveLength(3);
+    expect(initialItems.map((item) => item.sortOrder)).toEqual([0, 1, 2]);
+    expect(initialItems[1].panelSizeId).toBeNull();
+    expect(initialItems[1].thicknessMm).toBeNull();
+    expect(initialItems[1].qualityClassId).toBeNull();
+    expect(initialItems[1].requiredAreaM2?.toString()).toBe('4');
+    expect(initialItems[1].coating).toBeNull();
+    expect(initialItems[1].texture).toBe('Гладкий');
+    expect(initialItems[0].coating).toBe('Матовый');
+    expect(initialItems[0].texture).toBe('Под камень');
+    expect(initialItems[2].colorName).toBe('без точного RAL');
+
+    const tianran = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'tianran' },
+    });
+    const managerOwnedNote =
+      'Клиент просит Tianran, не пересобирать позиции после qualify.';
+    const firstItem = afterFirstQualify[0].calculations[0]?.items[0];
+    const secondItem = afterFirstQualify[0].calculations[0]?.items[1];
+    const thirdItem = afterFirstQualify[0].calculations[0]?.items[2];
+    await request(server)
+      .patch(`/calculations/requests/${afterFirstQualify[0].id}`)
+      .set(authHeader(context.managerToken))
+      .send({
+        notes: managerOwnedNote,
+        calculations: [
+          {
+            title: 'Расчёт №1',
+            items: [
+              {
+                panelTypeId: firstItem?.panelTypeId,
+                panelSizeId: firstItem?.panelSizeId,
+                thicknessMm: firstItem?.thicknessMm?.toString(),
+                requiredAreaM2: '20.5',
+                colorName: firstItem?.colorName,
+                coating: firstItem?.coating,
+                texture: firstItem?.texture,
+                supplierId: tianran.id,
+                decor: 'Tianran Concrete 7016',
+              },
+              {
+                panelTypeId: secondItem?.panelTypeId,
+                requiredAreaM2: secondItem?.requiredAreaM2?.toString(),
+                colorName: secondItem?.colorName,
+                texture: secondItem?.texture,
+              },
+              {
+                panelTypeId: thirdItem?.panelTypeId,
+                thicknessMm: thirdItem?.thicknessMm?.toString(),
+                requiredAreaM2: thirdItem?.requiredAreaM2?.toString(),
+                colorName: thirdItem?.colorName,
+              },
+              {
+                panelTypeId: firstItem?.panelTypeId,
+                requiredAreaM2: '3.25',
+                colorName: 'RAL extra',
+                decor: 'Extra manager row',
+              },
+            ],
+          },
+        ],
+      })
+      .expect(200);
+
+    await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send(qualifyPayload)
+      .expect(201);
+
+    const requests = await prisma.calculationRequest.findMany({
+      where: { leadId, deletedAt: null },
+      include: {
+        calculations: {
+          where: { deletedAt: null },
+          orderBy: { sortOrder: 'asc' },
+          include: { items: { orderBy: { sortOrder: 'asc' } } },
+        },
+      },
+    });
+    expect(requests).toHaveLength(1);
+    expect(requests[0].id).toBe(afterFirstQualify[0].id);
+    expect(requests[0].status).toBe('draft');
+    expect(requests[0].submittedById).toBeNull();
+    expect(requests[0].notes).toBe(managerOwnedNote);
+    expect(requests[0].calculations[0]?.items).toHaveLength(4);
+    expect(requests[0].calculations[0]?.items[0].supplierId).toBe(tianran.id);
+    expect(requests[0].calculations[0]?.items[0].decor).toBe(
+      'Tianran Concrete 7016',
+    );
+    expect(Number(requests[0].calculations[0]?.items[0].requiredAreaM2)).toBe(
+      20.5,
+    );
+    expect(requests[0].calculations[0]?.items[3].decor).toBe(
+      'Extra manager row',
+    );
+    const submittedNotifications = await prisma.notification.findMany({
+      where: {
+        type: 'calculation_request_submitted',
+        relatedId: leadId,
+      },
+    });
+    expect(submittedNotifications).toHaveLength(0);
+
+    const headView = await request(server)
+      .get(`/calculations/requests/${requests[0].id}`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    expect(bodyAs<EntityResponse>(headView).id).toBe(requests[0].id);
+
+    const emptyLead = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Empty items ${RUN_ID}`,
+        source: 'email',
+      })
+      .expect(201);
+    const emptyLeadId = bodyAs<LeadResponse>(emptyLead).id;
+    await request(server)
+      .post(`/leads/${emptyLeadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send({
+        clientId: context.clientId,
+        contactId: context.contactId,
+        projectObjectId: context.projectObjectId,
+        needDescription: 'Need described, HPL later',
+        decisionMakerContact: 'Chief architect',
+        qualification: {
+          installationRequired: false,
+          items: [],
+        },
+      })
+      .expect(201);
+    const emptyRequests = await prisma.calculationRequest.findMany({
+      where: { leadId: emptyLeadId, deletedAt: null },
+      include: {
+        calculations: {
+          where: { deletedAt: null },
+          include: { items: true },
+        },
+      },
+    });
+    expect(emptyRequests).toHaveLength(1);
+    expect(emptyRequests[0].calculations[0]?.items ?? []).toEqual([]);
+  });
+
+  it('keeps Need and Manager Note independent and maps coating/texture/Decor', async () => {
+    const created = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Stage2 fields ${RUN_ID}`,
+        source: 'email',
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(created).id;
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'furniture' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1220, heightMm: 2440 },
+    });
+    const need = 'Фасад бизнес-центра';
+    const managerNote = 'Клиент хочет получить предложение до пятницы';
+
+    await request(server)
+      .patch(`/leads/${leadId}/manager-commercial-note`)
+      .set(authHeader(context.managerToken))
+      .send({ commercialNote: managerNote })
+      .expect(200);
+
+    const afterNote = bodyAs<{
+      needDescription?: string | null;
+      managerCommercialNote?: string | null;
+    }>(
+      await request(server)
+        .get(`/leads/${leadId}`)
+        .set(authHeader(context.managerToken))
+        .expect(200),
+    );
+    expect(afterNote.managerCommercialNote).toBe(managerNote);
+    expect(afterNote.needDescription ?? null).not.toBe(managerNote);
+
+    await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send({
+        clientId: context.clientId,
+        contactId: context.contactId,
+        projectObjectId: context.projectObjectId,
+        needDescription: need,
+        decisionMakerContact: 'Chief architect',
+        qualification: {
+          installationRequired: false,
+          customerRequirements: need,
+          items: [
+            {
+              application: 'FURNITURE',
+              panelTypeId: panelType.id,
+              panelSizeId: panelSize.id,
+              thicknessMm: 0.8,
+              colorName: 'Серый',
+              coating: 'Матовый',
+              texture: 'Под камень',
+              requiredAreaM2: 12.5,
+            },
+            {
+              application: 'FURNITURE',
+              panelTypeId: panelType.id,
+              colorName: 'Черный',
+              texture: 'Гладкий',
+              requiredAreaM2: 4,
+            },
+          ],
+        },
+      })
+      .expect(201);
+
+    const afterQualify = bodyAs<{
+      needDescription?: string | null;
+      managerCommercialNote?: string | null;
+      qualification?: {
+        customerRequirements?: string | null;
+        items?: Array<{
+          colorName?: string | null;
+          coating?: string | null;
+          texture?: string | null;
+        }>;
+      };
+    }>(
+      await request(server)
+        .get(`/leads/${leadId}`)
+        .set(authHeader(context.managerToken))
+        .expect(200),
+    );
+    expect(afterQualify.needDescription).toBe(need);
+    expect(afterQualify.managerCommercialNote).toBe(managerNote);
+    expect(afterQualify.qualification?.customerRequirements).toBe(need);
+    expect(afterQualify.qualification?.items?.[0]).toEqual(
+      expect.objectContaining({
+        colorName: 'Серый',
+        coating: 'Матовый',
+        texture: 'Под камень',
+      }),
+    );
+    expect(afterQualify.qualification?.items?.[1]).toEqual(
+      expect.objectContaining({
+        colorName: 'Черный',
+        coating: null,
+        texture: 'Гладкий',
+      }),
+    );
+
+    await request(server)
+      .patch(`/leads/${leadId}/manager-commercial-note`)
+      .set(authHeader(context.managerToken))
+      .send({ commercialNote: 'Нужен выезд замерщика' })
+      .expect(200);
+    const afterNoteEdit = bodyAs<{
+      needDescription?: string | null;
+      managerCommercialNote?: string | null;
+    }>(
+      await request(server)
+        .get(`/leads/${leadId}`)
+        .set(authHeader(context.managerToken))
+        .expect(200),
+    );
+    expect(afterNoteEdit.needDescription).toBe(need);
+    expect(afterNoteEdit.managerCommercialNote).toBe('Нужен выезд замерщика');
+
+    const requests = await prisma.calculationRequest.findMany({
+      where: { leadId, deletedAt: null },
+      include: {
+        calculations: {
+          where: { deletedAt: null },
+          include: { items: { orderBy: { sortOrder: 'asc' } } },
+        },
+      },
+    });
+    expect(requests).toHaveLength(1);
+    const requestId = requests[0].id;
+    const mapped = requests[0].calculations[0]?.items ?? [];
+    expect(mapped[0].colorName).toBe('Серый');
+    expect(mapped[0].coating).toBe('Матовый');
+    expect(mapped[0].texture).toBe('Под камень');
+    expect(mapped[0].decor).toBeNull();
+    expect(mapped[1].colorName).toBe('Черный');
+    expect(mapped[1].coating).toBeNull();
+    expect(mapped[1].texture).toBe('Гладкий');
+    expect(mapped[1].panelSizeId).toBeNull();
+
+    const headSaved = await request(server)
+      .patch(`/calculations/requests/${requestId}`)
+      .set(authHeader(context.managerToken))
+      .send({
+        calculations: [
+          {
+            title: 'Расчёт №1',
+            items: [
+              {
+                panelTypeId: mapped[0].panelTypeId,
+                panelSizeId: mapped[0].panelSizeId,
+                thicknessMm: mapped[0].thicknessMm?.toString(),
+                requiredAreaM2: mapped[0].requiredAreaM2?.toString(),
+                colorName: mapped[0].colorName,
+                coating: 'UV матовый',
+                texture: mapped[0].texture,
+                decor: 'Concrete Grey 7016',
+              },
+              {
+                panelTypeId: mapped[1].panelTypeId,
+                requiredAreaM2: mapped[1].requiredAreaM2?.toString(),
+                colorName: mapped[1].colorName,
+                texture: mapped[1].texture,
+                decor: 'Black Woodgrain X2',
+              },
+            ],
+          },
+        ],
+      })
+      .expect(200);
+
+    const savedItems =
+      bodyAs<{
+        calculations: Array<{
+          items: Array<{
+            colorName?: string | null;
+            coating?: string | null;
+            texture?: string | null;
+            decor?: string | null;
+            panelSizeId?: string | null;
+          }>;
+        }>;
+      }>(headSaved).calculations[0]?.items ?? [];
+    expect(savedItems[0]).toEqual(
+      expect.objectContaining({
+        colorName: 'Серый',
+        coating: 'UV матовый',
+        texture: 'Под камень',
+        decor: 'Concrete Grey 7016',
+      }),
+    );
+    expect(savedItems[1]).toEqual(
+      expect.objectContaining({
+        colorName: 'Черный',
+        texture: 'Гладкий',
+        decor: 'Black Woodgrain X2',
+        panelSizeId: null,
+      }),
+    );
+
+    const reopened = await request(server)
+      .get(`/calculations/requests/${requestId}`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    const reopenedItems =
+      bodyAs<{
+        calculations: Array<{
+          items: Array<{
+            colorName?: string | null;
+            coating?: string | null;
+            decor?: string | null;
+          }>;
+        }>;
+      }>(reopened).calculations[0]?.items ?? [];
+    expect(reopenedItems[0].decor).toBe('Concrete Grey 7016');
+    expect(reopenedItems[1].decor).toBe('Black Woodgrain X2');
+    expect(reopenedItems[0].colorName).toBe('Серый');
+
+    const qualificationAfterDecor = await prisma.leadQualificationItem.findMany(
+      {
+        where: { qualification: { leadId } },
+        orderBy: { sortOrder: 'asc' },
+      },
+    );
+    expect(qualificationAfterDecor[0].colorName).toBe('Серый');
+    expect(qualificationAfterDecor[1].colorName).toBe('Черный');
+  });
+
+  it('persists manager note and mixed item suppliers into QuoteDraft without a global supplier', async () => {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Mixed suppliers ${RUN_ID}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(leadResponse).id;
+    await qualifyLeadStage1(leadId);
+    await confirmLeadStage2(leadId);
+
+    const autoCreated = await prisma.calculationRequest.findMany({
+      where: { leadId, deletedAt: null },
+    });
+    expect(autoCreated).toHaveLength(1);
+    expect(autoCreated[0].status).toBe('draft');
+
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'exterior_with_uv' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1220, heightMm: 2440 },
+    });
+    const polybet = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'polybet' },
+    });
+    const tianran = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'tianran' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+    const managerNote =
+      'Клиент хочет жёлтый декор, окончательный цвет согласовать перед заказом.';
+
+    const created = await request(server)
+      .patch(`/calculations/requests/${autoCreated[0].id}`)
+      .set(authHeader(context.managerToken))
+      .send({
+        notes: managerNote,
+        calculations: [
+          {
+            title: 'Фасад',
+            items: [
+              {
+                panelTypeId: panelType.id,
+                panelSizeId: panelSize.id,
+                thicknessMm: 10,
+                qualityClassId: qualityClass.id,
+                requiredAreaM2: '12.50',
+                supplierId: polybet.id,
+              },
+              {
+                panelTypeId: panelType.id,
+                panelSizeId: panelSize.id,
+                thicknessMm: 8,
+                qualityClassId: qualityClass.id,
+                requiredAreaM2: '6.25',
+                supplierId: tianran.id,
+              },
+            ],
+          },
+        ],
+      })
+      .expect(200);
+
+    const requestId = bodyAs<EntityResponse>(created).id;
+    expect(requestId).toBe(autoCreated[0].id);
+    const persisted = bodyAs<{
+      notes?: string | null;
+      calculations: Array<{
+        items: Array<{ supplierId?: string | null }>;
+      }>;
+    }>(created);
+    expect(persisted.notes).toBe(managerNote);
+    expect(
+      persisted.calculations[0]?.items.map((item) => item.supplierId),
+    ).toEqual([polybet.id, tianran.id]);
+
+    const reloaded = await request(server)
+      .get(`/calculations/requests/${requestId}`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    const reloadedBody = bodyAs<{
+      notes?: string | null;
+      calculations: Array<{
+        items: Array<{ supplierId?: string | null }>;
+      }>;
+    }>(reloaded);
+    expect(reloadedBody.notes).toBe(managerNote);
+    expect(
+      reloadedBody.calculations[0]?.items.map((item) => item.supplierId),
+    ).toEqual([polybet.id, tianran.id]);
+
+    await request(server)
+      .post(`/calculations/requests/${requestId}/submit`)
+      .set(authHeader(context.managerToken))
+      .expect(201);
+
+    await request(server)
+      .patch(`/calculations/requests/${requestId}`)
+      .set(authHeader(context.managerToken))
+      .send({ notes: 'Must not mutate SUBMITTED' })
+      .expect(409);
+
+    const headView = await request(server)
+      .get(`/calculations/requests/${requestId}`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    const headBody = bodyAs<{
+      notes?: string | null;
+      calculations: Array<{
+        items: Array<{ supplierId?: string | null }>;
+      }>;
+    }>(headView);
+    expect(headBody.notes).toBe(managerNote);
+    expect(
+      headBody.calculations[0]?.items.map((item) => item.supplierId),
+    ).toEqual([polybet.id, tianran.id]);
+
+    const wuya = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const quoteResponse = await request(server)
+      .post(`/calculations/requests/${requestId}/convert-to-quote`)
+      .set(authHeader(context.headToken))
+      .send({ supplierId: wuya.id })
+      .expect(201);
+    const quote = bodyAs<{
+      id: string;
+      internalCommercialNote?: string | null;
+      productionDaysFrom?: number | null;
+      productionDaysTo?: number | null;
+      deliveryDaysFrom?: number | null;
+      deliveryDaysTo?: number | null;
+      items: Array<{
+        supplierCode?: string | null;
+        supplierName?: string | null;
+      }>;
+    }>(quoteResponse);
+    expect(quote.internalCommercialNote).toBe(managerNote);
+    expect(quote.items).toHaveLength(2);
+    expect(quote.items[0]?.supplierCode).toBe('polybet');
+    expect(quote.items[1]?.supplierCode).toBe('tianran');
+    expect(
+      quote.items.map((item) => item.supplierCode),
+    ).not.toContain('wuya');
+    expect(quote.productionDaysFrom ?? null).toBeNull();
+    expect(quote.productionDaysTo ?? null).toBeNull();
+    expect(quote.deliveryDaysFrom ?? null).toBeNull();
+    expect(quote.deliveryDaysTo ?? null).toBeNull();
+
+    const productionTerm = '15–20 рабочих дней';
+    const deliveryTerm = 'Ориентировочно 4 недели после утверждения декора';
+    await request(server)
+      .patch(`/quotes/${quote.id}/commercial-terms`)
+      .set(authHeader(context.headToken))
+      .send({
+        productionTerms: productionTerm,
+        deliveryTerms: deliveryTerm,
+        validUntil: new Date(
+          Date.now() + 14 * 24 * 60 * 60 * 1000,
+        ).toISOString(),
+      })
+      .expect(200);
+
+    const reloadedQuote = await request(server)
+      .get(`/quotes/${quote.id}`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    const quoteBody = bodyAs<{
+      productionTerms?: string | null;
+      deliveryTerms?: string | null;
+      productionDaysFrom?: number | null;
+      productionDaysTo?: number | null;
+      deliveryDaysFrom?: number | null;
+      deliveryDaysTo?: number | null;
+      items: Array<{ supplierCode?: string | null }>;
+    }>(reloadedQuote);
+    expect(quoteBody.productionTerms).toBe(productionTerm);
+    expect(quoteBody.deliveryTerms).toBe(deliveryTerm);
+    expect(quoteBody.productionDaysFrom ?? null).toBeNull();
+    expect(quoteBody.productionDaysTo ?? null).toBeNull();
+    expect(quoteBody.deliveryDaysFrom ?? null).toBeNull();
+    expect(quoteBody.deliveryDaysTo ?? null).toBeNull();
+    expect(quoteBody.items.map((item) => item.supplierCode)).toEqual([
+      'polybet',
+      'tianran',
+    ]);
+  });
+
   it('BP2 does not assign Stage-2 to an ordinary owner without managerId', async () => {
     const passwordHash = await hash(TEST_PASSWORD, 12);
     await upsertUser(prisma, {
@@ -6169,6 +6820,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
             thicknessMm: '10',
             qualityClassId: quality.id,
             requiredAreaM2: firstArea,
+            supplierId: supplier.id,
           },
           {
             panelTypeId: panelType.id,
@@ -6176,6 +6828,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
             thicknessMm: '10',
             qualityClassId: quality.id,
             requiredAreaM2: '8.75',
+            supplierId: supplier.id,
           },
         ],
       },
@@ -6188,6 +6841,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
             thicknessMm: '10',
             qualityClassId: quality.id,
             requiredAreaM2: '6.25',
+            supplierId: supplier.id,
           },
         ],
       },
@@ -6303,6 +6957,15 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .async('string');
     expect(documentXml).toContain(clientNote);
     expect(documentXml).not.toContain(secret);
+    const docxText = [...documentXml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+      .map((match) => match[1])
+      .join('');
+    expect(docxText).toContain('КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ');
+    expect(docxText).toContain('на поставку HPL-панелей');
+    expect(docxText).not.toContain('КП v');
+    expect(docxText).not.toContain(v1.id);
+    expect(docxText).not.toContain(v1.id.slice(0, 8));
+    expect(v1Row.versionNumber).toBe(1);
 
     await request(server)
       .patch(`/calculations/requests/${requestId}`)
@@ -6358,6 +7021,30 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .set(authHeader(context.headToken))
       .send({})
       .expect(200);
+    const v2Docx = await request(server)
+      .get(`/quotes/${v2.id}/docx`)
+      .set(authHeader(context.headToken))
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    const v2Archive = await JSZip.loadAsync(v2Docx.body as Buffer);
+    const v2DocumentXml = await v2Archive
+      .file('word/document.xml')!
+      .async('string');
+    const v2DocxText = [...v2DocumentXml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+      .map((match) => match[1])
+      .join('');
+    expect(v2.versionNumber).toBe(2);
+    expect(v2DocxText).toContain('КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ');
+    expect(v2DocxText).toContain('на поставку HPL-панелей');
+    expect(v2DocxText).not.toContain('КП v2');
+    expect(v2DocxText).not.toContain('КП v');
+    expect(v2DocxText).not.toContain(v2.id);
+    expect(v2DocxText).not.toContain(v2.id.slice(0, 8));
     await request(server)
       .patch(`/quotes/${v2.id}/status`)
       .set(authHeader(context.managerToken))
@@ -6733,6 +7420,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
                 thicknessMm: 10,
                 qualityClassId: qualityClass.id,
                 requiredAreaM2: '15.50',
+                supplierId: supplier.id,
               },
             ],
           },
@@ -6754,7 +7442,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const quoteResponse = await request(server)
       .post(`/calculations/requests/${requestId}/convert-to-quote`)
       .set(authHeader(context.headToken))
-      .send({ supplierId: supplier.id, clientComment: 'E2E sent quote' })
+      .send({ clientComment: 'E2E sent quote' })
       .expect(201);
 
     const quote = bodyAs<EntityResponse & { items: EntityResponse[] }>(

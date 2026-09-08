@@ -426,12 +426,12 @@ describe('QuotesService approved pricing and history', () => {
             widthMm: 1000,
             heightMm: 2500,
           },
-          supplier: null,
+          supplier: { id: 'supplier-id', code: 'wuya', name: 'Wuya' },
           qualityClass: { code: 'economy', nameRu: 'Эконом' },
           color: null,
           panelTypeId: 'type-id',
           panelSizeId: 'size-id',
-          supplierId: null,
+          supplierId: 'supplier-id',
           qualityClassId: 'quality-id',
           thicknessMm: new Prisma.Decimal('8'),
           requiredAreaM2: new Prisma.Decimal('5'),
@@ -464,11 +464,7 @@ describe('QuotesService approved pricing and history', () => {
     });
     prisma.activity.create.mockResolvedValue({});
 
-    await service.createFromRequest(
-      'request-id',
-      { supplierId: 'supplier-id' } as never,
-      head,
-    );
+    await service.createFromRequest('request-id', {}, head);
 
     expect(prisma.panelQuote.create).toHaveBeenCalled();
     const created = prisma.panelQuote.create.mock.calls[0][0].data as {

@@ -12,7 +12,13 @@ const validationPipe = new ValidationPipe({
 });
 
 describe('ConvertCalculationToQuoteDto commercial terms', () => {
-  it('accepts the supplier selected by HEAD for request pricing', async () => {
+  it('accepts convert without a global supplierId', async () => {
+    const dto = plainToInstance(ConvertCalculationToQuoteDto, {});
+    expect(await validate(dto)).toHaveLength(0);
+    expect(dto.supplierId).toBeUndefined();
+  });
+
+  it('accepts a leftover global supplierId without treating it as required', async () => {
     const dto = plainToInstance(ConvertCalculationToQuoteDto, {
       supplierId: '11111111-1111-4111-8111-111111111111',
     });

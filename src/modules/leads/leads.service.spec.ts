@@ -37,6 +37,10 @@ describe('LeadsService authorization', () => {
         upsertInTx: jest.fn(),
         assertStage1Complete: jest.fn(),
       } as never,
+      {
+        syncFromQualificationInTx: jest.fn(),
+        notifyRequestSubmittedSafe: jest.fn(),
+      } as never,
     );
     prisma.lead.findFirst.mockResolvedValue(ownedLead);
   });

@@ -100,6 +100,34 @@ export class UpsertLeadQualificationItemDto {
   colorName?: string | null;
 
   @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || value === '') {
+      return null;
+    }
+    return typeof value === 'string' ? value.trim() : value;
+  })
+  coating?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  @Transform(({ value }: { value: unknown }) => {
+    if (value === undefined) {
+      return undefined;
+    }
+    if (value === null || value === '') {
+      return null;
+    }
+    return typeof value === 'string' ? value.trim() : value;
+  })
+  texture?: string | null;
+
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 4 })
   @IsPositive()
