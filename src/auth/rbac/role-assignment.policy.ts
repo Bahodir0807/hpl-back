@@ -4,39 +4,25 @@ import { BusinessException } from '../../common/exceptions/business.exception';
 
 export const PROTECTED_BUSINESS_ACCOUNT_ERROR = 'PROTECTED_BUSINESS_ACCOUNT';
 
-/** Business authority roles. Not assignable through the user-administration API. */
+/** Roles that still cannot be password-reset through the user-administration API. */
 export const PROTECTED_BUSINESS_ROLES: ReadonlySet<RoleName> = new Set([
   RoleName.DIRECTOR,
   RoleName.HEAD,
   RoleName.ACCOUNTANT,
 ]);
 
-/** Roles ADMIN may attach when creating a technical/operational account. */
-export const ADMIN_PROVISIONABLE_ROLES: ReadonlySet<RoleName> = new Set([
-  RoleName.ADMIN,
-  RoleName.MANAGER,
-  RoleName.STOREKEEPER,
-]);
+/** Roles ADMIN may attach when creating a user. */
+export const ADMIN_PROVISIONABLE_ROLES: ReadonlySet<RoleName> = new Set(
+  Object.values(RoleName),
+);
 
 /**
- * DIRECTOR / HEAD / ACCOUNTANT assignment is out of band (seed / manual DB).
- * The user-create API must not mint those roles for any actor, including ADMIN
- * and DIRECTOR, so ADMIN cannot self-escalate into business authority.
+ * Only ADMIN may create users through this API, and ADMIN may assign any RoleName.
  */
 export function assertCreatableRoleNames(
   actorRoles: readonly RoleName[],
   requestedRoleNames: readonly RoleName[],
 ): void {
-  const protectedRequested = uniqueRoles(
-    requestedRoleNames.filter((role) => PROTECTED_BUSINESS_ROLES.has(role)),
-  );
-
-  if (protectedRequested.length > 0) {
-    throw new ForbiddenException(
-      `Cannot assign protected business roles: ${protectedRequested.join(', ')}`,
-    );
-  }
-
   if (!actorRoles.includes(RoleName.ADMIN)) {
     throw new ForbiddenException(
       'Role assignment through user administration is not permitted for this account',

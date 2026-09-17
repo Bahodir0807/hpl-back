@@ -4719,7 +4719,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(403);
   });
 
-  it('BP4-PE denies ADMIN assigning DIRECTOR, HEAD, or ACCOUNTANT', async () => {
+  it('BP4-PE lets ADMIN assign DIRECTOR, HEAD, or ACCOUNTANT', async () => {
     const attempts: RoleName[] = [
       RoleName.DIRECTOR,
       RoleName.ACCOUNTANT,
@@ -4733,15 +4733,13 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         .send({
           email: `bp4-pe-${roleName.toLowerCase()}-${RUN_ID}@hpl.test`,
           password: TEST_PASSWORD,
-          firstName: 'Escalation',
+          firstName: 'Business',
           lastName: roleName,
           roleNames: [roleName],
         })
-        .expect(403);
+        .expect(201);
 
-      expect(bodyAs<{ message: string }>(response).message).toContain(
-        'protected business roles',
-      );
+      expect(bodyAs<EntityResponse>(response).id).toBeDefined();
     }
 
     const minted = await prisma.user.findMany({
@@ -4752,8 +4750,16 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
           ),
         },
       },
+      include: { roles: { include: { role: { select: { name: true } } } } },
     });
-    expect(minted).toHaveLength(0);
+    expect(minted).toHaveLength(3);
+    expect(
+      minted
+        .flatMap((user) => user.roles.map((item) => item.role.name))
+        .sort(),
+    ).toEqual(
+      [RoleName.ACCOUNTANT, RoleName.DIRECTOR, RoleName.HEAD].sort(),
+    );
   });
 
   it('BP4-PE still lets ADMIN create a normal technical/operational user', async () => {
