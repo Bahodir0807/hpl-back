@@ -14,7 +14,8 @@ export type DealCompletionSnapshot = {
   orderStatus: OrderStatus | null | undefined;
   supplierOrderStatuses: SupplierOrderStatus[];
   installationRequired: boolean | null | undefined;
-  installerConfirmedById: string | null | undefined;
+  /** Legacy completion actor data retained for historical installation records. */
+  installerConfirmedById?: string | null | undefined;
   supervisorConfirmedById: string | null | undefined;
   installationCompletedAt: Date | null | undefined;
 };
@@ -61,17 +62,6 @@ export function areMaterialsDelivered(input: {
   return false;
 }
 
-export function isInstallationDualConfirmed(input: {
-  installerConfirmedById?: string | null;
-  supervisorConfirmedById?: string | null;
-}): boolean {
-  return Boolean(
-    input.installerConfirmedById &&
-    input.supervisorConfirmedById &&
-    input.installerConfirmedById !== input.supervisorConfirmedById,
-  );
-}
-
 export function evaluateDealCompletion(snapshot: DealCompletionSnapshot): {
   canCompleteDeal: boolean;
   canCompleteInstallation: boolean;
@@ -79,7 +69,7 @@ export function evaluateDealCompletion(snapshot: DealCompletionSnapshot): {
   const canCompleteInstallation =
     snapshot.installationRequired === true &&
     !snapshot.installationCompletedAt &&
-    isInstallationDualConfirmed(snapshot);
+    Boolean(snapshot.supervisorConfirmedById);
 
   if (snapshot.completedAt || snapshot.stage === DealStage.LOST) {
     return { canCompleteDeal: false, canCompleteInstallation };
@@ -102,7 +92,7 @@ export function evaluateDealCompletion(snapshot: DealCompletionSnapshot): {
 
   if (snapshot.installationRequired === true) {
     return {
-      canCompleteDeal: isInstallationDualConfirmed(snapshot),
+      canCompleteDeal: canCompleteInstallation,
       canCompleteInstallation,
     };
   }

@@ -50,11 +50,9 @@ describe('multi-role policy helpers', () => {
     ).toBe(true);
   });
 
-  it('does not grant unscoped visibility to ADMIN, INSTALLER, or MANAGER alone', () => {
+  it('does not grant unscoped visibility to ADMIN or MANAGER alone', () => {
     expect(hasUnscopedDealVisibility(user([RoleName.ADMIN]))).toBe(false);
     expect(hasUnscopedOrderVisibility(user([RoleName.ADMIN]))).toBe(false);
-    expect(hasUnscopedDealVisibility(user([RoleName.INSTALLER]))).toBe(false);
-    expect(hasUnscopedOrderVisibility(user([RoleName.INSTALLER]))).toBe(false);
     expect(hasUnscopedDealVisibility(user([RoleName.MANAGER]))).toBe(false);
     expect(
       hasUnscopedOrderVisibility(user([RoleName.MANAGER, RoleName.ADMIN])),
@@ -73,7 +71,6 @@ describe('multi-role policy helpers', () => {
     );
     expect(hasUserModuleAccess(user([RoleName.ACCOUNTANT]))).toBe(false);
     expect(hasUserModuleAccess(user([RoleName.MANAGER]))).toBe(false);
-    expect(hasUserModuleAccess(user([RoleName.INSTALLER]))).toBe(false);
   });
 });
 

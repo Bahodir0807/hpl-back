@@ -13,7 +13,6 @@ enum RoleName {
   MANAGER
   ACCOUNTANT
   STOREKEEPER
-  INSTALLER
 }
 
 enum ProductStatus {

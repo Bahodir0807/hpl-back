@@ -39,7 +39,6 @@ import { DealInstallationService } from './deal-installation.service';
 import {
   INSTALLATION_ASSESS_PERMISSION,
   INSTALLATION_CONFIRM_SUPERVISOR_PERMISSION,
-  INSTALLATION_CONFIRM_WORK_PERMISSION,
   INSTALLATION_SCHEDULE_PERMISSION,
 } from './deal-fulfillment.constants';
 import { ScheduleInstallationDto } from './dto/schedule-installation.dto';
@@ -149,30 +148,6 @@ export class DealsController {
     @CurrentUser() user: CurrentUserType,
   ) {
     return this.dealInstallationService.updateAssessment(id, dto, user);
-  }
-
-  @Post(':id/installation/start')
-  @HttpCode(200)
-  @RequirePermissions(INSTALLATION_CONFIRM_WORK_PERMISSION)
-  @ApiOperation({ summary: 'Mark installation work as started' })
-  startInstallation(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: CurrentUserType,
-  ) {
-    return this.dealInstallationService.start(id, user);
-  }
-
-  @Post(':id/installation/confirm-installer')
-  @HttpCode(200)
-  @RequirePermissions(INSTALLATION_CONFIRM_WORK_PERMISSION)
-  @ApiOperation({
-    summary: 'Installer confirmation of completed installation work',
-  })
-  confirmInstaller(
-    @Param('id', ParseUUIDPipe) id: string,
-    @CurrentUser() user: CurrentUserType,
-  ) {
-    return this.dealInstallationService.confirmInstaller(id, user);
   }
 
   @Post(':id/installation/confirm-supervisor')

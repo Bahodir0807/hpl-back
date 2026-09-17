@@ -13,15 +13,13 @@ import {
   RoleName,
 } from '@prisma/client';
 import type { CurrentUser } from '../../common/interfaces/current-user.interface';
-import { hasAnyRole, hasRole } from '../../common/enums/role.enum';
+import { hasAnyRole } from '../../common/enums/role.enum';
 import { PrismaService } from '../prisma/prisma.service';
 import { DealPolicyService } from './services/deal-policy.service';
 import { DealCompletionService } from './deal-completion.service';
 import { isInstallationRequired } from './deal-completion.rules';
 import {
-  DISTINCT_INSTALLATION_ACTORS_MESSAGE,
   FULFILLMENT_AUDIT,
-  FULFILLMENT_NOTIFICATION,
   INSTALLATION_NOT_REQUIRED_MESSAGE,
 } from './deal-fulfillment.constants';
 import { FilterInstallationDto } from './dto/filter-installation.dto';
@@ -228,15 +226,6 @@ export class DealInstallationService {
         },
       });
 
-      if (!existing) {
-        await this.notifyRoleUsers(tx, [RoleName.INSTALLER], {
-          title: 'Installation scheduled',
-          message: 'A deal installation date was scheduled',
-          type: FULFILLMENT_NOTIFICATION.INSTALLATION_SCHEDULED,
-          relatedId: updated.id,
-        });
-      }
-
       return updated;
     });
   }
@@ -313,165 +302,6 @@ export class DealInstallationService {
     });
   }
 
-  async start(dealId: string, user: CurrentUser): Promise<DealInstallation> {
-    this.assertInstaller(user);
-    const deal = await this.requireDealForInstallationAccess(dealId, user);
-
-    return this.prisma.$transaction(async (tx) => {
-      await this.dealCompletion.lockFulfillmentRows(tx, deal.id);
-      const installation = await this.requireInstallation(tx, deal.id);
-
-      if (installation.startedAt) {
-        return installation;
-      }
-
-      if (installation.completedAt) {
-        throw new ConflictException(
-          'Cannot start installation after completion',
-        );
-      }
-
-      const startedAt = new Date();
-      const claimed = await tx.dealInstallation.updateMany({
-        where: { id: installation.id, startedAt: null, completedAt: null },
-        data: {
-          startedAt,
-          startedById: user.id,
-          status: InstallationStatus.IN_PROGRESS,
-        },
-      });
-
-      if (claimed.count !== 1) {
-        const latest = await tx.dealInstallation.findUniqueOrThrow({
-          where: { id: installation.id },
-        });
-        if (latest.startedAt) {
-          return latest;
-        }
-        throw new ConflictException('Installation was not started');
-      }
-
-      await tx.activity.create({
-        data: {
-          authorId: user.id,
-          relatedType: 'Deal',
-          relatedId: deal.id,
-          type: ActivityType.INSTALLATION_UPDATED,
-          content: 'Installation work started',
-          metadata: {
-            action: 'installation_started',
-            installationId: installation.id,
-          },
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          userId: user.id,
-          action: FULFILLMENT_AUDIT.INSTALLATION_STARTED,
-          entityType: 'DealInstallation',
-          entityId: installation.id,
-          newValue: {
-            startedAt: startedAt.toISOString(),
-            startedById: user.id,
-          },
-        },
-      });
-
-      return tx.dealInstallation.findUniqueOrThrow({
-        where: { id: installation.id },
-      });
-    });
-  }
-
-  async confirmInstaller(
-    dealId: string,
-    user: CurrentUser,
-  ): Promise<DealInstallation> {
-    this.assertInstaller(user);
-    const deal = await this.requireDealForInstallationAccess(dealId, user);
-
-    return this.prisma.$transaction(async (tx) => {
-      await this.dealCompletion.lockFulfillmentRows(tx, deal.id);
-      const installation = await this.requireInstallation(tx, deal.id);
-
-      if (installation.installerConfirmedAt) {
-        await this.dealCompletion.tryFinalize(tx, deal.id, user.id);
-        return tx.dealInstallation.findUniqueOrThrow({
-          where: { id: installation.id },
-        });
-      }
-
-      if (installation.supervisorConfirmedById === user.id) {
-        throw new ConflictException(DISTINCT_INSTALLATION_ACTORS_MESSAGE);
-      }
-
-      const confirmedAt = new Date();
-      const claimed = await tx.dealInstallation.updateMany({
-        where: {
-          id: installation.id,
-          installerConfirmedAt: null,
-        },
-        data: {
-          installerConfirmedAt: confirmedAt,
-          installerConfirmedById: user.id,
-        },
-      });
-
-      if (claimed.count !== 1) {
-        const latest = await tx.dealInstallation.findUniqueOrThrow({
-          where: { id: installation.id },
-        });
-        if (latest.installerConfirmedAt) {
-          await this.dealCompletion.tryFinalize(tx, deal.id, user.id);
-          return latest;
-        }
-        throw new ConflictException('Installer confirmation was not recorded');
-      }
-
-      await tx.activity.create({
-        data: {
-          authorId: user.id,
-          relatedType: 'Deal',
-          relatedId: deal.id,
-          type: ActivityType.INSTALLATION_UPDATED,
-          content: 'Installer confirmed installation work',
-          metadata: {
-            action: 'installation_installer_confirmed',
-            installationId: installation.id,
-          },
-        },
-      });
-      await tx.auditLog.create({
-        data: {
-          userId: user.id,
-          action: FULFILLMENT_AUDIT.INSTALLATION_INSTALLER_CONFIRMED,
-          entityType: 'DealInstallation',
-          entityId: installation.id,
-          newValue: {
-            installerConfirmedAt: confirmedAt.toISOString(),
-            installerConfirmedById: user.id,
-          },
-        },
-      });
-
-      if (!installation.supervisorConfirmedAt) {
-        await this.notifyRoleUsers(tx, [RoleName.HEAD, RoleName.DIRECTOR], {
-          title: 'Installation supervisor confirmation pending',
-          message:
-            'Installer confirmed work; HEAD or DIRECTOR confirmation is pending',
-          type: FULFILLMENT_NOTIFICATION.INSTALLATION_INSTALLER_CONFIRMED,
-          relatedId: installation.id,
-        });
-      }
-
-      await this.dealCompletion.tryFinalize(tx, deal.id, user.id);
-
-      return tx.dealInstallation.findUniqueOrThrow({
-        where: { id: installation.id },
-      });
-    });
-  }
-
   async confirmSupervisor(
     dealId: string,
     user: CurrentUser,
@@ -488,10 +318,6 @@ export class DealInstallationService {
         return tx.dealInstallation.findUniqueOrThrow({
           where: { id: installation.id },
         });
-      }
-
-      if (installation.installerConfirmedById === user.id) {
-        throw new ConflictException(DISTINCT_INSTALLATION_ACTORS_MESSAGE);
       }
 
       const confirmedAt = new Date();
@@ -543,16 +369,6 @@ export class DealInstallationService {
         },
       });
 
-      if (!installation.installerConfirmedAt) {
-        await this.notifyRoleUsers(tx, [RoleName.INSTALLER], {
-          title: 'Installation installer confirmation pending',
-          message:
-            'Management confirmed installation; installer confirmation is pending',
-          type: FULFILLMENT_NOTIFICATION.INSTALLATION_SUPERVISOR_CONFIRMED,
-          relatedId: installation.id,
-        });
-      }
-
       await this.dealCompletion.tryFinalize(tx, deal.id, user.id);
 
       return tx.dealInstallation.findUniqueOrThrow({
@@ -581,26 +397,13 @@ export class DealInstallationService {
     );
   }
 
-  private assertInstaller(user: CurrentUser): void {
-    if (hasRole(user, RoleName.INSTALLER)) {
-      return;
-    }
-
-    throw new ForbiddenException(
-      'Installation work confirmation requires the INSTALLER role',
-    );
-  }
-
   private assertAssessor(user: CurrentUser): void {
-    if (
-      hasRole(user, RoleName.INSTALLER) ||
-      hasAnyRole(user, [RoleName.HEAD, RoleName.DIRECTOR])
-    ) {
+    if (hasAnyRole(user, [RoleName.HEAD, RoleName.DIRECTOR])) {
       return;
     }
 
     throw new ForbiddenException(
-      'Installation assessment requires INSTALLER, HEAD, or DIRECTOR',
+      'Installation assessment requires HEAD or DIRECTOR',
     );
   }
 
@@ -641,10 +444,7 @@ export class DealInstallationService {
       throw new NotFoundException('Deal not found');
     }
 
-    if (
-      this.dealPolicy.canReadDeal(user, deal) ||
-      hasRole(user, RoleName.INSTALLER)
-    ) {
+    if (this.dealPolicy.canReadDeal(user, deal)) {
       return deal;
     }
 
@@ -675,40 +475,6 @@ export class DealInstallationService {
     }
 
     return installation;
-  }
-
-  private async notifyRoleUsers(
-    tx: Prisma.TransactionClient,
-    roles: RoleName[],
-    input: {
-      title: string;
-      message: string;
-      type: string;
-      relatedId: string;
-    },
-  ): Promise<void> {
-    const users = await tx.user.findMany({
-      where: {
-        isActive: true,
-        roles: { some: { role: { name: { in: roles } } } },
-      },
-      select: { id: true },
-    });
-
-    if (users.length === 0) {
-      return;
-    }
-
-    await tx.notification.createMany({
-      data: users.map((user) => ({
-        userId: user.id,
-        title: input.title,
-        message: input.message,
-        type: input.type,
-        relatedType: 'DealInstallation',
-        relatedId: input.relatedId,
-      })),
-    });
   }
 }
 

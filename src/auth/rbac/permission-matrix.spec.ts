@@ -10,7 +10,7 @@ import {
 describe('permission matrix', () => {
   const allSlugs = PERMISSION_DEFINITIONS.map(([slug]) => slug);
 
-  it('contains exactly the target business roles and not OBSERVER', () => {
+  it('contains exactly the target business roles and not obsolete roles', () => {
     expect([...TARGET_ROLE_NAMES].sort()).toEqual(
       [
         RoleName.ADMIN,
@@ -19,7 +19,6 @@ describe('permission matrix', () => {
         RoleName.MANAGER,
         RoleName.ACCOUNTANT,
         RoleName.STOREKEEPER,
-        RoleName.INSTALLER,
       ].sort(),
     );
     expect(Object.keys(ROLE_PERMISSION_SLUGS).sort()).toEqual(
@@ -110,26 +109,6 @@ describe('permission matrix', () => {
     }
   });
 
-  it('gives INSTALLER only installation execution permissions', () => {
-    expect([...ROLE_PERMISSION_SLUGS[RoleName.INSTALLER]]).toEqual([
-      'auth:me',
-      'deals:read',
-      'installation:assess',
-      'installation:confirm_work',
-    ]);
-    expect(roleHasPermission(RoleName.INSTALLER, 'leads:create')).toBe(false);
-    expect(roleHasPermission(RoleName.INSTALLER, 'inventory:manage')).toBe(
-      false,
-    );
-    expect(roleHasPermission(RoleName.INSTALLER, 'orders:read')).toBe(false);
-    expect(
-      roleHasPermission(RoleName.INSTALLER, 'installation:confirm_supervisor'),
-    ).toBe(false);
-    expect(roleHasPermission(RoleName.INSTALLER, 'installation:schedule')).toBe(
-      false,
-    );
-  });
-
   it('gives client delivery confirmation to MANAGER, HEAD and DIRECTOR', () => {
     expect(
       roleHasPermission(
@@ -183,41 +162,18 @@ describe('permission matrix', () => {
     }
   });
 
-  it('gives installation:assess to INSTALLER, HEAD and DIRECTOR only', () => {
-    expect(roleHasPermission(RoleName.INSTALLER, 'installation:assess')).toBe(
-      true,
-    );
+  it('gives installation:assess to HEAD and DIRECTOR only', () => {
     expect(roleHasPermission(RoleName.HEAD, 'installation:assess')).toBe(true);
     expect(roleHasPermission(RoleName.DIRECTOR, 'installation:assess')).toBe(
       true,
     );
 
     for (const roleName of TARGET_ROLE_NAMES) {
-      if (
-        roleName === RoleName.INSTALLER ||
-        roleName === RoleName.HEAD ||
-        roleName === RoleName.DIRECTOR
-      ) {
+      if (roleName === RoleName.HEAD || roleName === RoleName.DIRECTOR) {
         continue;
       }
 
       expect(roleHasPermission(roleName, 'installation:assess')).toBe(false);
-    }
-  });
-
-  it('gives installer work confirmation only to INSTALLER', () => {
-    expect(
-      roleHasPermission(RoleName.INSTALLER, 'installation:confirm_work'),
-    ).toBe(true);
-
-    for (const roleName of TARGET_ROLE_NAMES) {
-      if (roleName === RoleName.INSTALLER) {
-        continue;
-      }
-
-      expect(roleHasPermission(roleName, 'installation:confirm_work')).toBe(
-        false,
-      );
     }
   });
 

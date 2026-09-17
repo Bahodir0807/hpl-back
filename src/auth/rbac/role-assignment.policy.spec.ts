@@ -28,9 +28,6 @@ describe('role-assignment policy', () => {
       assertCreatableRoleNames(admin, [RoleName.MANAGER]),
     ).not.toThrow();
     expect(() =>
-      assertCreatableRoleNames(admin, [RoleName.INSTALLER]),
-    ).not.toThrow();
-    expect(() =>
       assertCreatableRoleNames(admin, [RoleName.STOREKEEPER]),
     ).not.toThrow();
     expect(() =>
@@ -95,9 +92,6 @@ describe('role-assignment policy', () => {
     ).not.toThrow();
     expect(() =>
       assertAdministrativePasswordResetAllowed([RoleName.STOREKEEPER]),
-    ).not.toThrow();
-    expect(() =>
-      assertAdministrativePasswordResetAllowed([RoleName.INSTALLER]),
     ).not.toThrow();
   });
 });

@@ -9,7 +9,6 @@ import {
   areAllClientSupplierOrdersDelivered,
   areMaterialsDelivered,
   evaluateDealCompletion,
-  isInstallationDualConfirmed,
   isInstallationRequired,
 } from './deal-completion.rules';
 
@@ -22,7 +21,6 @@ describe('deal completion rules', () => {
     orderStatus: OrderStatus.PENDING,
     supplierOrderStatuses: [SupplierOrderStatus.DELIVERED],
     installationRequired: false,
-    installerConfirmedById: null,
     supervisorConfirmedById: null,
     installationCompletedAt: null,
   };
@@ -79,27 +77,6 @@ describe('deal completion rules', () => {
         fulfillmentSource: FulfillmentSource.SUPPLIER_ORDER,
         orderStatus: OrderStatus.PENDING,
         supplierOrderStatuses: [SupplierOrderStatus.SHIPPED],
-      }),
-    ).toBe(false);
-  });
-
-  it('requires distinct installer and supervisor user ids', () => {
-    expect(
-      isInstallationDualConfirmed({
-        installerConfirmedById: 'installer',
-        supervisorConfirmedById: 'head',
-      }),
-    ).toBe(true);
-    expect(
-      isInstallationDualConfirmed({
-        installerConfirmedById: 'same',
-        supervisorConfirmedById: 'same',
-      }),
-    ).toBe(false);
-    expect(
-      isInstallationDualConfirmed({
-        installerConfirmedById: 'installer',
-        supervisorConfirmedById: null,
       }),
     ).toBe(false);
   });
@@ -165,7 +142,7 @@ describe('deal completion rules', () => {
     ).toBe(false);
   });
 
-  it('does not complete an installation deal without both confirmations', () => {
+  it('does not complete an installation deal without supervisor confirmation', () => {
     expect(
       evaluateDealCompletion({
         ...base,
@@ -176,24 +153,16 @@ describe('deal completion rules', () => {
       evaluateDealCompletion({
         ...base,
         installationRequired: true,
-        installerConfirmedById: 'installer',
-      }).canCompleteDeal,
-    ).toBe(false);
-    expect(
-      evaluateDealCompletion({
-        ...base,
-        installationRequired: true,
-        supervisorConfirmedById: 'head',
+        installerConfirmedById: 'historical-user',
       }).canCompleteDeal,
     ).toBe(false);
   });
 
-  it('completes when installer and HEAD or DIRECTOR are distinct', () => {
+  it('completes when HEAD or DIRECTOR confirms installation completion', () => {
     expect(
       evaluateDealCompletion({
         ...base,
         installationRequired: true,
-        installerConfirmedById: 'installer',
         supervisorConfirmedById: 'head',
       }).canCompleteDeal,
     ).toBe(true);
@@ -201,21 +170,9 @@ describe('deal completion rules', () => {
       evaluateDealCompletion({
         ...base,
         installationRequired: true,
-        installerConfirmedById: 'installer',
         supervisorConfirmedById: 'director',
       }).canCompleteDeal,
     ).toBe(true);
-  });
-
-  it('does not treat HEAD+DIRECTOR as installation completion', () => {
-    expect(
-      evaluateDealCompletion({
-        ...base,
-        installationRequired: true,
-        installerConfirmedById: null,
-        supervisorConfirmedById: 'head',
-      }).canCompleteDeal,
-    ).toBe(false);
   });
 
   it('does not complete a LOST deal or rewrite completedAt', () => {

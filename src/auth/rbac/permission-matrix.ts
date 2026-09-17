@@ -82,7 +82,6 @@ export const PERMISSION_DEFINITIONS = [
   ],
   ['installation:schedule', 'Schedule deal installation dates'],
   ['installation:assess', 'Record lightweight installation assessment notes'],
-  ['installation:confirm_work', 'Confirm installation work as installer'],
   [
     'installation:confirm_supervisor',
     'Confirm installation completion as HEAD or DIRECTOR',
@@ -101,7 +100,6 @@ export const TARGET_ROLE_NAMES = [
   RoleName.MANAGER,
   RoleName.ACCOUNTANT,
   RoleName.STOREKEEPER,
-  RoleName.INSTALLER,
 ] as const;
 
 export type TargetRoleName = (typeof TARGET_ROLE_NAMES)[number];
@@ -288,13 +286,6 @@ const STOREKEEPER_PERMISSIONS: PermissionSlug[] = [
   'warehouse_purchases:receive',
 ];
 
-const INSTALLER_PERMISSIONS: PermissionSlug[] = [
-  'auth:me',
-  'deals:read',
-  'installation:assess',
-  'installation:confirm_work',
-];
-
 export const ROLE_PERMISSION_SLUGS: Record<
   RoleName,
   readonly PermissionSlug[]
@@ -305,7 +296,6 @@ export const ROLE_PERMISSION_SLUGS: Record<
   [RoleName.MANAGER]: MANAGER_PERMISSIONS,
   [RoleName.ACCOUNTANT]: ACCOUNTANT_PERMISSIONS,
   [RoleName.STOREKEEPER]: STOREKEEPER_PERMISSIONS,
-  [RoleName.INSTALLER]: INSTALLER_PERMISSIONS,
 };
 
 export const BUSINESS_MUTATION_PERMISSIONS = [
@@ -322,7 +312,6 @@ export const BUSINESS_MUTATION_PERMISSIONS = [
   'warehouse_purchases:receive',
   'installation:schedule',
   'installation:assess',
-  'installation:confirm_work',
   'installation:confirm_supervisor',
 ] as const;
 

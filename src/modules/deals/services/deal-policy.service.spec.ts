@@ -59,18 +59,6 @@ describe('DealPolicyService commercial lock', () => {
     expect(perms.canMutateCommercial).toBe(false);
   });
 
-  it('does not grant INSTALLER global deal visibility from deals:read_all alone', () => {
-    const installer: PolicyUser = {
-      id: 'installer-id',
-      roles: [RoleName.INSTALLER],
-      permissions: ['deals:read', 'deals:read_all'],
-    };
-    const deal = { ownerId: manager.id, stage: DealStage.QUALIFICATION };
-
-    expect(policy.canReadDeal(installer, deal)).toBe(false);
-    expect(policy.getScopeFilter(installer)).toEqual({ ownerId: installer.id });
-  });
-
   it('scopes a manager without deals:read_all to owned deals', () => {
     const deal = { ownerId: 'other-manager', stage: DealStage.QUALIFICATION };
 

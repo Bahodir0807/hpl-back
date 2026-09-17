@@ -4,13 +4,13 @@ import { INSTALLATION_ASSESS_PERMISSION } from './deal-fulfillment.constants';
 import { InstallationsController } from './installations.controller';
 
 describe('InstallationsController', () => {
-  const installer = {
-    id: 'installer-id',
-    email: 'installer@test.com',
+  const head = {
+    id: 'head-id',
+    email: 'head@test.com',
     teamId: null,
     managerId: null,
-    roles: [RoleName.INSTALLER],
-    permissions: [INSTALLATION_ASSESS_PERMISSION, 'installation:confirm_work'],
+    roles: [RoleName.HEAD],
+    permissions: [INSTALLATION_ASSESS_PERMISSION],
   };
 
   it('lists jobs through the installation service, not Deal list', async () => {
@@ -24,11 +24,11 @@ describe('InstallationsController', () => {
       dealInstallationService as never,
     );
 
-    await controller.list({ requiringAction: true }, installer);
+    await controller.list({ requiringAction: true }, head);
 
     expect(dealInstallationService.list).toHaveBeenCalledWith(
       { requiringAction: true },
-      installer,
+      head,
     );
   });
 
@@ -41,12 +41,13 @@ describe('InstallationsController', () => {
       dealInstallationService as never,
     );
 
-    await expect(
-      controller.getById('job-id', installer as never),
-    ).resolves.toEqual({ id: 'job-id', dealId: 'deal-id' });
+    await expect(controller.getById('job-id', head as never)).resolves.toEqual({
+      id: 'job-id',
+      dealId: 'deal-id',
+    });
     expect(dealInstallationService.getById).toHaveBeenCalledWith(
       'job-id',
-      installer,
+      head,
     );
   });
 
@@ -60,7 +61,7 @@ describe('InstallationsController', () => {
     );
 
     await expect(
-      controller.list({}, { ...installer, roles: [RoleName.MANAGER] }),
+      controller.list({}, { ...head, roles: [RoleName.MANAGER] }),
     ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

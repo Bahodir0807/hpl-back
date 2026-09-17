@@ -222,10 +222,7 @@ export class ReportsService {
           where: {
             createdAt: range,
             status: InstallationStatus.IN_PROGRESS,
-            OR: [
-              { installerConfirmedAt: null },
-              { supervisorConfirmedAt: null },
-            ],
+            supervisorConfirmedAt: null,
           },
         }),
         this.prisma.stockBalance.aggregate({

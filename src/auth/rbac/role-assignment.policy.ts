@@ -16,7 +16,6 @@ export const ADMIN_PROVISIONABLE_ROLES: ReadonlySet<RoleName> = new Set([
   RoleName.ADMIN,
   RoleName.MANAGER,
   RoleName.STOREKEEPER,
-  RoleName.INSTALLER,
 ]);
 
 /**

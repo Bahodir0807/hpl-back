@@ -207,6 +207,7 @@ async function clearDatabase(): Promise<void> {
   await prisma.panelQuoteItem.deleteMany();
   await prisma.panelQuote.deleteMany();
   await prisma.calculationSession.deleteMany();
+  await prisma.calculationRequest.deleteMany();
   await prisma.calculationLineItem.deleteMany(); // повторное — на случай каскадных остатков
   await prisma.telegramLeadMetadata.deleteMany();
   await prisma.inboundWebhookEvent.deleteMany();
@@ -222,6 +223,7 @@ async function clearDatabase(): Promise<void> {
   await prisma.dealItem.deleteMany();
   await prisma.dealOffer.deleteMany();
   await prisma.dealStageHistory.deleteMany();
+  await prisma.dealInstallation.deleteMany();
   await prisma.deal.deleteMany();
   await prisma.leadAssignmentHistory.deleteMany();
   await prisma.lead.deleteMany();
@@ -240,6 +242,8 @@ async function clearDatabase(): Promise<void> {
   await prisma.qualityClass.deleteMany();
   await prisma.stockAdjustment.deleteMany();
   await prisma.stockBalance.deleteMany();
+  await prisma.expectedReceiptEventItem.deleteMany();
+  await prisma.expectedReceiptEvent.deleteMany();
   await prisma.expectedReceiptItem.deleteMany();
   await prisma.expectedReceipt.deleteMany();
   await prisma.productPrice.deleteMany();
@@ -251,6 +255,7 @@ async function clearDatabase(): Promise<void> {
   await prisma.brand.deleteMany();
   await prisma.supplier.deleteMany();
   await prisma.file.deleteMany();
+  await prisma.salesPlanFxRate.deleteMany();
   await prisma.salesPlan.deleteMany();
   await prisma.leadPlan.deleteMany();
   await prisma.kpiSetting.deleteMany();
@@ -455,7 +460,7 @@ async function main(): Promise<void> {
     lastName: 'Кузнецов',
     phone: '+7 (495) 100-00-08',
     passwordHash,
-    roleId: roles.get(RoleName.INSTALLER)!.id,
+    // roleId: roles.get(RoleName.INSTALLER)!.id,
   });
 
   const supplierByCode = new Map<string, { id: string }>();

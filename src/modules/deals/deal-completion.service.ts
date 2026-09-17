@@ -30,7 +30,6 @@ const dealCompletionInclude = Prisma.validator<Prisma.DealInclude>()({
     select: {
       id: true,
       completedAt: true,
-      installerConfirmedById: true,
       supervisorConfirmedById: true,
     },
   },
@@ -185,7 +184,6 @@ export class DealCompletionService {
       orderStatus: deal.order?.deletedAt ? null : deal.order?.status,
       supplierOrderStatuses: deal.supplierOrders.map((order) => order.status),
       installationRequired: deal.installationRequiredSnapshot,
-      installerConfirmedById: deal.installation?.installerConfirmedById,
       supervisorConfirmedById: deal.installation?.supervisorConfirmedById,
       installationCompletedAt: deal.installation?.completedAt,
     };

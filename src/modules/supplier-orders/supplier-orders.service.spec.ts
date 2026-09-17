@@ -301,7 +301,7 @@ describe('SupplierOrdersService', () => {
     expect(second).toBe(0);
   });
 
-  it('forbids ADMIN, ACCOUNTANT, STOREKEEPER and INSTALLER from confirming client delivery', async () => {
+  it('forbids ADMIN, ACCOUNTANT and STOREKEEPER from confirming client delivery', async () => {
     const denied = [
       admin,
       {
@@ -315,12 +315,6 @@ describe('SupplierOrdersService', () => {
         id: 'storekeeper-id',
         roles: [RoleName.STOREKEEPER],
         permissions: ['deliveries:create'],
-      },
-      {
-        ...admin,
-        id: 'installer-id',
-        roles: [RoleName.INSTALLER],
-        permissions: ['installation:confirm_work'],
       },
     ];
 

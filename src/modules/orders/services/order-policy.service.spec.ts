@@ -22,18 +22,6 @@ describe('OrderPolicyService scope', () => {
     });
   });
 
-  it('does not grant INSTALLER global order visibility from deals:read_all alone', () => {
-    const installer: PolicyUser = {
-      id: 'installer-id',
-      roles: [RoleName.INSTALLER],
-      permissions: ['orders:read', 'deals:read_all'],
-    };
-
-    expect(policy.getScopeFilter(installer)).toEqual({
-      deal: { ownerId: installer.id },
-    });
-  });
-
   it('denies HEAD payment confirmation even if payments:confirm is present', () => {
     const head: PolicyUser = {
       id: 'head-id',
@@ -94,18 +82,6 @@ describe('OrderPolicyService scope', () => {
       false,
     );
     expect(policy.getScopeFilter(accountantAdmin)).toEqual({});
-  });
-
-  it('allows ACCOUNTANT plus a harmless role to confirm when ACCOUNTANT remains assigned', () => {
-    const accountantInstaller: PolicyUser = {
-      id: 'accountant-installer-id',
-      roles: [RoleName.ACCOUNTANT, RoleName.INSTALLER],
-      permissions: ['payments:confirm'],
-    };
-
-    expect(
-      policy.getPermissions(accountantInstaller, order).canConfirmPayment,
-    ).toBe(true);
   });
 
   it('keeps DIRECTOR+ADMIN unscoped without operational mutations', () => {

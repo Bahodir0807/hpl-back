@@ -24,10 +24,7 @@ export class InstallationsController {
 
   @Get()
   @RequirePermissions(INSTALLATION_ASSESS_PERMISSION)
-  @ApiOperation({
-    summary:
-      'List installation jobs for INSTALLER, HEAD, and DIRECTOR without Deal sales visibility',
-  })
+  @ApiOperation({ summary: 'List installation jobs for HEAD and DIRECTOR' })
   @ApiQuery({ name: 'status', required: false, enum: InstallationStatus })
   @ApiQuery({ name: 'requiringAction', required: false, type: Boolean })
   @ApiQuery({ name: 'page', required: false, type: Number })

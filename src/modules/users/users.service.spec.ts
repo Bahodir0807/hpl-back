@@ -44,8 +44,5 @@ describe('UsersService.assertUserModuleAccess', () => {
     expect(() =>
       service.assertUserModuleAccess({ roles: [RoleName.MANAGER] }),
     ).toThrow(ForbiddenException);
-    expect(() =>
-      service.assertUserModuleAccess({ roles: [RoleName.INSTALLER] }),
-    ).toThrow(ForbiddenException);
   });
 });
