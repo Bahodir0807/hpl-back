@@ -7117,6 +7117,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         oldStage: DealStage.QUALIFICATION,
         newStage: DealStage.WON,
         changedById: context.managerId,
+        createdAt: new Date('2026-08-15T00:00:00.000Z'),
       },
     });
 
