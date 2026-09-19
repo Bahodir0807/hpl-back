@@ -19,6 +19,7 @@ import { CreateTaskDto } from './dto/create-task.dto';
 import { FilterTaskDto } from './dto/filter-task.dto';
 import { RescheduleTaskDto } from './dto/reschedule-task.dto';
 import { calculateComputedStatus } from './utils/task-status-calculator';
+import { canAccessLeadRecord } from '../leads/engineering/engineering-access';
 
 const READ_ALL_TASKS_PERMISSION = 'tasks:read_all';
 const CRITICAL_OVERDUE_NOTIFICATION_TYPE = 'TASK_CRITICAL_OVERDUE';
@@ -626,17 +627,20 @@ export class TasksService {
       case 'Lead': {
         const lead = await this.prisma.lead.findFirst({
           where: { id: relatedId, deletedAt: null },
-          select: { ownerId: true },
+          select: { id: true, ownerId: true },
         });
 
         if (!lead) {
           throw new NotFoundException('Related lead not found');
         }
 
-        if (
-          user.permissions.includes('leads:read_all') ||
-          lead.ownerId === user.id
-        ) {
+        const allowed = await canAccessLeadRecord(
+          this.prisma,
+          lead,
+          user.id,
+          user.permissions,
+        );
+        if (allowed) {
           return;
         }
 

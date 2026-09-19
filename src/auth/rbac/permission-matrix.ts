@@ -89,6 +89,20 @@ export const PERMISSION_DEFINITIONS = [
   ['currency_rates:read', 'Read the active CNY to USD rate'],
   ['currency_rates:manage', 'Manage the centralized CNY to USD rate'],
   ['panel_pricing:manage', 'Manage supplier CNY panel thickness prices'],
+  ['engineering:read', 'Read engineering leads assigned to the current engineer'],
+  [
+    'engineering:assign',
+    'Assign an engineer to a lead without changing Lead.ownerId',
+  ],
+  ['engineering:return', 'Return an engineering lead to the owning manager'],
+  [
+    'engineering:complete',
+    'Complete primary engineering qualification without commercial approval',
+  ],
+  [
+    'engineering:update_technical',
+    'Update allowed technical qualification fields on an assigned lead',
+  ],
 ] as const;
 
 export type PermissionSlug = (typeof PERMISSION_DEFINITIONS)[number][0];
@@ -100,6 +114,7 @@ export const TARGET_ROLE_NAMES = [
   RoleName.MANAGER,
   RoleName.ACCOUNTANT,
   RoleName.STOREKEEPER,
+  RoleName.ENGINEER,
 ] as const;
 
 export type TargetRoleName = (typeof TARGET_ROLE_NAMES)[number];
@@ -219,6 +234,7 @@ const HEAD_PERMISSIONS: PermissionSlug[] = [
   'installation:schedule',
   'installation:confirm_supervisor',
   'installation:assess',
+  'engineering:assign',
 ];
 
 const MANAGER_PERMISSIONS: PermissionSlug[] = [
@@ -249,6 +265,7 @@ const MANAGER_PERMISSIONS: PermissionSlug[] = [
   'audit:read',
   'panel_catalog:read',
   'panel_catalog:manage',
+  'engineering:assign',
   'calculations:read',
   'calculations:create',
   'calculations:update',
@@ -286,6 +303,19 @@ const STOREKEEPER_PERMISSIONS: PermissionSlug[] = [
   'warehouse_purchases:receive',
 ];
 
+const ENGINEER_PERMISSIONS: PermissionSlug[] = [
+  'auth:me',
+  'leads:read',
+  'clients:read',
+  'tasks:read',
+  'tasks:update',
+  'files:read',
+  'engineering:read',
+  'engineering:return',
+  'engineering:complete',
+  'engineering:update_technical',
+];
+
 export const ROLE_PERMISSION_SLUGS: Record<
   RoleName,
   readonly PermissionSlug[]
@@ -296,6 +326,7 @@ export const ROLE_PERMISSION_SLUGS: Record<
   [RoleName.MANAGER]: MANAGER_PERMISSIONS,
   [RoleName.ACCOUNTANT]: ACCOUNTANT_PERMISSIONS,
   [RoleName.STOREKEEPER]: STOREKEEPER_PERMISSIONS,
+  [RoleName.ENGINEER]: ENGINEER_PERMISSIONS,
 };
 
 export const BUSINESS_MUTATION_PERMISSIONS = [
@@ -313,6 +344,10 @@ export const BUSINESS_MUTATION_PERMISSIONS = [
   'installation:schedule',
   'installation:assess',
   'installation:confirm_supervisor',
+  'engineering:assign',
+  'engineering:return',
+  'engineering:complete',
+  'engineering:update_technical',
 ] as const;
 
 export function roleHasPermission(roleName: RoleName, slug: string): boolean {

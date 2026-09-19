@@ -13,6 +13,14 @@ enum RoleName {
   MANAGER
   ACCOUNTANT
   STOREKEEPER
+  ENGINEER
+}
+
+enum EngineeringAssignmentStatus {
+  ACTIVE
+  RETURNED
+  COMPLETED
+  SUPERSEDED
 }
 
 enum ProductStatus {
@@ -292,6 +300,10 @@ model User {
   lostLeads                         Lead[]                        @relation("LeadLostBy")
   lostDeals                         Deal[]                        @relation("DealLostBy")
   managerCommercialHandoffs         Lead[]                        @relation("LeadManagerCommercialInputReadyBy")
+  engineeringAssignments            LeadEngineeringAssignment[]   @relation("LeadEngineeringEngineer")
+  engineeringAssignmentsMade        LeadEngineeringAssignment[]   @relation("LeadEngineeringAssignedBy")
+  engineeringReturns                LeadEngineeringAssignment[]   @relation("LeadEngineeringReturnedBy")
+  engineeringCompletions            LeadEngineeringAssignment[]   @relation("LeadEngineeringCompletedBy")
 
   @@index([teamId])
   @@index([managerId])
@@ -662,6 +674,7 @@ model Lead {
   deal                          Deal?                        @relation("LeadConvertedDeal", fields: [dealId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   projectObject                 ProjectObject?               @relation(fields: [projectObjectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   assignmentHistory             LeadAssignmentHistory[]
+  engineeringAssignments        LeadEngineeringAssignment[]
   calculationRequests           CalculationRequest[]
   calculationSessions           CalculationSession[]
   panelQuotes                   PanelQuote[]
@@ -797,6 +810,38 @@ model LeadAssignmentHistory {
   @@index([newOwnerId])
   @@index([assignedById])
   @@index([createdAt])
+}
+
+model LeadEngineeringAssignment {
+  id            String                       @id @default(uuid())
+  leadId        String
+  engineerId    String
+  assignedById  String
+  status        EngineeringAssignmentStatus  @default(ACTIVE)
+  /// Equals leadId while ACTIVE so a lead can have only one active engineer.
+  activeLeadId  String?                      @unique
+  returnReason  String?
+  assignedAt    DateTime                     @default(now())
+  returnedAt    DateTime?
+  returnedById  String?
+  completedAt   DateTime?
+  completedById String?
+  supersededAt  DateTime?
+  createdAt     DateTime                     @default(now())
+  updatedAt     DateTime                     @updatedAt
+
+  lead        Lead  @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  engineer    User  @relation("LeadEngineeringEngineer", fields: [engineerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  assignedBy  User  @relation("LeadEngineeringAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  returnedBy  User? @relation("LeadEngineeringReturnedBy", fields: [returnedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  completedBy User? @relation("LeadEngineeringCompletedBy", fields: [completedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([leadId, status])
+  @@index([engineerId, status])
+  @@index([assignedById])
+  @@index([assignedAt])
+  @@index([returnedById])
+  @@index([completedById])
 }
 
 model Task {

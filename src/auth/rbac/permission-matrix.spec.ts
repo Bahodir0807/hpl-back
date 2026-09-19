@@ -19,6 +19,7 @@ describe('permission matrix', () => {
         RoleName.MANAGER,
         RoleName.ACCOUNTANT,
         RoleName.STOREKEEPER,
+        RoleName.ENGINEER,
       ].sort(),
     );
     expect(Object.keys(ROLE_PERMISSION_SLUGS).sort()).toEqual(
@@ -260,5 +261,56 @@ describe('permission matrix', () => {
     expect(
       roleHasPermission(RoleName.ADMIN, 'warehouse_purchases:receive'),
     ).toBe(false);
+  });
+
+  it('adds ENGINEER without commercial, financial, or global lead powers', () => {
+    expect(Object.values(RoleName)).toContain(RoleName.ENGINEER);
+    expect(Object.values(RoleName)).not.toContain('INSTALLER');
+    expect(roleHasPermission(RoleName.ENGINEER, 'engineering:read')).toBe(true);
+    expect(roleHasPermission(RoleName.ENGINEER, 'engineering:return')).toBe(
+      true,
+    );
+    expect(roleHasPermission(RoleName.ENGINEER, 'engineering:complete')).toBe(
+      true,
+    );
+    expect(
+      roleHasPermission(RoleName.ENGINEER, 'engineering:update_technical'),
+    ).toBe(true);
+    expect(roleHasPermission(RoleName.ENGINEER, 'quotes:approve')).toBe(false);
+    expect(roleHasPermission(RoleName.ENGINEER, 'leads:read_all')).toBe(false);
+    expect(roleHasPermission(RoleName.ENGINEER, 'leads:assign')).toBe(false);
+    expect(roleHasPermission(RoleName.ENGINEER, 'leads:commercial_qualify')).toBe(
+      false,
+    );
+    expect(roleHasPermission(RoleName.ENGINEER, 'currency_rates:manage')).toBe(
+      false,
+    );
+    expect(roleHasPermission(RoleName.ENGINEER, 'users:manage')).toBe(false);
+    expect(roleHasPermission(RoleName.ENGINEER, 'payments:confirm')).toBe(false);
+    expect(
+      roleHasPermission(RoleName.ENGINEER, 'products:read_purchase_price'),
+    ).toBe(false);
+    expect(roleHasPermission(RoleName.ENGINEER, 'engineering:assign')).toBe(
+      false,
+    );
+  });
+
+  it('gives engineering:assign only to MANAGER and HEAD', () => {
+    expect(roleHasPermission(RoleName.MANAGER, 'engineering:assign')).toBe(true);
+    expect(roleHasPermission(RoleName.HEAD, 'engineering:assign')).toBe(true);
+
+    for (const roleName of TARGET_ROLE_NAMES) {
+      if (roleName === RoleName.MANAGER || roleName === RoleName.HEAD) {
+        continue;
+      }
+      expect(roleHasPermission(roleName, 'engineering:assign')).toBe(false);
+    }
+  });
+
+  it('does not grant DIRECTOR quotes:approve for Stage 1 engineering', () => {
+    expect(roleHasPermission(RoleName.DIRECTOR, 'quotes:approve')).toBe(false);
+    expect(roleHasPermission(RoleName.DIRECTOR, 'engineering:assign')).toBe(
+      false,
+    );
   });
 });

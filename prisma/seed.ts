@@ -226,6 +226,7 @@ async function clearDatabase(): Promise<void> {
   await prisma.dealInstallation.deleteMany();
   await prisma.deal.deleteMany();
   await prisma.leadAssignmentHistory.deleteMany();
+  await prisma.leadEngineeringAssignment.deleteMany();
   await prisma.lead.deleteMany();
   await prisma.activity.deleteMany();
   await prisma.taskRescheduleHistory.deleteMany();
@@ -452,6 +453,17 @@ async function main(): Promise<void> {
     phone: '+7 (495) 100-00-07',
     passwordHash,
     roleId: roles.get(RoleName.ACCOUNTANT)!.id,
+  });
+
+  await createUser({
+    email: 'engineer@hpl.com',
+    firstName: 'Андрей',
+    lastName: 'Соколов',
+    phone: '+7 (495) 100-00-09',
+    passwordHash,
+    roleId: roles.get(RoleName.ENGINEER)!.id,
+    teamId: salesTeam.id,
+    managerId: head.id,
   });
 
   await createUser({

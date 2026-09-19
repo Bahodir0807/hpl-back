@@ -16,6 +16,9 @@ describe('LeadQualificationService', () => {
     leadQualification: {
       findUnique: jest.fn(),
     },
+    leadEngineeringAssignment: {
+      findFirst: jest.fn(),
+    },
     $transaction: jest.fn(),
   };
 
@@ -31,6 +34,7 @@ describe('LeadQualificationService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     service = new LeadQualificationService(prisma as never);
+    prisma.leadEngineeringAssignment.findFirst.mockResolvedValue(null);
   });
 
   it('allows an owner to read their qualification', async () => {
@@ -398,5 +402,35 @@ describe('LeadQualificationService', () => {
         ventFacadeKitRequired: null,
       },
     });
+  });
+
+  it('lets an assigned engineer read qualification', async () => {
+    prisma.lead.findFirst.mockResolvedValue({
+      ...ownedLead,
+      ownerId: 'manager-b',
+    });
+    prisma.leadEngineeringAssignment.findFirst.mockResolvedValue({
+      id: 'assignment-1',
+    });
+    prisma.leadQualification.findUnique.mockResolvedValue(null);
+
+    await expect(
+      service.get('lead-a', 'engineer-1', ['leads:read', 'engineering:read']),
+    ).resolves.toEqual({
+      leadId: 'lead-a',
+      qualification: null,
+      requirementPrefill: null,
+    });
+  });
+
+  it('denies an engineer without an assignment from reading qualification', async () => {
+    prisma.lead.findFirst.mockResolvedValue({
+      ...ownedLead,
+      ownerId: 'manager-b',
+    });
+
+    await expect(
+      service.get('lead-a', 'engineer-1', ['leads:read', 'engineering:read']),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

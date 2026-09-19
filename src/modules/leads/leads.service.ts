@@ -33,6 +33,10 @@ import {
 } from './lead.constants';
 import { LeadQualificationService } from './lead-qualification.service';
 import { CalculationRequestService } from '../../calculations/calculation-request.service';
+import {
+  canAccessLeadRecord,
+  isEngineeringOnlyViewer,
+} from './engineering/engineering-access';
 
 const FIRST_CONTACT_SLA_MS = 2 * 60 * 60 * 1000;
 const QUALIFIABLE_LEAD_STATUSES: LeadStatus[] = [
@@ -110,6 +114,24 @@ const leadRelationsInclude = Prisma.validator<Prisma.LeadInclude>()({
   },
   lostBy: {
     select: { id: true, firstName: true, lastName: true },
+  },
+  engineeringAssignments: {
+    orderBy: { assignedAt: 'desc' },
+    take: 10,
+    include: {
+      engineer: {
+        select: { id: true, firstName: true, lastName: true, email: true },
+      },
+      assignedBy: {
+        select: { id: true, firstName: true, lastName: true, email: true },
+      },
+      returnedBy: {
+        select: { id: true, firstName: true, lastName: true },
+      },
+      completedBy: {
+        select: { id: true, firstName: true, lastName: true },
+      },
+    },
   },
 });
 
@@ -231,7 +253,11 @@ export class LeadsService {
       throw new NotFoundException('Lead not found');
     }
 
-    this.assertLeadAccess(lead, currentUserId, permissions);
+    await this.assertLeadAccess(lead, currentUserId, permissions);
+
+    if (isEngineeringOnlyViewer(lead, currentUserId, permissions)) {
+      return this.redactLeadForEngineer(lead);
+    }
 
     return lead;
   }
@@ -260,7 +286,7 @@ export class LeadsService {
       throw new NotFoundException('Lead not found');
     }
 
-    this.assertLeadAccess(lead, currentUserId, permissions);
+    await this.assertLeadAccess(lead, currentUserId, permissions);
 
     const phone =
       lead.client?.contacts[0]?.phone ??
@@ -297,7 +323,7 @@ export class LeadsService {
     permissions: string[],
   ) {
     const lead = await this.ensureLeadExists(id);
-    this.assertLeadAccess(lead, currentUserId, permissions);
+    await this.assertLeadAccess(lead, currentUserId, permissions);
 
     return this.prisma.activity.create({
       data: {
@@ -318,7 +344,7 @@ export class LeadsService {
     permissions: string[],
   ): Promise<LeadWithRelations> {
     const existingLead = await this.ensureLeadExists(id);
-    this.assertLeadAccess(existingLead, currentUserId, permissions);
+    await this.assertLeadAccess(existingLead, currentUserId, permissions);
     this.assertCommercialTimelineAuthority(dto.targetDate, permissions);
 
     if (dto.ownerId && dto.ownerId !== existingLead.ownerId) {
@@ -360,7 +386,7 @@ export class LeadsService {
     permissions: string[],
   ): Promise<LeadWithRelations> {
     const lead = await this.ensureLeadExists(id);
-    this.assertLeadAccess(lead, currentUserId, permissions);
+    await this.assertLeadAccess(lead, currentUserId, permissions);
 
     if (lead.status === LeadStatus.UNQUALIFIED) {
       throw new ConflictException('Unqualified lead cannot be qualified');
@@ -639,7 +665,7 @@ export class LeadsService {
     }
 
     const existingLead = await this.ensureLeadExists(id);
-    this.assertLeadAccess(existingLead, currentUserId, permissions);
+    await this.assertLeadAccess(existingLead, currentUserId, permissions);
 
     if (existingLead.status === LeadStatus.LOST) {
       throw new ConflictException('Lost lead cannot be disqualified');
@@ -669,7 +695,7 @@ export class LeadsService {
     }
 
     const existingLead = await this.ensureLeadExists(id);
-    this.assertLeadAccess(existingLead, currentUserId, permissions);
+    await this.assertLeadAccess(existingLead, currentUserId, permissions);
 
     if (existingLead.status === LeadStatus.CONVERTED) {
       throw new BusinessException(
@@ -760,7 +786,7 @@ export class LeadsService {
     permissions: string[],
   ): Promise<LeadWithRelations> {
     const lead = await this.ensureLeadExists(id);
-    this.assertLeadAccess(lead, currentUserId, permissions);
+    await this.assertLeadAccess(lead, currentUserId, permissions);
 
     if (lead.ownerId === dto.newOwnerId) {
       return this.prisma.lead.findUniqueOrThrow({
@@ -795,7 +821,7 @@ export class LeadsService {
     permissions: string[],
   ): Promise<Lead> {
     const existingLead = await this.ensureLeadExists(id);
-    this.assertLeadAccess(existingLead, currentUserId, permissions);
+    await this.assertLeadAccess(existingLead, currentUserId, permissions);
 
     return this.prisma.lead.update({
       where: { id },
@@ -984,20 +1010,44 @@ export class LeadsService {
     return error instanceof Error && error.name === 'LeadQualifyClaimLostError';
   }
 
-  private assertLeadAccess(
-    lead: Pick<Lead, 'ownerId'>,
+  private async assertLeadAccess(
+    lead: Pick<Lead, 'id' | 'ownerId'>,
     currentUserId: string,
     permissions: string[],
-  ): void {
-    if (permissions.includes(READ_ALL_LEADS_PERMISSION)) {
-      return;
+  ): Promise<void> {
+    const allowed = await canAccessLeadRecord(
+      this.prisma,
+      lead,
+      currentUserId,
+      permissions,
+    );
+    if (!allowed) {
+      throw new ForbiddenException('Access to this lead is forbidden');
     }
+  }
 
-    if (lead.ownerId === currentUserId) {
-      return;
-    }
+  private redactLeadForEngineer<T extends Record<string, unknown>>(lead: T) {
+    const {
+      quotes: _quotes,
+      calculationRequests: _calculationRequests,
+      deal: _deal,
+      dealId: _dealId,
+      assignmentHistory: _assignmentHistory,
+      convertedAt: _convertedAt,
+      lostReason: _lostReason,
+      lostComment: _lostComment,
+      lostAt: _lostAt,
+      lostBy: _lostBy,
+      managerCommercialNote: _managerCommercialNote,
+      managerCommercialNoteUpdatedAt: _managerCommercialNoteUpdatedAt,
+      managerCommercialInputReadyAt: _managerCommercialInputReadyAt,
+      managerCommercialInputReadyById: _managerCommercialInputReadyById,
+      estimatedAmount: _estimatedAmount,
+      commercialQualification: _commercialQualification,
+      ...safeLead
+    } = lead;
 
-    throw new ForbiddenException('Access to this lead is forbidden');
+    return safeLead;
   }
 
   private async ensureLeadExists(id: string): Promise<Lead> {

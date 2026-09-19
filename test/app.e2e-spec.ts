@@ -89,12 +89,12 @@ type TestContext = {
   managerToken: string;
   accountantToken: string;
   storekeeperToken: string;
-  installerToken: string;
+  engineerToken: string;
   headId: string;
   managerId: string;
   accountantId: string;
   directorId: string;
-  installerId: string;
+  engineerId: string;
   clientId: string;
   contactId: string;
   projectObjectId: string;
@@ -4695,7 +4695,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         password: TEST_PASSWORD,
         firstName: 'Tech',
         lastName: 'Admin',
-        roleNames: [RoleName.INSTALLER],
+        roleNames: [RoleName.ENGINEER],
       })
       .expect(201);
     expect(bodyAs<EntityResponse>(created).id).toBeDefined();
@@ -5149,7 +5149,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         password: TEST_PASSWORD,
         firstName: 'Tech',
         lastName: 'FromDirAdmin',
-        roleNames: [RoleName.INSTALLER],
+        roleNames: [RoleName.ENGINEER],
       })
       .expect(201);
     expect(bodyAs<EntityResponse>(created).id).toBeDefined();
@@ -5222,7 +5222,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         password: TEST_PASSWORD,
         firstName: 'Tech',
         lastName: 'FromHeadAdmin',
-        roleNames: [RoleName.INSTALLER],
+        roleNames: [RoleName.ENGINEER],
       })
       .expect(201);
   });
@@ -5262,7 +5262,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         password: TEST_PASSWORD,
         firstName: 'Tech',
         lastName: 'FromAccAdmin',
-        roleNames: [RoleName.INSTALLER],
+        roleNames: [RoleName.ENGINEER],
       })
       .expect(201);
 
@@ -5342,7 +5342,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         password: TEST_PASSWORD,
         firstName: 'Tech',
         lastName: 'AdminOnly',
-        roleNames: [RoleName.INSTALLER],
+        roleNames: [RoleName.ENGINEER],
       })
       .expect(201);
   });
@@ -5380,7 +5380,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         password: TEST_PASSWORD,
         firstName: 'Tech',
         lastName: 'FromMgrAdmin',
-        roleNames: [RoleName.INSTALLER],
+        roleNames: [RoleName.ENGINEER],
       })
       .expect(201);
 
@@ -5416,28 +5416,28 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(403);
   });
 
-  it('BP4 lets INSTALLER authenticate without inheriting business permissions', async () => {
+  it('BP4 lets ENGINEER authenticate without inheriting business permissions', async () => {
     const me = await request(server)
       .get('/auth/me')
-      .set(authHeader(context.installerToken))
+      .set(authHeader(context.engineerToken))
       .expect(200);
     expect(bodyAs<{ email: string }>(me).email).toBe(
-      `installer-${RUN_ID}@hpl.test`,
+      `engineer-${RUN_ID}@hpl.test`,
     );
 
     await request(server)
       .post('/leads')
-      .set(authHeader(context.installerToken))
-      .send({ title: `installer lead ${RUN_ID}`, source: 'e2e' })
+      .set(authHeader(context.engineerToken))
+      .send({ title: `engineer lead ${RUN_ID}`, source: 'e2e' })
       .expect(403);
     await request(server)
       .post('/currency-rates')
-      .set(authHeader(context.installerToken))
+      .set(authHeader(context.engineerToken))
       .send({ rate: '0.3' })
       .expect(403);
     await request(server)
       .post('/inventory/expected-receipts')
-      .set(authHeader(context.installerToken))
+      .set(authHeader(context.engineerToken))
       .send({
         supplierId: (
           await prisma.supplier.findUniqueOrThrow({
@@ -5448,6 +5448,39 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         items: [{ productId: context.productId, quantity: 1 }],
       })
       .expect(403);
+  });
+
+  it('Stage 1 assigns an engineer without changing Lead.ownerId', async () => {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Engineering lead ${RUN_ID}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(leadResponse).id;
+    await qualifyLeadStage1(leadId, true);
+
+    const assigned = await request(server)
+      .post(`/engineering/leads/${leadId}/assign`)
+      .set(authHeader(context.managerToken))
+      .send({ engineerId: context.engineerId })
+      .expect(201);
+    const body = bodyAs<{ ownerId: string; created: boolean }>(assigned);
+    expect(body.ownerId).toBe(context.managerId);
+    expect(body.created).toBe(true);
+
+    await request(server)
+      .get(`/engineering/leads/${leadId}`)
+      .set(authHeader(context.engineerToken))
+      .expect(200);
+
+    const stored = await prisma.lead.findUniqueOrThrow({
+      where: { id: leadId },
+    });
+    expect(stored.ownerId).toBe(context.managerId);
   });
 
   it('uses canonical warehouse RBAC on legacy mutation routes', async () => {
@@ -6114,7 +6147,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(403);
     await request(server)
       .post(`/deals/${dealId}/supplier-orders`)
-      .set(authHeader(context.installerToken))
+      .set(authHeader(context.engineerToken))
       .send(payload)
       .expect(403);
   });
@@ -6500,7 +6533,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(deal.completedAt).toBeNull();
   });
 
-  it('BP6 requires installer plus HEAD or DIRECTOR from distinct users when installation is required', async () => {
+  it('BP6 completes installation when HEAD confirms as supervisor', async () => {
     const setup = await createShippedPaidHplDeal(true, 1);
     await request(server)
       .post(
@@ -6525,11 +6558,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(200);
 
     await request(server)
-      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
-      .set(authHeader(context.installerToken))
-      .expect(200);
-    deal = await prisma.deal.findUniqueOrThrow({ where: { id: setup.dealId } });
-    expect(deal.completedAt).toBeNull();
+      .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
+      .set(authHeader(context.engineerToken))
+      .expect(403);
 
     await request(server)
       .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
@@ -6540,14 +6571,13 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const installation = await prisma.dealInstallation.findUniqueOrThrow({
       where: { dealId: setup.dealId },
     });
-    expect(installation.installerConfirmedById).toBe(context.installerId);
     expect(installation.supervisorConfirmedById).toBe(context.headId);
     expect(installation.completedAt).not.toBeNull();
     expect(deal.completedAt).not.toBeNull();
     expect(deal.stage).toBe(DealStage.WON);
   });
 
-  it('BP6 completes installation with INSTALLER + DIRECTOR and rejects HEAD+DIRECTOR without installer', async () => {
+  it('BP6 completes installation when DIRECTOR confirms as supervisor', async () => {
     const setup = await createShippedPaidHplDeal(true, 1);
     await request(server)
       .post(
@@ -6569,35 +6599,17 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .set(authHeader(context.directorToken))
       .expect(200);
 
-    let deal = await prisma.deal.findUniqueOrThrow({
+    const deal = await prisma.deal.findUniqueOrThrow({
       where: { id: setup.dealId },
     });
-    expect(deal.completedAt).toBeNull();
-
-    await request(server)
-      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
-      .set(authHeader(context.headToken))
-      .expect(403);
-
-    await request(server)
-      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
-      .set(authHeader(context.installerToken))
-      .expect(200);
-
-    deal = await prisma.deal.findUniqueOrThrow({ where: { id: setup.dealId } });
     const installation = await prisma.dealInstallation.findUniqueOrThrow({
       where: { dealId: setup.dealId },
     });
     expect(installation.supervisorConfirmedById).toBe(context.directorId);
-    expect(installation.installerConfirmedById).toBe(context.installerId);
     expect(deal.completedAt).not.toBeNull();
   });
 
-  it('BP6 rejects one user filling both installation confirmation slots', async () => {
-    const both = await loginDualRole('bp6-installer-head', [
-      RoleName.INSTALLER,
-      RoleName.HEAD,
-    ]);
+  it('BP6 does not let ENGINEER confirm installation as supervisor', async () => {
     const setup = await createShippedPaidHplDeal(true, 1);
     await request(server)
       .post(
@@ -6607,7 +6619,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(200);
     await request(server)
       .post(`/deals/${setup.dealId}/installation/schedule`)
-      .set(authHeader(both.token))
+      .set(authHeader(context.headToken))
       .send({
         expectedInstallationAt: '2026-08-25T00:00:00.000Z',
         expectedCompletionAt: '2026-08-26T00:00:00.000Z',
@@ -6615,26 +6627,24 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(200);
 
     await request(server)
-      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
-      .set(authHeader(both.token))
-      .expect(200);
-    await request(server)
       .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
-      .set(authHeader(both.token))
-      .expect(409);
+      .set(authHeader(context.engineerToken))
+      .expect(403);
 
-    let deal = await prisma.deal.findUniqueOrThrow({
+    const deal = await prisma.deal.findUniqueOrThrow({
       where: { id: setup.dealId },
     });
     expect(deal.completedAt).toBeNull();
 
     await request(server)
       .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
-      .set(authHeader(context.directorToken))
+      .set(authHeader(context.headToken))
       .expect(200);
 
-    deal = await prisma.deal.findUniqueOrThrow({ where: { id: setup.dealId } });
-    expect(deal.completedAt).not.toBeNull();
+    const completed = await prisma.deal.findUniqueOrThrow({
+      where: { id: setup.dealId },
+    });
+    expect(completed.completedAt).not.toBeNull();
   });
 
   it('BP6 enforces client delivery and installation authorization', async () => {
@@ -6661,7 +6671,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(403);
     await request(server)
       .post(`/deals/${setup.dealId}/installation/schedule`)
-      .set(authHeader(context.installerToken))
+      .set(authHeader(context.engineerToken))
       .send(dates)
       .expect(403);
     await request(server)
@@ -6676,14 +6686,6 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .send(dates)
       .expect(200);
 
-    await request(server)
-      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
-      .set(authHeader(context.adminToken))
-      .expect(403);
-    await request(server)
-      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
-      .set(authHeader(context.headToken))
-      .expect(403);
     await request(server)
       .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
       .set(authHeader(context.adminToken))
@@ -6694,11 +6696,11 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(403);
     await request(server)
       .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
-      .set(authHeader(context.installerToken))
+      .set(authHeader(context.engineerToken))
       .expect(403);
 
-    const installerAdmin = await loginDualRole('bp6-installer-admin', [
-      RoleName.INSTALLER,
+    const engineerAdmin = await loginDualRole('bp6-engineer-admin', [
+      RoleName.ENGINEER,
       RoleName.ADMIN,
     ]);
     const headAdmin = await loginDualRole('bp6-head-admin', [
@@ -6706,9 +6708,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       RoleName.ADMIN,
     ]);
     await request(server)
-      .post(`/deals/${setup.dealId}/installation/confirm-installer`)
-      .set(authHeader(installerAdmin.token))
-      .expect(200);
+      .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
+      .set(authHeader(engineerAdmin.token))
+      .expect(403);
     await request(server)
       .post(`/deals/${setup.dealId}/installation/confirm-supervisor`)
       .set(authHeader(headAdmin.token))
@@ -6737,7 +6739,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(403);
     await request(server)
       .post(`/supplier-orders/${soId}/confirm-client-delivery`)
-      .set(authHeader(context.installerToken))
+      .set(authHeader(context.engineerToken))
       .expect(403);
 
     const passwordHash = await hash(TEST_PASSWORD, 12);
@@ -7613,12 +7615,12 @@ async function seedAcceptanceData(
     passwordHash,
     roleName: RoleName.STOREKEEPER,
   });
-  const installer = await upsertUser(prisma, {
-    email: `installer-${RUN_ID}@hpl.test`,
+  const engineer = await upsertUser(prisma, {
+    email: `engineer-${RUN_ID}@hpl.test`,
     firstName: 'Acceptance',
-    lastName: 'Installer',
+    lastName: 'Engineer',
     passwordHash,
-    roleName: RoleName.INSTALLER,
+    roleName: RoleName.ENGINEER,
   });
 
   const adminTokens = await login(server, `admin-${RUN_ID}@hpl.test`);
@@ -7630,7 +7632,7 @@ async function seedAcceptanceData(
     server,
     `storekeeper-${RUN_ID}@hpl.test`,
   );
-  const installerTokens = await login(server, `installer-${RUN_ID}@hpl.test`);
+  const engineerTokens = await login(server, `engineer-${RUN_ID}@hpl.test`);
 
   const supplier = await prisma.supplier.upsert({
     where: { code: `QA-SUP-${RUN_ID}` },
@@ -7756,12 +7758,12 @@ async function seedAcceptanceData(
     managerToken: managerTokens.accessToken,
     accountantToken: accountantTokens.accessToken,
     storekeeperToken: storekeeperTokens.accessToken,
-    installerToken: installerTokens.accessToken,
+    engineerToken: engineerTokens.accessToken,
     headId: head.id,
     managerId: manager.id,
     accountantId: accountant.id,
     directorId: director.id,
-    installerId: installer.id,
+    engineerId: engineer.id,
     clientId: client.id,
     contactId: contact.id,
     projectObjectId: projectObject.id,

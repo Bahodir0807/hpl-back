@@ -7,6 +7,7 @@ import {
 import {
   Client,
   DealStage,
+  EngineeringAssignmentStatus,
   LeadStatus,
   Prisma,
   TaskStatus,
@@ -20,6 +21,7 @@ import { CreateContactDto } from './dto/create-contact.dto';
 import { CreateProjectObjectDto } from './dto/create-project-object.dto';
 import { FilterClientDto } from './dto/filter-client.dto';
 import { UpdateClientDto } from './dto/update-client.dto';
+import { hasEngineeringReadPermission } from '../leads/engineering/engineering-access';
 
 const READ_ALL_CLIENTS_PERMISSION = 'clients:read_all';
 
@@ -242,9 +244,39 @@ export class ClientsService {
       throw new NotFoundException('Client not found');
     }
 
-    this.assertClientAccess(client, currentUserId, permissions);
+    if (this.canAccessClientRecord(client, currentUserId, permissions)) {
+      return client;
+    }
 
-    return client;
+    if (hasEngineeringReadPermission(permissions)) {
+      const assignedLeadIds = await this.prisma.leadEngineeringAssignment.findMany({
+        where: {
+          engineerId: currentUserId,
+          status: EngineeringAssignmentStatus.ACTIVE,
+          lead: { clientId: id, deletedAt: null },
+        },
+        select: { leadId: true },
+      });
+      if (assignedLeadIds.length > 0) {
+        const allowedLeadIds = new Set(
+          assignedLeadIds.map((assignment) => assignment.leadId),
+        );
+        return {
+          ...client,
+          deals: [],
+          leads: (client.leads ?? [])
+            .filter((lead) => allowedLeadIds.has(lead.id))
+            .map((lead) => ({
+              id: lead.id,
+              title: lead.title,
+              status: lead.status,
+              ownerId: lead.ownerId,
+            })),
+        };
+      }
+    }
+
+    throw new ForbiddenException('Access to this client is forbidden');
   }
 
   async update(

@@ -17,6 +17,7 @@ describe('LeadsService authorization', () => {
     auditLog: { create: jest.fn() },
     user: { findMany: jest.fn() },
     task: { findMany: jest.fn(), create: jest.fn() },
+    leadEngineeringAssignment: { findFirst: jest.fn() },
     $transaction: jest.fn(),
   };
 
@@ -43,6 +44,7 @@ describe('LeadsService authorization', () => {
       } as never,
     );
     prisma.lead.findFirst.mockResolvedValue(ownedLead);
+    prisma.leadEngineeringAssignment.findFirst.mockResolvedValue(null);
   });
 
   it('rejects create-time ownerId assignment without leads:assign', async () => {
@@ -238,5 +240,39 @@ describe('LeadsService authorization', () => {
       ),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(prisma.lead.update).not.toHaveBeenCalled();
+  });
+
+  it('lets an assigned engineer read a lead without becoming owner', async () => {
+    prisma.lead.findFirst.mockResolvedValue({
+      ...ownedLead,
+      ownerId: 'manager-1',
+      quotes: [{ id: 'quote-1' }],
+      managerCommercialNote: 'secret',
+    });
+    prisma.leadEngineeringAssignment.findFirst.mockResolvedValue({
+      id: 'assignment-1',
+    });
+
+    const result = await service.findOne('lead-id', 'engineer-1', [
+      'leads:read',
+      'engineering:read',
+    ]);
+
+    expect(result).not.toHaveProperty('quotes');
+    expect(result).not.toHaveProperty('managerCommercialNote');
+  });
+
+  it('denies an engineer without an active assignment', async () => {
+    prisma.lead.findFirst.mockResolvedValue({
+      ...ownedLead,
+      ownerId: 'manager-1',
+    });
+
+    await expect(
+      service.findOne('lead-id', 'engineer-1', [
+        'leads:read',
+        'engineering:read',
+      ]),
+    ).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

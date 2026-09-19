@@ -24,6 +24,11 @@ import {
   toCalculationRequirementPrefill,
 } from './lead-qualification.mapper';
 import {
+  canAccessLeadRecord,
+  hasOwnerOrReadAllLeadAccess,
+} from './engineering/engineering-access';
+import { ENGINEERING_PERMISSIONS } from './engineering/engineering.constants';
+import {
   assertCustomDimensionsPair,
   assertStage1QualificationComplete,
 } from './lead-qualification.rules';
@@ -32,8 +37,6 @@ import {
   panelTypeCodeForApplication,
 } from '../../panels/hpl-catalog';
 import { validateHplThickness } from '../../panels/hpl-thickness';
-
-const READ_ALL_LEADS_PERMISSION = 'leads:read_all';
 
 const qualificationInclude =
   Prisma.validator<Prisma.LeadQualificationInclude>()({
@@ -141,6 +144,7 @@ export class LeadQualificationService {
       leadId,
       currentUserId,
       permissions,
+      { allowEngineeringWrite: true },
     );
     if (lead.status === LeadStatus.LOST) {
       throw new BadRequestException('Lost lead qualification is immutable');
@@ -496,6 +500,7 @@ export class LeadQualificationService {
     leadId: string,
     currentUserId: string,
     permissions: string[],
+    options?: { allowEngineeringWrite?: boolean },
   ): Promise<Lead> {
     const lead = await this.prisma.lead.findFirst({
       where: { id: leadId, deletedAt: null },
@@ -505,14 +510,27 @@ export class LeadQualificationService {
       throw new NotFoundException('Lead not found');
     }
 
-    if (permissions.includes(READ_ALL_LEADS_PERMISSION)) {
+    if (hasOwnerOrReadAllLeadAccess(lead, currentUserId, permissions)) {
       return lead;
     }
 
-    if (lead.ownerId === currentUserId) {
-      return lead;
+    const engineeringAllowed = await canAccessLeadRecord(
+      this.prisma,
+      lead,
+      currentUserId,
+      permissions,
+    );
+    if (!engineeringAllowed) {
+      throw new ForbiddenException('Access to this lead is forbidden');
     }
 
-    throw new ForbiddenException('Access to this lead is forbidden');
+    if (
+      options?.allowEngineeringWrite &&
+      !permissions.includes(ENGINEERING_PERMISSIONS.UPDATE_TECHNICAL)
+    ) {
+      throw new ForbiddenException('Access to this lead is forbidden');
+    }
+
+    return lead;
   }
 }

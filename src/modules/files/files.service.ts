@@ -14,6 +14,11 @@ import type { CurrentUser } from '../../common/interfaces/current-user.interface
 import { PrismaService } from '../prisma/prisma.service';
 import { FileRelatedType, UploadFileDto } from './dto/upload-file.dto';
 import { ensureFileStorage, fileStoragePath } from './file-storage';
+import {
+  hasActiveEngineeringAssignmentForClient,
+  hasActiveEngineeringAssignmentForDeal,
+  hasEngineeringReadPermission,
+} from '../leads/engineering/engineering-access';
 
 export const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 
@@ -241,9 +246,36 @@ export class FilesService implements OnModuleInit {
 
     // '' — общедоступная сущность (каталог товаров)
     if (ownerId !== '' && ownerId !== user.id) {
-      // Keep missing and foreign identifiers indistinguishable to callers.
-      throw new NotFoundException(`${relatedType} not found`);
+      const engineeringAccess =
+        hasEngineeringReadPermission(user.permissions) &&
+        (await this.hasEngineeringRelatedAccess(relatedType, relatedId, user.id));
+      if (!engineeringAccess) {
+        // Keep missing and foreign identifiers indistinguishable to callers.
+        throw new NotFoundException(`${relatedType} not found`);
+      }
     }
+  }
+
+  private async hasEngineeringRelatedAccess(
+    relatedType: FileRelatedType,
+    relatedId: string,
+    engineerId: string,
+  ): Promise<boolean> {
+    if (relatedType === FileRelatedType.CLIENT) {
+      return hasActiveEngineeringAssignmentForClient(
+        this.prisma,
+        relatedId,
+        engineerId,
+      );
+    }
+    if (relatedType === FileRelatedType.DEAL) {
+      return hasActiveEngineeringAssignmentForDeal(
+        this.prisma,
+        relatedId,
+        engineerId,
+      );
+    }
+    return false;
   }
 
   // null — сущность не найдена; '' — сущность общедоступна (каталог товаров)
