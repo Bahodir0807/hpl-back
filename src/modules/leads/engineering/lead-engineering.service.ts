@@ -51,6 +51,7 @@ const assignmentInclude = {
   assignedBy: { select: assignmentPersonSelect },
   returnedBy: { select: assignmentPersonSelect },
   completedBy: { select: assignmentPersonSelect },
+  primaryQualificationCompletedBy: { select: assignmentPersonSelect },
 } satisfies Prisma.LeadEngineeringAssignmentInclude;
 
 type PrismaTx = Prisma.TransactionClient;
@@ -368,10 +369,8 @@ export class LeadEngineeringService {
       const next = await tx.leadEngineeringAssignment.update({
         where: { id: assignment.id },
         data: {
-          status: EngineeringAssignmentStatus.COMPLETED,
-          activeLeadId: null,
-          completedAt: new Date(),
-          completedById: user.id,
+          primaryQualificationCompletedAt: new Date(),
+          primaryQualificationCompletedById: user.id,
         },
         include: assignmentInclude,
       });
@@ -379,9 +378,9 @@ export class LeadEngineeringService {
       await this.writeHistory(tx, {
         leadId,
         authorId: user.id,
-        action: 'lead_engineering_completed',
+        action: 'lead_engineering_primary_completed',
         content: 'Primary engineering qualification completed',
-        metadata: { assignmentId: next.id },
+        metadata: { assignmentId: next.id, accessRetained: true },
       });
 
       return next;
@@ -399,6 +398,51 @@ export class LeadEngineeringService {
       ownerId: lead.ownerId,
       quoteCreated: false,
       priceApproved: false,
+      accessRetained: true,
+      engineering: this.toAssignmentView(updated),
+    };
+  }
+
+  async finish(leadId: string, user: CurrentUser) {
+    const lead = await this.loadLeadOrThrow(leadId);
+    const assignment = await this.requireActiveAssignment(leadId, user.id);
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const next = await tx.leadEngineeringAssignment.update({
+        where: { id: assignment.id },
+        data: {
+          status: EngineeringAssignmentStatus.COMPLETED,
+          activeLeadId: null,
+          completedAt: new Date(),
+          completedById: user.id,
+        },
+        include: assignmentInclude,
+      });
+
+      await this.writeHistory(tx, {
+        leadId,
+        authorId: user.id,
+        action: 'lead_engineering_finished',
+        content: 'Engineering work closed',
+        metadata: { assignmentId: next.id },
+      });
+
+      return next;
+    });
+
+    await this.notifySafe({
+      userId: lead.ownerId,
+      title: 'Инженер завершил работу',
+      message: `Инженер закрыл инженерную работу по лиду «${lead.title}»`,
+      type: ENGINEERING_NOTIFICATION_TYPE.COMPLETED,
+      leadId,
+    });
+
+    return {
+      ownerId: lead.ownerId,
+      quoteCreated: false,
+      priceApproved: false,
+      accessRetained: false,
       engineering: this.toAssignmentView(updated),
     };
   }
@@ -684,6 +728,10 @@ export class LeadEngineeringService {
       returnedBy: assignment.returnedBy,
       completedAt: assignment.completedAt,
       completedBy: assignment.completedBy,
+      primaryQualificationCompletedAt:
+        assignment.primaryQualificationCompletedAt,
+      primaryQualificationCompletedBy:
+        assignment.primaryQualificationCompletedBy,
     };
   }
 

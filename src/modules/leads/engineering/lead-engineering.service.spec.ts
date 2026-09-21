@@ -147,6 +147,9 @@ describe('LeadEngineeringService', () => {
     },
     returnedBy: null,
     completedBy: null,
+    primaryQualificationCompletedAt: null,
+    primaryQualificationCompletedById: null,
+    primaryQualificationCompletedBy: null,
   };
 
   let service: LeadEngineeringService;
@@ -378,7 +381,42 @@ describe('LeadEngineeringService', () => {
     expect(result.ownerId).toBe(manager.id);
   });
 
-  it('completes primary qualification without creating a Quote', async () => {
+  it('completes primary qualification without closing assignment access or creating a Quote', async () => {
+    mockLead();
+    prisma.leadEngineeringAssignment.findFirst.mockResolvedValue(
+      assignmentView,
+    );
+    prisma.leadEngineeringAssignment.update.mockResolvedValue({
+      ...assignmentView,
+      primaryQualificationCompletedAt: new Date(),
+      primaryQualificationCompletedById: engineer.id,
+    });
+
+    const result = await service.complete('lead-1', engineer);
+
+    expect(result.quoteCreated).toBe(false);
+    expect(result.priceApproved).toBe(false);
+    expect(result.accessRetained).toBe(true);
+    expect(result.ownerId).toBe(manager.id);
+    expect(prisma.leadEngineeringAssignment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          primaryQualificationCompletedById: engineer.id,
+        }),
+      }),
+    );
+    const updateData = prisma.leadEngineeringAssignment.update.mock.calls[0][0]
+      .data as Record<string, unknown>;
+    expect(updateData.status).toBeUndefined();
+    expect(updateData.activeLeadId).toBeUndefined();
+    expect(prisma.notification.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ userId: manager.id }),
+      }),
+    );
+  });
+
+  it('finishes engineering work and drops calculator access without creating a Quote', async () => {
     mockLead();
     prisma.leadEngineeringAssignment.findFirst.mockResolvedValue(
       assignmentView,
@@ -387,16 +425,20 @@ describe('LeadEngineeringService', () => {
       ...assignmentView,
       status: EngineeringAssignmentStatus.COMPLETED,
       activeLeadId: null,
+      completedById: engineer.id,
     });
 
-    const result = await service.complete('lead-1', engineer);
+    const result = await service.finish('lead-1', engineer);
 
     expect(result.quoteCreated).toBe(false);
-    expect(result.priceApproved).toBe(false);
+    expect(result.accessRetained).toBe(false);
     expect(result.ownerId).toBe(manager.id);
-    expect(prisma.notification.create).toHaveBeenCalledWith(
+    expect(prisma.leadEngineeringAssignment.update).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ userId: manager.id }),
+        data: expect.objectContaining({
+          status: EngineeringAssignmentStatus.COMPLETED,
+          activeLeadId: null,
+        }),
       }),
     );
   });
@@ -428,6 +470,10 @@ describe('LeadEngineeringService', () => {
     );
     await expectBusinessCode(
       service.complete('lead-1', engineer),
+      'ENGINEERING_ASSIGNMENT_REQUIRED',
+    );
+    await expectBusinessCode(
+      service.finish('lead-1', engineer),
       'ENGINEERING_ASSIGNMENT_REQUIRED',
     );
   });

@@ -7,6 +7,8 @@ import { LeadManagerCommercialNoteService } from './lead-manager-commercial-note
 import { LeadQualificationService } from './lead-qualification.service';
 import { LeadEngineeringController } from './engineering/lead-engineering.controller';
 import { LeadEngineeringService } from './engineering/lead-engineering.service';
+import { FacadeCalculationController } from './engineering/facade/facade-calculation.controller';
+import { FacadeCalculationService } from './engineering/facade/facade-calculation.service';
 import { LeadsController } from './leads.controller';
 import { LeadsService } from './leads.service';
 import { CalculationsModule } from '../../calculations/calculations.module';
@@ -15,6 +17,7 @@ import { CalculationsModule } from '../../calculations/calculations.module';
   imports: [CalculationsModule],
   controllers: [
     LeadEngineeringController,
+    FacadeCalculationController,
     LeadsController,
     LeadWorkspaceController,
   ],
@@ -26,6 +29,7 @@ import { CalculationsModule } from '../../calculations/calculations.module';
     LeadVirtualStatusService,
     LeadWorkspaceService,
     LeadEngineeringService,
+    FacadeCalculationService,
   ],
   exports: [
     LeadsService,
@@ -34,6 +38,7 @@ import { CalculationsModule } from '../../calculations/calculations.module';
     LeadManagerCommercialNoteService,
     LeadVirtualStatusService,
     LeadEngineeringService,
+    FacadeCalculationService,
   ],
 })
 export class LeadsModule {}

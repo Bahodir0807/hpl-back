@@ -26,6 +26,7 @@ import {
   seedReferenceConfiguration,
 } from './seed/reference';
 import { synchronizeRbac } from '../src/auth/rbac/synchronize-rbac';
+import { seedFacadeSubsystemCatalog } from './seed/facade-subsystem';
 
 let prisma: PrismaClient;
 
@@ -226,6 +227,9 @@ async function clearDatabase(): Promise<void> {
   await prisma.dealInstallation.deleteMany();
   await prisma.deal.deleteMany();
   await prisma.leadAssignmentHistory.deleteMany();
+  await prisma.facadeSubsystemCalculationRevision.deleteMany();
+  await prisma.facadeSubsystemCalculationItem.deleteMany();
+  await prisma.facadeSubsystemCalculation.deleteMany();
   await prisma.leadEngineeringAssignment.deleteMany();
   await prisma.lead.deleteMany();
   await prisma.activity.deleteMany();
@@ -1207,6 +1211,7 @@ async function main(): Promise<void> {
   await seedServiceAccounts(prisma);
   const referenceReport = await seedReferenceConfiguration(prisma);
   printReferenceSeedReport(referenceReport);
+  await seedFacadeSubsystemCatalog(prisma);
 
   if (!isProduction) {
     const director = await prisma.user.findUnique({

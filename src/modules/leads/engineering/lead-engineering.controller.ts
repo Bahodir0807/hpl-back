@@ -88,13 +88,25 @@ export class LeadEngineeringController {
   @RequirePermissions(ENGINEERING_PERMISSIONS.COMPLETE)
   @ApiOperation({
     summary:
-      'Complete primary engineering qualification (not commercial approval)',
+      'Complete primary engineering qualification without closing assignment access',
   })
   complete(
     @Param('id', ParseUUIDPipe) id: string,
     @CurrentUser() user: CurrentUserType,
   ) {
     return this.leadEngineeringService.complete(id, user);
+  }
+
+  @Post('leads/:id/finish')
+  @RequirePermissions(ENGINEERING_PERMISSIONS.COMPLETE)
+  @ApiOperation({
+    summary: 'Close engineering work and drop assignment access',
+  })
+  finish(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadEngineeringService.finish(id, user);
   }
 
   @Patch('leads/:id/qualification')

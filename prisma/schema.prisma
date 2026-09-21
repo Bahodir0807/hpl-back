@@ -23,6 +23,33 @@ enum EngineeringAssignmentStatus {
   SUPERSEDED
 }
 
+enum FacadeMaterialCategory {
+  HPL
+  SUBSYSTEM
+  INSULATION
+  MEMBRANE
+  FASTENER
+  SEALING_TAPE
+  ADDITIONAL
+}
+
+enum FacadeMaterialUnit {
+  M2
+  PCS
+  LM
+}
+
+enum FacadeCalculationStatus {
+  DRAFT
+  CALCULATED
+  UNSUPPORTED
+}
+
+enum FacadeAreaSource {
+  ENGINEER_ENTERED
+  HPL_QUALIFICATION
+}
+
 enum ProductStatus {
   ACTIVE
   ARCHIVED
@@ -304,6 +331,9 @@ model User {
   engineeringAssignmentsMade        LeadEngineeringAssignment[]   @relation("LeadEngineeringAssignedBy")
   engineeringReturns                LeadEngineeringAssignment[]   @relation("LeadEngineeringReturnedBy")
   engineeringCompletions            LeadEngineeringAssignment[]   @relation("LeadEngineeringCompletedBy")
+  engineeringPrimaryCompletions     LeadEngineeringAssignment[]   @relation("LeadEngineeringPrimaryCompletedBy")
+  facadeSubsystemCalculations       FacadeSubsystemCalculation[]  @relation("FacadeCalculationEngineer")
+  facadeSubsystemRevisions          FacadeSubsystemCalculationRevision[] @relation("FacadeCalculationRevisionActor")
 
   @@index([teamId])
   @@index([managerId])
@@ -675,6 +705,7 @@ model Lead {
   projectObject                 ProjectObject?               @relation(fields: [projectObjectId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   assignmentHistory             LeadAssignmentHistory[]
   engineeringAssignments        LeadEngineeringAssignment[]
+  facadeSubsystemCalculations   FacadeSubsystemCalculation[]
   calculationRequests           CalculationRequest[]
   calculationSessions           CalculationSession[]
   panelQuotes                   PanelQuote[]
@@ -826,6 +857,8 @@ model LeadEngineeringAssignment {
   returnedById  String?
   completedAt   DateTime?
   completedById String?
+  primaryQualificationCompletedAt   DateTime?
+  primaryQualificationCompletedById String?
   supersededAt  DateTime?
   createdAt     DateTime                     @default(now())
   updatedAt     DateTime                     @updatedAt
@@ -835,6 +868,8 @@ model LeadEngineeringAssignment {
   assignedBy  User  @relation("LeadEngineeringAssignedBy", fields: [assignedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
   returnedBy  User? @relation("LeadEngineeringReturnedBy", fields: [returnedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
   completedBy User? @relation("LeadEngineeringCompletedBy", fields: [completedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  primaryQualificationCompletedBy User? @relation("LeadEngineeringPrimaryCompletedBy", fields: [primaryQualificationCompletedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  facadeCalculations FacadeSubsystemCalculation[]
 
   @@index([leadId, status])
   @@index([engineerId, status])
@@ -842,6 +877,151 @@ model LeadEngineeringAssignment {
   @@index([assignedAt])
   @@index([returnedById])
   @@index([completedById])
+  @@index([primaryQualificationCompletedById])
+}
+
+model FacadeMaterial {
+  id        String                  @id @default(uuid())
+  code      String                  @unique
+  nameRu    String
+  nameEn    String
+  nameUz    String
+  category  FacadeMaterialCategory
+  unit      FacadeMaterialUnit
+  spec      Json?
+  isActive  Boolean                 @default(true)
+  sortOrder Int                     @default(0)
+  createdAt DateTime                @default(now())
+  updatedAt DateTime                @updatedAt
+
+  norms FacadeConsumptionNorm[]
+  calculationItems FacadeSubsystemCalculationItem[]
+
+  @@index([category, isActive])
+  @@index([sortOrder])
+}
+
+model FacadeSystemConfig {
+  id             String   @id @default(uuid())
+  code           String   @unique
+  nameRu         String
+  nameEn         String
+  nameUz         String
+  panelWidthMm   Int?
+  panelHeightMm  Int?
+  panelAreaM2    Decimal? @db.Decimal(10, 4)
+  isCalculable   Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  normSets      FacadeNormSet[]
+  calculations  FacadeSubsystemCalculation[]
+}
+
+model FacadeNormSet {
+  id            String   @id @default(uuid())
+  configId      String
+  code          String   @unique
+  version       String
+  isCurrent     Boolean  @default(false)
+  effectiveFrom DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  config FacadeSystemConfig @relation(fields: [configId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  norms  FacadeConsumptionNorm[]
+  calculations FacadeSubsystemCalculation[]
+
+  @@index([configId, isCurrent])
+}
+
+model FacadeConsumptionNorm {
+  id        String             @id @default(uuid())
+  normSetId String
+  materialId String
+  unit      FacadeMaterialUnit
+  qtyPerM2  Decimal            @db.Decimal(18, 8)
+  sortOrder Int                @default(0)
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  normSet  FacadeNormSet   @relation(fields: [normSetId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  material FacadeMaterial  @relation(fields: [materialId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@unique([normSetId, materialId])
+  @@index([normSetId, sortOrder])
+}
+
+model FacadeSubsystemCalculation {
+  id              String                  @id @default(uuid())
+  leadId          String
+  assignmentId    String?
+  engineerId      String
+  configId        String
+  normSetId       String?
+  claddingAreaM2  Decimal?                @db.Decimal(18, 8)
+  areaSource      FacadeAreaSource?
+  notes           String?
+  status          FacadeCalculationStatus @default(DRAFT)
+  revision        Int                     @default(1)
+  createdAt       DateTime                @default(now())
+  updatedAt       DateTime                @updatedAt
+
+  lead       Lead                       @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  assignment LeadEngineeringAssignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  engineer   User                       @relation("FacadeCalculationEngineer", fields: [engineerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  config     FacadeSystemConfig         @relation(fields: [configId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  normSet    FacadeNormSet?             @relation(fields: [normSetId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  items      FacadeSubsystemCalculationItem[]
+  revisions  FacadeSubsystemCalculationRevision[]
+
+  @@unique([leadId])
+  @@index([engineerId])
+  @@index([assignmentId])
+  @@index([configId])
+  @@index([normSetId])
+  @@index([status])
+}
+
+model FacadeSubsystemCalculationItem {
+  id              String              @id @default(uuid())
+  calculationId   String
+  materialId      String?
+  materialCode    String
+  materialName    String
+  category        FacadeMaterialCategory
+  unit            FacadeMaterialUnit
+  specSnapshot    Json?
+  qtyPerM2        Decimal?            @db.Decimal(18, 8)
+  calculatedQty   Decimal?            @db.Decimal(18, 8)
+  finalQty        Decimal             @db.Decimal(18, 8)
+  isManual        Boolean             @default(false)
+  isExtra         Boolean             @default(false)
+  note            String?
+  sortOrder       Int                 @default(0)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  calculation FacadeSubsystemCalculation @relation(fields: [calculationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  material    FacadeMaterial?            @relation(fields: [materialId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([calculationId, sortOrder])
+  @@index([materialId])
+}
+
+model FacadeSubsystemCalculationRevision {
+  id             String   @id @default(uuid())
+  calculationId  String
+  actorId        String
+  action         String
+  payload        Json?
+  createdAt      DateTime @default(now())
+
+  calculation FacadeSubsystemCalculation @relation(fields: [calculationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  actor       User                       @relation("FacadeCalculationRevisionActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([calculationId, createdAt])
+  @@index([actorId])
 }
 
 model Task {
