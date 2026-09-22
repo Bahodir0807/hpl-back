@@ -227,6 +227,10 @@ async function clearDatabase(): Promise<void> {
   await prisma.dealInstallation.deleteMany();
   await prisma.deal.deleteMany();
   await prisma.leadAssignmentHistory.deleteMany();
+  await prisma.facadeCommercialCalculationRevision.deleteMany();
+  await prisma.facadeCommercialCalculationItem.deleteMany();
+  await prisma.facadeCommercialCalculation.deleteMany();
+  await prisma.facadeMaterialSupplierOffer.deleteMany();
   await prisma.facadeSubsystemCalculationRevision.deleteMany();
   await prisma.facadeSubsystemCalculationItem.deleteMany();
   await prisma.facadeSubsystemCalculation.deleteMany();

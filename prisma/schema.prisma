@@ -50,6 +50,12 @@ enum FacadeAreaSource {
   HPL_QUALIFICATION
 }
 
+enum FacadeCommercialStatus {
+  DRAFT
+  READY_FOR_APPROVAL
+  APPROVED
+}
+
 enum ProductStatus {
   ACTIVE
   ARCHIVED
@@ -334,6 +340,8 @@ model User {
   engineeringPrimaryCompletions     LeadEngineeringAssignment[]   @relation("LeadEngineeringPrimaryCompletedBy")
   facadeSubsystemCalculations       FacadeSubsystemCalculation[]  @relation("FacadeCalculationEngineer")
   facadeSubsystemRevisions          FacadeSubsystemCalculationRevision[] @relation("FacadeCalculationRevisionActor")
+  facadeCommercialApprovals         FacadeCommercialCalculation[] @relation("FacadeCommercialApprover")
+  facadeCommercialRevisions         FacadeCommercialCalculationRevision[] @relation("FacadeCommercialRevisionActor")
 
   @@index([teamId])
   @@index([managerId])
@@ -461,6 +469,7 @@ model Supplier {
   supplierOrders           SupplierOrder[]
   deals                    Deal[]
   commercialQualifications LeadCommercialQualification[]
+  facadeMaterialOffers     FacadeMaterialSupplierOffer[]
 
   @@index([name])
 }
@@ -706,6 +715,7 @@ model Lead {
   assignmentHistory             LeadAssignmentHistory[]
   engineeringAssignments        LeadEngineeringAssignment[]
   facadeSubsystemCalculations   FacadeSubsystemCalculation[]
+  facadeCommercialCalculations  FacadeCommercialCalculation[]
   calculationRequests           CalculationRequest[]
   calculationSessions           CalculationSession[]
   panelQuotes                   PanelQuote[]
@@ -896,6 +906,7 @@ model FacadeMaterial {
 
   norms FacadeConsumptionNorm[]
   calculationItems FacadeSubsystemCalculationItem[]
+  supplierOffers FacadeMaterialSupplierOffer[]
 
   @@index([category, isActive])
   @@index([sortOrder])
@@ -974,6 +985,7 @@ model FacadeSubsystemCalculation {
   normSet    FacadeNormSet?             @relation(fields: [normSetId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   items      FacadeSubsystemCalculationItem[]
   revisions  FacadeSubsystemCalculationRevision[]
+  commercialCalculations FacadeCommercialCalculation[]
 
   @@unique([leadId])
   @@index([engineerId])
@@ -2039,4 +2051,113 @@ model CurrencyRate {
 
   @@index([fromCurrency, toCurrency, effectiveFrom])
   @@index([createdById])
+}
+
+model FacadeMaterialSupplierOffer {
+  id            String    @id @default(uuid())
+  materialId    String
+  supplierId    String
+  purchasePrice Decimal   @db.Decimal(18, 8)
+  currency      String
+  unit          String
+  validFrom     DateTime
+  validTo       DateTime?
+  isActive      Boolean   @default(true)
+  availability  String?
+  leadTimeDays  Int?
+  supplierSku   String?
+  note          String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  material FacadeMaterial @relation(fields: [materialId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  supplier Supplier       @relation(fields: [supplierId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([materialId, isActive])
+  @@index([supplierId])
+}
+
+model FacadeCommercialCalculation {
+  id                          String                   @id @default(uuid())
+  leadId                      String
+  facadeCalculationId         String
+  facadeCalculationRevision   Int
+  revision                    Int                      @default(1)
+  isCurrent                   Boolean                  @default(true)
+  status                      FacadeCommercialStatus   @default(DRAFT)
+  technicalSnapshot           Json
+  procurementIncomplete       Boolean                  @default(true)
+  procurementByCurrency       Json
+  fxSnapshots                 Json
+  proposedCustomerAmount      Decimal?                 @db.Decimal(18, 8)
+  proposedCurrency            String?
+  approvedCustomerAmount      Decimal?                 @db.Decimal(18, 8)
+  approvedCurrency            String?
+  approvedById                String?
+  approvedAt                  DateTime?
+  approverRoleSnapshot        String?
+  commercialNote              String?
+  quoteCreated                Boolean                  @default(false)
+  dealCreated                 Boolean                  @default(false)
+  createdAt                   DateTime                 @default(now())
+  updatedAt                   DateTime                 @updatedAt
+
+  lead              Lead                               @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  facadeCalculation FacadeSubsystemCalculation         @relation(fields: [facadeCalculationId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  approvedBy        User?                              @relation("FacadeCommercialApprover", fields: [approvedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  items             FacadeCommercialCalculationItem[]
+  revisions         FacadeCommercialCalculationRevision[]
+
+  @@unique([leadId, revision])
+  @@index([leadId, isCurrent])
+  @@index([facadeCalculationId])
+  @@index([status])
+}
+
+model FacadeCommercialCalculationItem {
+  id                                   String    @id @default(uuid())
+  commercialCalculationId              String
+  technicalItemId                      String?
+  materialId                           String?
+  materialCode                         String
+  materialName                         String
+  materialSnapshot                     Json
+  category                             String
+  unit                                 String
+  finalQty                             Decimal   @db.Decimal(18, 8)
+  excludedFromSubsystemCommercialCost  Boolean   @default(false)
+  selectedOfferId                      String?
+  offerSnapshot                        Json?
+  purchasePrice                        Decimal?  @db.Decimal(18, 8)
+  purchaseCurrency                     String?
+  linePurchaseTotal                    Decimal?  @db.Decimal(18, 8)
+  priceStatus                          String
+  fxFromCurrency                       String?
+  fxToCurrency                         String?
+  fxRate                               Decimal?  @db.Decimal(18, 8)
+  fxRateId                             String?
+  fxEffectiveFrom                      DateTime?
+  convertedAmount                      Decimal?  @db.Decimal(18, 8)
+  convertedCurrency                    String?
+  sortOrder                            Int       @default(0)
+  createdAt                            DateTime  @default(now())
+  updatedAt                            DateTime  @updatedAt
+
+  commercialCalculation FacadeCommercialCalculation @relation(fields: [commercialCalculationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([commercialCalculationId, sortOrder])
+}
+
+model FacadeCommercialCalculationRevision {
+  id                      String   @id @default(uuid())
+  commercialCalculationId String
+  actorId                 String
+  action                  String
+  payload                 Json?
+  createdAt               DateTime @default(now())
+
+  commercialCalculation FacadeCommercialCalculation @relation(fields: [commercialCalculationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  actor                 User                        @relation("FacadeCommercialRevisionActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([commercialCalculationId, createdAt])
 }

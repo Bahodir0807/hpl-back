@@ -313,4 +313,23 @@ describe('permission matrix', () => {
       false,
     );
   });
+
+  it('grants HEAD and DIRECTOR facade subsystem commercial approval without global quotes:approve on DIRECTOR', () => {
+    for (const slug of [
+      'facade_pricing:read_purchase',
+      'facade_pricing:manage_offers',
+      'facade_pricing:prepare',
+      'facade_pricing:approve',
+    ] as const) {
+      expect(roleHasPermission(RoleName.HEAD, slug)).toBe(true);
+      expect(roleHasPermission(RoleName.DIRECTOR, slug)).toBe(true);
+      expect(roleHasPermission(RoleName.ENGINEER, slug)).toBe(false);
+      expect(roleHasPermission(RoleName.MANAGER, slug)).toBe(false);
+      expect(roleHasPermission(RoleName.ACCOUNTANT, slug)).toBe(false);
+      expect(roleHasPermission(RoleName.STOREKEEPER, slug)).toBe(false);
+      expect(roleHasPermission(RoleName.ADMIN, slug)).toBe(false);
+    }
+    expect(roleHasPermission(RoleName.DIRECTOR, 'quotes:approve')).toBe(false);
+    expect(roleHasPermission(RoleName.HEAD, 'quotes:approve')).toBe(true);
+  });
 });

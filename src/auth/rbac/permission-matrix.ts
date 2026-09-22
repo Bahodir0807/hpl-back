@@ -103,6 +103,22 @@ export const PERMISSION_DEFINITIONS = [
     'engineering:update_technical',
     'Update allowed technical qualification fields on an assigned lead',
   ],
+  [
+    'facade_pricing:read_purchase',
+    'Read facade subsystem procurement prices and FX basis',
+  ],
+  [
+    'facade_pricing:manage_offers',
+    'Create and manage facade material supplier offers',
+  ],
+  [
+    'facade_pricing:prepare',
+    'Prepare facade subsystem commercial pricing without invented markup',
+  ],
+  [
+    'facade_pricing:approve',
+    'Approve facade subsystem customer commercial price (HEAD or DIRECTOR)',
+  ],
 ] as const;
 
 export type PermissionSlug = (typeof PERMISSION_DEFINITIONS)[number][0];
@@ -161,6 +177,10 @@ const DIRECTOR_PERMISSIONS: PermissionSlug[] = [
   'installation:schedule',
   'installation:confirm_supervisor',
   'installation:assess',
+  'facade_pricing:read_purchase',
+  'facade_pricing:manage_offers',
+  'facade_pricing:prepare',
+  'facade_pricing:approve',
 ];
 
 const HEAD_PERMISSIONS: PermissionSlug[] = [
@@ -235,6 +255,10 @@ const HEAD_PERMISSIONS: PermissionSlug[] = [
   'installation:confirm_supervisor',
   'installation:assess',
   'engineering:assign',
+  'facade_pricing:read_purchase',
+  'facade_pricing:manage_offers',
+  'facade_pricing:prepare',
+  'facade_pricing:approve',
 ];
 
 const MANAGER_PERMISSIONS: PermissionSlug[] = [
@@ -348,6 +372,9 @@ export const BUSINESS_MUTATION_PERMISSIONS = [
   'engineering:return',
   'engineering:complete',
   'engineering:update_technical',
+  'facade_pricing:manage_offers',
+  'facade_pricing:prepare',
+  'facade_pricing:approve',
 ] as const;
 
 export function roleHasPermission(roleName: RoleName, slug: string): boolean {

@@ -30,6 +30,7 @@ import { AppModule } from './../src/app.module';
 import { TestIntegrationsModule } from './../src/integrations/test/test-integrations.module';
 import { seedPanels, seedFixtureCnyUsdRate } from './../prisma/seed/panels';
 import { seedCalculatorProduct } from './../prisma/seed/calculator-product';
+import { seedFacadeSubsystemCatalog } from './../prisma/seed/facade-subsystem';
 import { synchronizeRbac } from './../src/auth/rbac/synchronize-rbac';
 import {
   ROLE_PERMISSION_SLUGS,
@@ -5483,6 +5484,92 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(stored.ownerId).toBe(context.managerId);
   });
 
+  it('Stage 3 lets HEAD approve subsystem commercial cost without creating a Quote', async () => {
+    const { leadId, quotesBefore, dealsBefore } =
+      await prepareSubsystemCommercial(context.headToken);
+    const after = await prisma.panelQuote.count();
+    expect(after).toBe(quotesBefore);
+    const dealsAfter = await prisma.deal.count();
+    expect(dealsAfter).toBe(dealsBefore);
+
+    const commercial = await prisma.facadeCommercialCalculation.findFirstOrThrow({
+      where: { leadId, isCurrent: true },
+    });
+    expect(commercial.status).toBe('APPROVED');
+    expect(commercial.approvedById).toBe(context.headId);
+    expect(commercial.approverRoleSnapshot).toBe(RoleName.HEAD);
+    expect(commercial.quoteCreated).toBe(false);
+
+    const managerView = await request(server)
+      .get(`/leads/${leadId}/facade-commercial`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    const managerBody = bodyAs<{
+      canApprove: boolean;
+      canReadPurchase: boolean;
+      calculation: {
+        approvedCustomerAmount: string | null;
+        items: Array<{ purchasePrice: string | null }>;
+      };
+    }>(managerView);
+    expect(managerBody.canApprove).toBe(false);
+    expect(managerBody.canReadPurchase).toBe(false);
+    expect(Number(managerBody.calculation.approvedCustomerAmount)).toBe(8000);
+    expect(managerBody.calculation.items.every((item) => item.purchasePrice === null)).toBe(
+      true,
+    );
+
+    await request(server)
+      .post(`/leads/${leadId}/facade-commercial/approve`)
+      .set(authHeader(context.engineerToken))
+      .send({ expectedRevision: commercial.revision })
+      .expect(403);
+    await request(server)
+      .post(`/leads/${leadId}/facade-commercial/approve`)
+      .set(authHeader(context.managerToken))
+      .send({ expectedRevision: commercial.revision })
+      .expect(403);
+  });
+
+  it('Stage 3 lets DIRECTOR approve subsystem cost and still forbids quotes:approve', async () => {
+    const { leadId } = await prepareSubsystemCommercial(context.directorToken);
+    const commercial = await prisma.facadeCommercialCalculation.findFirstOrThrow({
+      where: { leadId, isCurrent: true },
+    });
+    expect(commercial.approverRoleSnapshot).toBe(RoleName.DIRECTOR);
+    expect(Number(commercial.approvedCustomerAmount)).toBe(8000);
+
+    const quoteId = await createSentPanelQuote();
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.directorToken))
+      .send({ status: 'approved' })
+      .expect(403);
+
+    await request(server)
+      .post(`/engineering/leads/${leadId}/facade/calculate`)
+      .set(authHeader(context.engineerToken))
+      .send({
+        configCode: 'HPL_FACADE_BASE_1220_3050',
+        claddingAreaM2: '1200',
+        expectedRevision: 1,
+      })
+      .expect(201);
+
+    const workspace = await request(server)
+      .get(`/leads/${leadId}/facade-commercial`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    expect(bodyAs<{ staleTechnicalBasis: boolean }>(workspace).staleTechnicalBasis).toBe(
+      true,
+    );
+    const frozen = await prisma.facadeCommercialCalculation.findFirstOrThrow({
+      where: { leadId, isCurrent: true, status: 'APPROVED' },
+    });
+    expect(Number(frozen.approvedCustomerAmount)).toBe(8000);
+    expect(frozen.facadeCalculationRevision).toBe(1);
+  });
+
   it('uses canonical warehouse RBAC on legacy mutation routes', async () => {
     const supplier = await prisma.supplier.findUniqueOrThrow({
       where: { code: `QA-SUP-${RUN_ID}` },
@@ -7325,6 +7412,122 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     return leadId;
   }
 
+  async function prepareSubsystemCommercial(approverToken: string): Promise<{
+    leadId: string;
+    quotesBefore: number;
+    dealsBefore: number;
+  }> {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Stage3 subsystem ${RUN_ID}-${Math.random().toString(16).slice(2)}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(leadResponse).id;
+    await qualifyLeadStage1(leadId, true);
+    await prisma.leadQualification.update({
+      where: { leadId },
+      data: { ventFacadeKitRequired: true },
+    });
+    await request(server)
+      .post(`/engineering/leads/${leadId}/assign`)
+      .set(authHeader(context.managerToken))
+      .send({ engineerId: context.engineerId })
+      .expect(201);
+
+    const calculated = await request(server)
+      .post(`/engineering/leads/${leadId}/facade/calculate`)
+      .set(authHeader(context.engineerToken))
+      .send({
+        configCode: 'HPL_FACADE_BASE_1220_3050',
+        claddingAreaM2: '1000',
+      })
+      .expect(201);
+    expect(bodyAs<{ quoteCreated: boolean; dealCreated: boolean }>(calculated).quoteCreated).toBe(
+      false,
+    );
+    const quotesBefore = await prisma.panelQuote.count();
+    const dealsBefore = await prisma.deal.count();
+
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: `QA-SUP-${RUN_ID}` },
+    });
+    const materials = await prisma.facadeMaterial.findMany({
+      where: { isActive: true, category: { not: 'HPL' } },
+    });
+    for (const material of materials) {
+      await request(server)
+        .post('/references/facade-offers')
+        .set(authHeader(context.headToken))
+        .send({
+          materialId: material.id,
+          supplierId: supplier.id,
+          purchasePrice: '1.5',
+          currency: 'USD',
+          unit: material.unit,
+          validFrom: new Date().toISOString(),
+        })
+        .expect(201);
+    }
+
+    await request(server)
+      .post(`/leads/${leadId}/facade-commercial`)
+      .set(authHeader(approverToken))
+      .expect(201);
+    const workspace = await request(server)
+      .get(`/leads/${leadId}/facade-commercial`)
+      .set(authHeader(approverToken))
+      .expect(200);
+    const body = bodyAs<{
+      calculation: {
+        id: string;
+        revision: number;
+        items: Array<{
+          id: string;
+          excludedFromSubsystemCommercialCost: boolean;
+          materialCode: string;
+        }>;
+      };
+      offers: Array<{ id: string; materialCode: string; isActive: boolean }>;
+    }>(workspace);
+    const selections = body.calculation.items
+      .filter((item) => !item.excludedFromSubsystemCommercialCost)
+      .map((item) => ({
+        itemId: item.id,
+        offerId:
+          body.offers.find(
+            (offer) => offer.materialCode === item.materialCode && offer.isActive,
+          )?.id ?? null,
+      }));
+
+    const patched = await request(server)
+      .patch(`/leads/${leadId}/facade-commercial`)
+      .set(authHeader(approverToken))
+      .send({
+        expectedRevision: body.calculation.revision,
+        selections,
+        proposedCustomerAmount: '8000',
+        proposedCurrency: 'USD',
+        commercialNote: 'Stage 3 explicit amount',
+      })
+      .expect(200);
+    const patchedBody = bodyAs<{ revision: number }>(patched);
+    const submitted = await request(server)
+      .post(`/leads/${leadId}/facade-commercial/submit`)
+      .set(authHeader(approverToken))
+      .send({ expectedRevision: patchedBody.revision })
+      .expect(201);
+    await request(server)
+      .post(`/leads/${leadId}/facade-commercial/approve`)
+      .set(authHeader(approverToken))
+      .send({ expectedRevision: bodyAs<{ revision: number }>(submitted).revision })
+      .expect(201);
+    return { leadId, quotesBefore, dealsBefore };
+  }
+
   async function qualifyLeadStage1(
     leadId: string,
     installationRequired = false,
@@ -7751,6 +7954,7 @@ async function seedAcceptanceData(
   await seedPanels(prisma);
   await seedFixtureCnyUsdRate(prisma, admin.id);
   await seedCalculatorProduct(prisma);
+  await seedFacadeSubsystemCatalog(prisma);
 
   return {
     adminToken: adminTokens.accessToken,

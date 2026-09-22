@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Injectable, Optional } from '@nestjs/common';
 import {
   FacadeAreaSource,
   FacadeCalculationStatus,
@@ -23,6 +23,7 @@ import type {
   FacadeCalculateDto,
   FacadeSaveDraftDto,
 } from './dto/facade-calculation.dto';
+import { FacadeCommercialService } from './facade-commercial.service';
 
 const calculationInclude = {
   items: { orderBy: { sortOrder: 'asc' as const } },
@@ -32,7 +33,11 @@ const calculationInclude = {
 
 @Injectable()
 export class FacadeCalculationService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional()
+    private readonly facadeCommercial: FacadeCommercialService | null = null,
+  ) {}
 
   async getWorkspace(leadId: string, user: CurrentUser) {
     const { lead, assignment, canEdit } = await this.loadAccess(leadId, user);
@@ -269,6 +274,13 @@ export class FacadeCalculationService {
       });
     });
 
+    await this.facadeCommercial?.onTechnicalRevisionChanged(
+      leadId,
+      result.revision,
+      result.status,
+      user.id,
+    );
+
     return {
       ...this.toCalculationView(result),
       quoteCreated: false,
@@ -337,6 +349,13 @@ export class FacadeCalculationService {
       return updated;
     });
 
+    await this.facadeCommercial?.onTechnicalRevisionChanged(
+      leadId,
+      result.revision,
+      result.status,
+      user.id,
+    );
+
     return {
       ...this.toCalculationView(result),
       quoteCreated: false,
@@ -404,6 +423,13 @@ export class FacadeCalculationService {
 
       return updated;
     });
+
+    await this.facadeCommercial?.onTechnicalRevisionChanged(
+      leadId,
+      result.revision,
+      result.status,
+      user.id,
+    );
 
     return this.toCalculationView(result);
   }

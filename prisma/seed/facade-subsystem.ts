@@ -56,7 +56,10 @@ export async function seedFacadeSubsystemCatalog(
     },
   });
 
-  const materials = [];
+  const materials: Array<{
+    def: (typeof BASE_FACADE_NORMS_V1)[number];
+    material: { id: string };
+  }> = [];
   for (const def of BASE_FACADE_NORMS_V1) {
     const material = await prisma.facadeMaterial.upsert({
       where: { code: def.code },

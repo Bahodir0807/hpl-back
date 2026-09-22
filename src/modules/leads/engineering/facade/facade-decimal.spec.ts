@@ -3,7 +3,7 @@ import {
   BASE_FACADE_NORMS_V1,
   EXPECTED_QTY_FOR_1000_M2,
 } from './facade-norms';
-import { multiplyAreaByNorm } from './facade-decimal';
+import { multiplyAreaByNorm, multiplyQtyByPrice } from './facade-decimal';
 
 describe('facade consumption math', () => {
   it('keeps all 18 approved norms unchanged', () => {
@@ -44,5 +44,10 @@ describe('facade consumption math', () => {
     const hpl = multiplyAreaByNorm(cladding, '1.06');
     expect(hpl.toFixed()).toBe('1060');
     expect(multiplyAreaByNorm(hpl, '1.06').toFixed()).not.toBe('1060');
+  });
+
+  it('multiplies finalQty by purchase price with Decimal precision', () => {
+    expect(multiplyQtyByPrice('1160', '4.5').toFixed()).toBe('5220');
+    expect(multiplyQtyByPrice('4.03', '10.10').toFixed()).toBe('40.703');
   });
 });

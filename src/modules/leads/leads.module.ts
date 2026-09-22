@@ -9,6 +9,10 @@ import { LeadEngineeringController } from './engineering/lead-engineering.contro
 import { LeadEngineeringService } from './engineering/lead-engineering.service';
 import { FacadeCalculationController } from './engineering/facade/facade-calculation.controller';
 import { FacadeCalculationService } from './engineering/facade/facade-calculation.service';
+import { FacadeCommercialController } from './engineering/facade/facade-commercial.controller';
+import { FacadeCommercialService } from './engineering/facade/facade-commercial.service';
+import { FacadeMaterialOfferController } from './engineering/facade/facade-material-offer.controller';
+import { FacadeMaterialOfferService } from './engineering/facade/facade-material-offer.service';
 import { LeadsController } from './leads.controller';
 import { LeadsService } from './leads.service';
 import { CalculationsModule } from '../../calculations/calculations.module';
@@ -18,6 +22,8 @@ import { CalculationsModule } from '../../calculations/calculations.module';
   controllers: [
     LeadEngineeringController,
     FacadeCalculationController,
+    FacadeCommercialController,
+    FacadeMaterialOfferController,
     LeadsController,
     LeadWorkspaceController,
   ],
@@ -30,6 +36,8 @@ import { CalculationsModule } from '../../calculations/calculations.module';
     LeadWorkspaceService,
     LeadEngineeringService,
     FacadeCalculationService,
+    FacadeCommercialService,
+    FacadeMaterialOfferService,
   ],
   exports: [
     LeadsService,
@@ -39,6 +47,8 @@ import { CalculationsModule } from '../../calculations/calculations.module';
     LeadVirtualStatusService,
     LeadEngineeringService,
     FacadeCalculationService,
+    FacadeCommercialService,
+    FacadeMaterialOfferService,
   ],
 })
 export class LeadsModule {}
