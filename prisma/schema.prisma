@@ -56,6 +56,47 @@ enum FacadeCommercialStatus {
   APPROVED
 }
 
+enum InstallationWorkUnit {
+  M2
+  LM
+  PCS
+  SET
+  HOUR
+  DAY
+  OTHER
+}
+
+enum InstallationWorkCategory {
+  CLADDING
+  BRACKETS
+  SLOPES
+  TRAVEL
+  HEIGHT
+  OTHER
+}
+
+enum InstallationContractorType {
+  INTERNAL_CREW
+  EXTERNAL_CONTRACTOR
+}
+
+enum InstallationQuantitySource {
+  MANUAL
+  CONFIRMED_AREA
+  APPROVED_NORM
+}
+
+enum InstallationCalculationStatus {
+  DRAFT
+  READY
+}
+
+enum InstallationCommercialStatus {
+  DRAFT
+  READY_FOR_APPROVAL
+  APPROVED
+}
+
 enum ProductStatus {
   ACTIVE
   ARCHIVED
@@ -342,6 +383,10 @@ model User {
   facadeSubsystemRevisions          FacadeSubsystemCalculationRevision[] @relation("FacadeCalculationRevisionActor")
   facadeCommercialApprovals         FacadeCommercialCalculation[] @relation("FacadeCommercialApprover")
   facadeCommercialRevisions         FacadeCommercialCalculationRevision[] @relation("FacadeCommercialRevisionActor")
+  installationCalculations          InstallationCalculation[]     @relation("InstallationCalculationEngineer")
+  installationCalculationRevisions  InstallationCalculationRevision[] @relation("InstallationCalculationRevisionActor")
+  installationCommercialApprovals   InstallationCommercialCalculation[] @relation("InstallationCommercialApprover")
+  installationCommercialRevisions   InstallationCommercialCalculationRevision[] @relation("InstallationCommercialRevisionActor")
 
   @@index([teamId])
   @@index([managerId])
@@ -470,6 +515,7 @@ model Supplier {
   deals                    Deal[]
   commercialQualifications LeadCommercialQualification[]
   facadeMaterialOffers     FacadeMaterialSupplierOffer[]
+  installationContractors  InstallationContractor[]
 
   @@index([name])
 }
@@ -716,6 +762,8 @@ model Lead {
   engineeringAssignments        LeadEngineeringAssignment[]
   facadeSubsystemCalculations   FacadeSubsystemCalculation[]
   facadeCommercialCalculations  FacadeCommercialCalculation[]
+  installationCalculation       InstallationCalculation?
+  installationCommercialCalculations InstallationCommercialCalculation[]
   calculationRequests           CalculationRequest[]
   calculationSessions           CalculationSession[]
   panelQuotes                   PanelQuote[]
@@ -880,6 +928,7 @@ model LeadEngineeringAssignment {
   completedBy User? @relation("LeadEngineeringCompletedBy", fields: [completedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
   primaryQualificationCompletedBy User? @relation("LeadEngineeringPrimaryCompletedBy", fields: [primaryQualificationCompletedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
   facadeCalculations FacadeSubsystemCalculation[]
+  installationCalculations InstallationCalculation[]
 
   @@index([leadId, status])
   @@index([engineerId, status])
@@ -2158,6 +2207,214 @@ model FacadeCommercialCalculationRevision {
 
   commercialCalculation FacadeCommercialCalculation @relation(fields: [commercialCalculationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
   actor                 User                        @relation("FacadeCommercialRevisionActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([commercialCalculationId, createdAt])
+}
+
+model InstallationWorkType {
+  id          String                   @id @default(uuid())
+  code        String                   @unique
+  nameRu      String
+  nameUz      String
+  nameEn      String
+  description String?
+  unit        InstallationWorkUnit
+  category    InstallationWorkCategory @default(OTHER)
+  isActive    Boolean                  @default(true)
+  createdAt   DateTime                 @default(now())
+  updatedAt   DateTime                 @updatedAt
+
+  rates               InstallationContractorRate[]
+  calculationItems    InstallationCalculationItem[]
+
+  @@index([isActive, category])
+  @@index([unit])
+}
+
+model InstallationContractor {
+  id          String                     @id @default(uuid())
+  name        String
+  type        InstallationContractorType
+  contactName String?
+  phone       String?
+  note        String?
+  supplierId  String?
+  isActive    Boolean                    @default(true)
+  createdAt   DateTime                   @default(now())
+  updatedAt   DateTime                   @updatedAt
+
+  supplier Supplier?                   @relation(fields: [supplierId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  rates    InstallationContractorRate[]
+
+  @@index([isActive, type])
+  @@index([supplierId])
+  @@index([name])
+}
+
+model InstallationContractorRate {
+  id           String    @id @default(uuid())
+  contractorId String
+  workTypeId   String
+  unit         InstallationWorkUnit
+  pricePerUnit Decimal   @db.Decimal(18, 8)
+  currency     String
+  validFrom    DateTime
+  validTo      DateTime?
+  isActive     Boolean   @default(true)
+  note         String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  contractor InstallationContractor @relation(fields: [contractorId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  workType   InstallationWorkType   @relation(fields: [workTypeId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([contractorId, isActive])
+  @@index([workTypeId, isActive])
+  @@index([validFrom])
+}
+
+model InstallationCalculation {
+  id           String                        @id @default(uuid())
+  leadId       String                        @unique
+  assignmentId String?
+  engineerId   String
+  status       InstallationCalculationStatus @default(DRAFT)
+  revision     Int                           @default(1)
+  note         String?
+  createdAt    DateTime                      @default(now())
+  updatedAt    DateTime                      @updatedAt
+
+  lead       Lead                        @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  assignment LeadEngineeringAssignment?  @relation(fields: [assignmentId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  engineer   User                        @relation("InstallationCalculationEngineer", fields: [engineerId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  items      InstallationCalculationItem[]
+  revisions  InstallationCalculationRevision[]
+  commercialCalculations InstallationCommercialCalculation[]
+
+  @@index([engineerId])
+  @@index([assignmentId])
+  @@index([status])
+}
+
+model InstallationCalculationItem {
+  id               String                     @id @default(uuid())
+  calculationId    String
+  workTypeId       String?
+  workTypeCode     String
+  workTypeName     String
+  workTypeSnapshot Json
+  unit             InstallationWorkUnit
+  quantity         Decimal                    @db.Decimal(18, 8)
+  quantitySource   InstallationQuantitySource @default(MANUAL)
+  note             String?
+  sortOrder        Int                        @default(0)
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+
+  calculation InstallationCalculation @relation(fields: [calculationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  workType    InstallationWorkType?   @relation(fields: [workTypeId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+
+  @@index([calculationId, sortOrder])
+  @@index([workTypeId])
+}
+
+model InstallationCalculationRevision {
+  id            String   @id @default(uuid())
+  calculationId String
+  actorId       String
+  action        String
+  payload       Json?
+  createdAt     DateTime @default(now())
+
+  calculation InstallationCalculation @relation(fields: [calculationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  actor       User                    @relation("InstallationCalculationRevisionActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@index([calculationId, createdAt])
+  @@index([actorId])
+}
+
+model InstallationCommercialCalculation {
+  id                             String                        @id @default(uuid())
+  leadId                         String
+  installationCalculationId      String
+  installationCalculationRevision Int
+  revision                       Int                           @default(1)
+  isCurrent                      Boolean                       @default(true)
+  status                         InstallationCommercialStatus  @default(DRAFT)
+  technicalSnapshot              Json
+  costIncomplete                 Boolean                       @default(true)
+  costByCurrency                 Json
+  fxSnapshots                    Json
+  proposedCustomerAmount         Decimal?                      @db.Decimal(18, 8)
+  proposedCurrency               String?
+  approvedCustomerAmount         Decimal?                      @db.Decimal(18, 8)
+  approvedCurrency               String?
+  approvedById                   String?
+  approvedAt                     DateTime?
+  approverRoleSnapshot           String?
+  commercialNote                 String?
+  quoteCreated                   Boolean                       @default(false)
+  dealCreated                    Boolean                       @default(false)
+  createdAt                      DateTime                      @default(now())
+  updatedAt                      DateTime                      @updatedAt
+
+  lead                     Lead                                 @relation(fields: [leadId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  installationCalculation  InstallationCalculation              @relation(fields: [installationCalculationId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  approvedBy               User?                                @relation("InstallationCommercialApprover", fields: [approvedById], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  items                    InstallationCommercialCalculationItem[]
+  revisions                InstallationCommercialCalculationRevision[]
+
+  @@unique([leadId, revision])
+  @@index([leadId, isCurrent])
+  @@index([installationCalculationId])
+  @@index([status])
+}
+
+model InstallationCommercialCalculationItem {
+  id                      String    @id @default(uuid())
+  commercialCalculationId String
+  technicalItemId         String?
+  workTypeId              String?
+  workTypeCode            String
+  workTypeName            String
+  workTypeSnapshot        Json
+  unit                    String
+  quantity                Decimal   @db.Decimal(18, 8)
+  quantitySource          String
+  selectedRateId          String?
+  rateSnapshot            Json?
+  contractorId            String?
+  contractorName          String?
+  pricePerUnit            Decimal?  @db.Decimal(18, 8)
+  currency                String?
+  lineCostTotal           Decimal?  @db.Decimal(18, 8)
+  priceStatus             String
+  fxFromCurrency          String?
+  fxToCurrency            String?
+  fxRate                  Decimal?  @db.Decimal(18, 8)
+  fxRateId                String?
+  fxEffectiveFrom         DateTime?
+  convertedAmount         Decimal?  @db.Decimal(18, 8)
+  convertedCurrency       String?
+  sortOrder               Int       @default(0)
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  commercialCalculation InstallationCommercialCalculation @relation(fields: [commercialCalculationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@index([commercialCalculationId, sortOrder])
+}
+
+model InstallationCommercialCalculationRevision {
+  id                      String   @id @default(uuid())
+  commercialCalculationId String
+  actorId                 String
+  action                  String
+  payload                 Json?
+  createdAt               DateTime @default(now())
+
+  commercialCalculation InstallationCommercialCalculation @relation(fields: [commercialCalculationId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  actor                 User                              @relation("InstallationCommercialRevisionActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
   @@index([commercialCalculationId, createdAt])
 }

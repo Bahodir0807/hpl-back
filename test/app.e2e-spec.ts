@@ -5570,6 +5570,135 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(frozen.facadeCalculationRevision).toBe(1);
   });
 
+  it('Stage 4 lets HEAD approve installation cost without Quote, Deal, or INSTALLER', async () => {
+    const { leadId, quotesBefore, dealsBefore } =
+      await prepareInstallationCommercial(context.headToken);
+    expect(await prisma.panelQuote.count()).toBe(quotesBefore);
+    expect(await prisma.deal.count()).toBe(dealsBefore);
+    expect(Object.values(RoleName)).not.toContain('INSTALLER');
+
+    const commercial =
+      await prisma.installationCommercialCalculation.findFirstOrThrow({
+        where: { leadId, isCurrent: true },
+      });
+    expect(commercial.status).toBe('APPROVED');
+    expect(commercial.approvedById).toBe(context.headId);
+    expect(commercial.approverRoleSnapshot).toBe(RoleName.HEAD);
+    expect(commercial.quoteCreated).toBe(false);
+    expect(Number(commercial.approvedCustomerAmount)).toBe(15000);
+
+    const managerView = await request(server)
+      .get(`/leads/${leadId}/installation-commercial`)
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    const managerBody = bodyAs<{
+      canApprove: boolean;
+      canReadCost: boolean;
+      calculation: {
+        approvedCustomerAmount: string | null;
+        items: Array<{ pricePerUnit: string | null }>;
+      };
+    }>(managerView);
+    expect(managerBody.canApprove).toBe(false);
+    expect(managerBody.canReadCost).toBe(false);
+    expect(Number(managerBody.calculation.approvedCustomerAmount)).toBe(15000);
+    expect(
+      managerBody.calculation.items.every((item) => item.pricePerUnit === null),
+    ).toBe(true);
+
+    await request(server)
+      .post(`/leads/${leadId}/installation-commercial/approve`)
+      .set(authHeader(context.engineerToken))
+      .send({ expectedRevision: commercial.revision })
+      .expect(403);
+    await request(server)
+      .post(`/leads/${leadId}/installation-commercial/approve`)
+      .set(authHeader(context.managerToken))
+      .send({ expectedRevision: commercial.revision })
+      .expect(403);
+    await request(server)
+      .post('/references/installation-rates')
+      .set(authHeader(context.engineerToken))
+      .send({
+        contractorId: '00000000-0000-4000-8000-000000000001',
+        workTypeId: '00000000-0000-4000-8000-000000000002',
+        unit: 'M2',
+        pricePerUnit: '1',
+        currency: 'USD',
+        validFrom: new Date().toISOString(),
+      })
+      .expect(403);
+  });
+
+  it('Stage 4 lets DIRECTOR approve installation and still forbids quotes:approve', async () => {
+    const { leadId } = await prepareInstallationCommercial(context.directorToken, {
+      ventFacadeKitRequired: true,
+    });
+    const commercial =
+      await prisma.installationCommercialCalculation.findFirstOrThrow({
+        where: { leadId, isCurrent: true },
+      });
+    expect(commercial.approverRoleSnapshot).toBe(RoleName.DIRECTOR);
+
+    const facade = await prisma.facadeSubsystemCalculation.findUnique({
+      where: { leadId },
+    });
+    expect(facade).toBeNull();
+
+    const quoteId = await createSentPanelQuote();
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.directorToken))
+      .send({ status: 'approved' })
+      .expect(403);
+
+    await request(server)
+      .patch(`/engineering/leads/${leadId}/installation`)
+      .set(authHeader(context.engineerToken))
+      .send({
+        expectedRevision: 2,
+        items: [
+          {
+            workTypeId: (
+              await prisma.installationCalculationItem.findFirstOrThrow({
+                where: { calculation: { leadId } },
+              })
+            ).workTypeId,
+            quantity: '1200',
+          },
+        ],
+      })
+      .expect(200);
+
+    const workspace = await request(server)
+      .get(`/leads/${leadId}/installation-commercial`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    expect(bodyAs<{ staleTechnicalBasis: boolean }>(workspace).staleTechnicalBasis).toBe(
+      true,
+    );
+    const frozen =
+      await prisma.installationCommercialCalculation.findFirstOrThrow({
+        where: { leadId, isCurrent: true, status: 'APPROVED' },
+      });
+    expect(Number(frozen.approvedCustomerAmount)).toBe(15000);
+  });
+
+  it('Stage 4 does not auto-create an installation calculation for HPL-only', async () => {
+    const leadId = await createQualifiedLead(
+      `Stage4 hpl-only ${RUN_ID}-${Math.random().toString(16).slice(2)}`,
+    );
+    await request(server)
+      .post(`/engineering/leads/${leadId}/assign`)
+      .set(authHeader(context.managerToken))
+      .send({ engineerId: context.engineerId })
+      .expect(409);
+    const calculation = await prisma.installationCalculation.findUnique({
+      where: { leadId },
+    });
+    expect(calculation).toBeNull();
+  });
+
   it('uses canonical warehouse RBAC on legacy mutation routes', async () => {
     const supplier = await prisma.supplier.findUniqueOrThrow({
       where: { code: `QA-SUP-${RUN_ID}` },
@@ -7524,6 +7653,132 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .post(`/leads/${leadId}/facade-commercial/approve`)
       .set(authHeader(approverToken))
       .send({ expectedRevision: bodyAs<{ revision: number }>(submitted).revision })
+      .expect(201);
+    return { leadId, quotesBefore, dealsBefore };
+  }
+
+  async function prepareInstallationCommercial(
+    approverToken: string,
+    options: { ventFacadeKitRequired?: boolean } = {},
+  ): Promise<{
+    leadId: string;
+    quotesBefore: number;
+    dealsBefore: number;
+  }> {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Stage4 installation ${RUN_ID}-${Math.random().toString(16).slice(2)}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(leadResponse).id;
+    await qualifyLeadStage1(leadId, true);
+    if (options.ventFacadeKitRequired) {
+      await prisma.leadQualification.update({
+        where: { leadId },
+        data: { ventFacadeKitRequired: true },
+      });
+    }
+    await request(server)
+      .post(`/engineering/leads/${leadId}/assign`)
+      .set(authHeader(context.managerToken))
+      .send({ engineerId: context.engineerId })
+      .expect(201);
+
+    const suffix = Math.random().toString(16).slice(2, 8);
+    const workTypeResponse = await request(server)
+      .post('/references/installation-work-types')
+      .set(authHeader(context.headToken))
+      .send({
+        code: `hpl_install_${suffix}`,
+        nameRu: 'Монтаж HPL',
+        nameUz: 'HPL montaj',
+        nameEn: 'HPL install',
+        unit: 'M2',
+        category: 'CLADDING',
+      })
+      .expect(201);
+    const workTypeId = bodyAs<EntityResponse>(workTypeResponse).id;
+    const contractorResponse = await request(server)
+      .post('/references/installation-contractors')
+      .set(authHeader(context.headToken))
+      .send({
+        name: `Crew ${suffix}`,
+        type: 'INTERNAL_CREW',
+      })
+      .expect(201);
+    const contractorId = bodyAs<EntityResponse>(contractorResponse).id;
+    const rateResponse = await request(server)
+      .post('/references/installation-rates')
+      .set(authHeader(context.headToken))
+      .send({
+        contractorId,
+        workTypeId,
+        unit: 'M2',
+        pricePerUnit: '12',
+        currency: 'USD',
+        validFrom: new Date().toISOString(),
+      })
+      .expect(201);
+    const rateId = bodyAs<EntityResponse>(rateResponse).id;
+
+    const saved = await request(server)
+      .patch(`/engineering/leads/${leadId}/installation`)
+      .set(authHeader(context.engineerToken))
+      .send({
+        items: [{ workTypeId, quantity: '1000', quantitySource: 'MANUAL' }],
+      })
+      .expect(200);
+    expect(bodyAs<{ quoteCreated: boolean; dealCreated: boolean }>(saved).quoteCreated).toBe(
+      false,
+    );
+    await request(server)
+      .post(`/engineering/leads/${leadId}/installation/complete`)
+      .set(authHeader(context.engineerToken))
+      .send({ expectedRevision: bodyAs<{ revision: number }>(saved).revision })
+      .expect(201);
+
+    const quotesBefore = await prisma.panelQuote.count();
+    const dealsBefore = await prisma.deal.count();
+
+    await request(server)
+      .post(`/leads/${leadId}/installation-commercial`)
+      .set(authHeader(approverToken))
+      .expect(201);
+    const workspace = await request(server)
+      .get(`/leads/${leadId}/installation-commercial`)
+      .set(authHeader(approverToken))
+      .expect(200);
+    const body = bodyAs<{
+      calculation: {
+        revision: number;
+        items: Array<{ id: string }>;
+      };
+    }>(workspace);
+    const patched = await request(server)
+      .patch(`/leads/${leadId}/installation-commercial`)
+      .set(authHeader(approverToken))
+      .send({
+        expectedRevision: body.calculation.revision,
+        selections: [{ itemId: body.calculation.items[0].id, rateId }],
+        proposedCustomerAmount: '15000',
+        proposedCurrency: 'USD',
+      })
+      .expect(200);
+    const submitted = await request(server)
+      .post(`/leads/${leadId}/installation-commercial/submit`)
+      .set(authHeader(approverToken))
+      .send({ expectedRevision: bodyAs<{ revision: number }>(patched).revision })
+      .expect(201);
+    await request(server)
+      .post(`/leads/${leadId}/installation-commercial/approve`)
+      .set(authHeader(approverToken))
+      .send({
+        expectedRevision: bodyAs<{ revision: number }>(submitted).revision,
+      })
       .expect(201);
     return { leadId, quotesBefore, dealsBefore };
   }

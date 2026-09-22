@@ -332,4 +332,43 @@ describe('permission matrix', () => {
     expect(roleHasPermission(RoleName.DIRECTOR, 'quotes:approve')).toBe(false);
     expect(roleHasPermission(RoleName.HEAD, 'quotes:approve')).toBe(true);
   });
+
+  it('grants HEAD and DIRECTOR installation commercial approval without quotes:approve on DIRECTOR', () => {
+    for (const slug of [
+      'installation:read',
+      'installation_pricing:read_cost',
+      'installation_pricing:manage_contractors',
+      'installation_pricing:manage_rates',
+      'installation_pricing:prepare',
+      'installation_pricing:approve',
+    ] as const) {
+      expect(roleHasPermission(RoleName.HEAD, slug)).toBe(true);
+      expect(roleHasPermission(RoleName.DIRECTOR, slug)).toBe(true);
+      expect(roleHasPermission(RoleName.ENGINEER, slug)).toBe(
+        slug === 'installation:read',
+      );
+      expect(roleHasPermission(RoleName.MANAGER, slug)).toBe(false);
+      expect(roleHasPermission(RoleName.ACCOUNTANT, slug)).toBe(false);
+      expect(roleHasPermission(RoleName.STOREKEEPER, slug)).toBe(false);
+      expect(roleHasPermission(RoleName.ADMIN, slug)).toBe(false);
+    }
+    expect(
+      roleHasPermission(RoleName.ENGINEER, 'installation:update_technical'),
+    ).toBe(true);
+    expect(
+      roleHasPermission(RoleName.HEAD, 'installation:update_technical'),
+    ).toBe(false);
+    expect(
+      roleHasPermission(RoleName.ENGINEER, 'installation_pricing:approve'),
+    ).toBe(false);
+    expect(
+      roleHasPermission(RoleName.ENGINEER, 'installation_pricing:manage_rates'),
+    ).toBe(false);
+    expect(
+      roleHasPermission(RoleName.MANAGER, 'installation_pricing:approve'),
+    ).toBe(false);
+    expect(roleHasPermission(RoleName.DIRECTOR, 'quotes:approve')).toBe(false);
+    expect(roleHasPermission(RoleName.HEAD, 'quotes:approve')).toBe(true);
+    expect(Object.values(RoleName)).not.toContain('INSTALLER');
+  });
 });

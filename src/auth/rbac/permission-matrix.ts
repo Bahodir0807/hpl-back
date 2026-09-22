@@ -119,6 +119,31 @@ export const PERMISSION_DEFINITIONS = [
     'facade_pricing:approve',
     'Approve facade subsystem customer commercial price (HEAD or DIRECTOR)',
   ],
+  ['installation:read', 'Read installation technical calculations'],
+  [
+    'installation:update_technical',
+    'Create and edit installation technical calculations on an assigned lead',
+  ],
+  [
+    'installation_pricing:read_cost',
+    'Read installation contractor rates and internal cost',
+  ],
+  [
+    'installation_pricing:manage_contractors',
+    'Create and manage installation crews and contractors',
+  ],
+  [
+    'installation_pricing:manage_rates',
+    'Create and manage installation contractor rates',
+  ],
+  [
+    'installation_pricing:prepare',
+    'Prepare installation commercial pricing without invented markup',
+  ],
+  [
+    'installation_pricing:approve',
+    'Approve installation customer commercial price (HEAD or DIRECTOR)',
+  ],
 ] as const;
 
 export type PermissionSlug = (typeof PERMISSION_DEFINITIONS)[number][0];
@@ -181,6 +206,12 @@ const DIRECTOR_PERMISSIONS: PermissionSlug[] = [
   'facade_pricing:manage_offers',
   'facade_pricing:prepare',
   'facade_pricing:approve',
+  'installation:read',
+  'installation_pricing:read_cost',
+  'installation_pricing:manage_contractors',
+  'installation_pricing:manage_rates',
+  'installation_pricing:prepare',
+  'installation_pricing:approve',
 ];
 
 const HEAD_PERMISSIONS: PermissionSlug[] = [
@@ -259,6 +290,12 @@ const HEAD_PERMISSIONS: PermissionSlug[] = [
   'facade_pricing:manage_offers',
   'facade_pricing:prepare',
   'facade_pricing:approve',
+  'installation:read',
+  'installation_pricing:read_cost',
+  'installation_pricing:manage_contractors',
+  'installation_pricing:manage_rates',
+  'installation_pricing:prepare',
+  'installation_pricing:approve',
 ];
 
 const MANAGER_PERMISSIONS: PermissionSlug[] = [
@@ -338,6 +375,8 @@ const ENGINEER_PERMISSIONS: PermissionSlug[] = [
   'engineering:return',
   'engineering:complete',
   'engineering:update_technical',
+  'installation:read',
+  'installation:update_technical',
 ];
 
 export const ROLE_PERMISSION_SLUGS: Record<
@@ -375,6 +414,11 @@ export const BUSINESS_MUTATION_PERMISSIONS = [
   'facade_pricing:manage_offers',
   'facade_pricing:prepare',
   'facade_pricing:approve',
+  'installation:update_technical',
+  'installation_pricing:manage_contractors',
+  'installation_pricing:manage_rates',
+  'installation_pricing:prepare',
+  'installation_pricing:approve',
 ] as const;
 
 export function roleHasPermission(roleName: RoleName, slug: string): boolean {

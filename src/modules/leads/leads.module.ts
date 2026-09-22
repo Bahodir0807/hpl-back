@@ -13,6 +13,12 @@ import { FacadeCommercialController } from './engineering/facade/facade-commerci
 import { FacadeCommercialService } from './engineering/facade/facade-commercial.service';
 import { FacadeMaterialOfferController } from './engineering/facade/facade-material-offer.controller';
 import { FacadeMaterialOfferService } from './engineering/facade/facade-material-offer.service';
+import { InstallationCalculationController } from './engineering/installation/installation-calculation.controller';
+import { InstallationCalculationService } from './engineering/installation/installation-calculation.service';
+import { InstallationCatalogController } from './engineering/installation/installation-catalog.controller';
+import { InstallationCatalogService } from './engineering/installation/installation-catalog.service';
+import { InstallationCommercialController } from './engineering/installation/installation-commercial.controller';
+import { InstallationCommercialService } from './engineering/installation/installation-commercial.service';
 import { LeadsController } from './leads.controller';
 import { LeadsService } from './leads.service';
 import { CalculationsModule } from '../../calculations/calculations.module';
@@ -24,6 +30,9 @@ import { CalculationsModule } from '../../calculations/calculations.module';
     FacadeCalculationController,
     FacadeCommercialController,
     FacadeMaterialOfferController,
+    InstallationCalculationController,
+    InstallationCatalogController,
+    InstallationCommercialController,
     LeadsController,
     LeadWorkspaceController,
   ],
@@ -38,6 +47,9 @@ import { CalculationsModule } from '../../calculations/calculations.module';
     FacadeCalculationService,
     FacadeCommercialService,
     FacadeMaterialOfferService,
+    InstallationCalculationService,
+    InstallationCatalogService,
+    InstallationCommercialService,
   ],
   exports: [
     LeadsService,
@@ -49,6 +61,9 @@ import { CalculationsModule } from '../../calculations/calculations.module';
     FacadeCalculationService,
     FacadeCommercialService,
     FacadeMaterialOfferService,
+    InstallationCalculationService,
+    InstallationCatalogService,
+    InstallationCommercialService,
   ],
 })
 export class LeadsModule {}
