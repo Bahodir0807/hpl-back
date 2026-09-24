@@ -6,6 +6,7 @@ import { QuotesController } from './quotes.controller';
 import { QuotesService } from './quotes.service';
 import { QuoteStockService } from './quote-stock.service';
 import { QuoteDocumentService } from './quote-document.service';
+import { QuoteCompositionService } from './quote-composition.service';
 import { InventoryModule } from '../modules/inventory/inventory.module';
 import { PanelsModule } from '../panels/panels.module';
 
@@ -18,7 +19,12 @@ import { PanelsModule } from '../panels/panels.module';
     PanelsModule,
   ],
   controllers: [QuotesController],
-  providers: [QuotesService, QuoteStockService, QuoteDocumentService],
+  providers: [
+    QuotesService,
+    QuoteStockService,
+    QuoteDocumentService,
+    QuoteCompositionService,
+  ],
   exports: [QuotesService],
 })
 export class QuotesModule {}

@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, QuoteComponentKind } from '@prisma/client';
 import JSZip from 'jszip';
 import {
   buildQuoteDocumentModel,
@@ -15,6 +15,12 @@ import {
   fitQuoteOfferTableToPageWidth,
   loadUzhplQuoteTemplate,
 } from './quote-docx-template';
+import {
+  customerFacingSnapshot,
+  HPL_FACADE_CUSTOMER_SUBTITLE,
+  HPL_FACADE_INSTALLATION_CUSTOMER_SUBTITLE,
+  HPL_INSTALLATION_CUSTOMER_SUBTITLE,
+} from './quote-composition';
 
 const W_T = /<w:t[^>]*>([^<]*)<\/w:t>/g;
 
@@ -33,6 +39,29 @@ async function filledXml(snapshot: QuoteDocumentSnapshot): Promise<string> {
     throw new Error('filled DOCX is missing document.xml');
   }
   return xml;
+}
+
+function offerTableXml(xml: string): string {
+  const marker = QUOTE_TABLE_HEADERS[0];
+  const markerIndex = xml.indexOf(marker);
+  const tableStart = Math.max(
+    xml.lastIndexOf('<w:tbl ', markerIndex),
+    xml.lastIndexOf('<w:tbl>', markerIndex),
+  );
+  const tableEnd = xml.indexOf('</w:tbl>', tableStart);
+  return xml.slice(tableStart, tableEnd);
+}
+
+function offerTableRowCount(xml: string): number {
+  return (offerTableXml(xml).match(/<w:tr[\s>]/g) ?? []).length;
+}
+
+function offerTableGridWidths(xml: string): number[] {
+  const grid = offerTableXml(xml).match(/<w:tblGrid>[\s\S]*?<\/w:tblGrid>/);
+  if (!grid) {
+    return [];
+  }
+  return [...grid[0].matchAll(/w:w="(\d+)"/g)].map((match) => Number(match[1]));
 }
 
 function baseSnapshot(
@@ -231,8 +260,9 @@ describe('UZHPL DOCX template fill', () => {
     expect(filled).toContain('<w:tblW w:w="9678" w:type="dxa"');
     expect(filled).toContain('<w:tblHeader w:val="true"');
     expect(normalized).toContain('<w:tblW w:w="9412" w:type="dxa"');
-    expect(normalized).toContain('<w:gridCol w:w="1764"');
-    expect(normalized).toContain('<w:gridCol w:w="1170"');
+    const pdfGrid = offerTableGridWidths(normalized);
+    expect(pdfGrid.reduce((sum, width) => sum + width, 0)).toBe(9412);
+    expect(pdfGrid[4]).toBeGreaterThanOrEqual(1720);
     expect(pdfSourceText).toContain(CUSTOMER_QUOTE_TITLE);
     expect(pdfSourceText).toContain(CUSTOMER_QUOTE_SUBTITLE);
     expect(pdfSourceText).not.toContain('КП v');
@@ -246,6 +276,23 @@ describe('UZHPL DOCX template fill', () => {
     expect(xml).toContain('6 мм');
     expect(xml).toContain('8 мм');
     expect(xml.match(/1220 × 3050/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(offerTableRowCount(xml)).toBe(3);
+  });
+
+  it('does not pad the offer table with empty golden-template rows', async () => {
+    const xml = await filledXml(
+      baseSnapshot({
+        items: [baseSnapshot().items[0]],
+      }),
+    );
+    expect(offerTableRowCount(xml)).toBe(2);
+  });
+
+  it('keeps the requisites box intact for PDF pagination', async () => {
+    const xml = await filledXml(baseSnapshot());
+    expect(xml).not.toContain('lastRenderedPageBreak');
+    expect(xml).toContain('<w:cantSplit');
+    expect(documentText(xml)).toContain('Реквизиты:');
   });
 
   it('uses stored production and delivery snapshot ranges', async () => {
@@ -454,4 +501,133 @@ describe('UZHPL DOCX template fill', () => {
     expect(text).toContain('14-25 дней');
     expect(text).not.toContain('интерьерных панелей');
   });
+
+  it('keeps the HPL-only customer subtitle and omits empty combined sections', async () => {
+    const text = documentText(await filledXml(baseSnapshot()));
+    expect(text).toContain(CUSTOMER_QUOTE_SUBTITLE);
+    expect(text).not.toContain('фасадной подсистемы');
+    expect(text).not.toContain('монтажные работы');
+    expect(text).not.toContain('Фасадная подсистема');
+    expect(text).not.toContain('Монтажные работы');
+    expect(text).toContain('Цена за м² с НДС 12%');
+    expect(text).not.toMatch(/Цена за м²(?! с НДС 12%)/);
+  });
+
+  it.each([
+    {
+      name: 'HPL + facade',
+      snapshots: [hplDocSnapshot(), facadeDocSnapshot('8000', 'USD')],
+      subtitle: HPL_FACADE_CUSTOMER_SUBTITLE,
+      present: ['Фасадная подсистема', '8000.00 USD'],
+      absent: ['Монтажные работы'],
+    },
+    {
+      name: 'HPL + installation',
+      snapshots: [hplDocSnapshot(), installationDocSnapshot('15000', 'USD')],
+      subtitle: HPL_INSTALLATION_CUSTOMER_SUBTITLE,
+      present: ['Монтажные работы', '15000.00 USD'],
+      absent: ['Фасадная подсистема'],
+    },
+    {
+      name: 'HPL + facade + installation',
+      snapshots: [
+        hplDocSnapshot(),
+        facadeDocSnapshot('8000', 'USD'),
+        installationDocSnapshot('15000', 'USD'),
+      ],
+      subtitle: HPL_FACADE_INSTALLATION_CUSTOMER_SUBTITLE,
+      present: [
+        'Фасадная подсистема',
+        'Монтажные работы',
+        '8000.00 USD',
+        '15000.00 USD',
+        'Итого: 35000.00 USD',
+      ],
+      absent: [] as string[],
+    },
+  ])(
+    'renders the $name customer-facing subtitle and extra sections',
+    async ({ snapshots, subtitle, present, absent }) => {
+      const quote = baseSnapshot({
+        id: '58e6f812-aaaa-4bbb-8ccc-ddddeeeeffff',
+        componentSnapshots: snapshots,
+      });
+      const text = documentText(await filledXml(quote));
+      expect(text).toContain(subtitle);
+      expect(text).toContain('Цена за м² с НДС 12%');
+      expect(text.split('НДС 12%')).toHaveLength(2);
+      for (const fragment of present) {
+        expect(text).toContain(fragment);
+      }
+      for (const fragment of absent) {
+        expect(text).not.toContain(fragment);
+      }
+      expect(text).not.toContain(quote.id);
+      expect(text).not.toMatch(/purchasePrice|contractorName|margin/);
+      expect(customerDocumentMetaViolations(text, quote)).toEqual([]);
+    },
+  );
+
+  it('does not invent a combined total when extra section currencies differ', async () => {
+    const text = documentText(
+      await filledXml(
+        baseSnapshot({
+          componentSnapshots: [
+            hplDocSnapshot(),
+            facadeDocSnapshot('8000', 'EUR'),
+            installationDocSnapshot('15000', 'USD'),
+          ],
+        }),
+      ),
+    );
+    expect(text).toContain(HPL_FACADE_INSTALLATION_CUSTOMER_SUBTITLE);
+    expect(text).toContain('Поставка HPL-панелей: 12000.00 USD');
+    expect(text).toContain('Фасадная подсистема: 8000.00 EUR');
+    expect(text).toContain('Монтажные работы: 15000.00 USD');
+    expect(text).not.toContain('Итого:');
+  });
 });
+
+function hplDocSnapshot() {
+  return {
+    kind: QuoteComponentKind.HPL,
+    label: 'Поставка HPL-панелей',
+    description: null,
+    customerAmount: new Prisma.Decimal('12000'),
+    currency: 'USD',
+    customerSnapshot: customerFacingSnapshot(QuoteComponentKind.HPL, {
+      amount: '12000.00',
+      currency: 'USD',
+    }),
+  };
+}
+
+function facadeDocSnapshot(amount: string, currency: string) {
+  return {
+    kind: QuoteComponentKind.FACADE,
+    label: 'Фасадная подсистема',
+    description: 'Фасадная подсистема',
+    customerAmount: new Prisma.Decimal(amount),
+    currency,
+    customerSnapshot: customerFacingSnapshot(QuoteComponentKind.FACADE, {
+      amount: `${amount}.00`,
+      currency,
+      description: 'Фасадная подсистема',
+    }),
+  };
+}
+
+function installationDocSnapshot(amount: string, currency: string) {
+  return {
+    kind: QuoteComponentKind.INSTALLATION,
+    label: 'Монтажные работы',
+    description: 'Монтажные работы',
+    customerAmount: new Prisma.Decimal(amount),
+    currency,
+    customerSnapshot: customerFacingSnapshot(QuoteComponentKind.INSTALLATION, {
+      amount: `${amount}.00`,
+      currency,
+      description: 'Монтажные работы',
+    }),
+  };
+}

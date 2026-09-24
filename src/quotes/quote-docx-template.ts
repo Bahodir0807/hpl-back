@@ -84,6 +84,7 @@ export function fillDocumentXml(
   }
 
   fillOfferTable(dom, model);
+  fillExtraQuoteSections(dom, model);
   // Table section heading only ("Предложение на поставку …"). The client
   // header subtitle is owned by the golden template and must stay static.
   fillOfferHeading(dom, model.offerHeadingPhrase);
@@ -91,7 +92,9 @@ export function fillDocumentXml(
   fillDocumentDate(dom, model.documentDateLine);
   centerAccentRule(dom);
   removeTaglineSpacerBreaks(dom);
-  preserveCustomerSubtitle(dom);
+  fillCustomerSubtitle(dom, model.customerSubtitle);
+  stripLastRenderedPageBreaks(dom);
+  keepRequisitesBlockTogether(dom);
 
   const serialized = serializeDocumentXml(dom, xml);
   const visibleText = xmlDocumentText(serialized);
@@ -106,9 +109,14 @@ export function fillDocumentXml(
       'Customer Quote document is missing КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ',
     );
   }
+  if (!visibleText.includes(model.customerSubtitle)) {
+    throw new Error(
+      'Customer Quote document is missing the composition subtitle',
+    );
+  }
   if (!visibleText.includes(CUSTOMER_QUOTE_SUBTITLE)) {
     throw new Error(
-      'Customer Quote document is missing the static HPL subtitle',
+      'Customer Quote document is missing the HPL customer-facing phrase',
     );
   }
 
@@ -227,6 +235,10 @@ function serializeDocumentXml(dom: XmlDocument, sourceXml: string): string {
   return `${XML_DECLARATION}${newline}${serialized}`;
 }
 
+const PRODUCTION_COLUMN_INDEX = 4;
+const MIN_PRODUCTION_COLUMN_WIDTH = 1720;
+const MIN_DONOR_COLUMN_WIDTH = 900;
+
 function scaleWidths(sourceWidths: number[], targetWidth: number): number[] {
   const sourceWidth = sourceWidths.reduce((sum, width) => sum + width, 0);
   const scaled = sourceWidths.map(
@@ -241,7 +253,43 @@ function scaleWidths(sourceWidths: number[], targetWidth: number): number[] {
     result[order[index % order.length].index] += 1;
     remainder -= 1;
   }
-  return result;
+  return ensureColumnMinimum(
+    result,
+    PRODUCTION_COLUMN_INDEX,
+    MIN_PRODUCTION_COLUMN_WIDTH,
+  );
+}
+
+function ensureColumnMinimum(
+  widths: number[],
+  index: number,
+  minimum: number,
+): number[] {
+  const current = widths[index];
+  if (current == null || current >= minimum || widths.length <= 1) {
+    return widths;
+  }
+
+  const next = [...widths];
+  let deficit = minimum - current;
+  next[index] = minimum;
+  const donors = next
+    .map((width, donorIndex) => ({ donorIndex, width }))
+    .filter((column) => column.donorIndex !== index)
+    .sort((left, right) => right.width - left.width);
+  for (const donor of donors) {
+    if (deficit <= 0) {
+      break;
+    }
+    const spare = Math.max(0, next[donor.donorIndex] - MIN_DONOR_COLUMN_WIDTH);
+    const take = Math.min(deficit, spare);
+    next[donor.donorIndex] -= take;
+    deficit -= take;
+  }
+  if (deficit > 0) {
+    next[index] = minimum - deficit;
+  }
+  return next;
 }
 
 function readWordNumber(
@@ -265,6 +313,38 @@ function setWordNumber(
   value: number,
 ): void {
   element.setAttribute(`w:${attribute}`, String(value));
+}
+
+function stripLastRenderedPageBreaks(dom: XmlDocument): void {
+  for (const node of elementsByLocalName(dom, 'lastRenderedPageBreak')) {
+    node.parentNode?.removeChild(node);
+  }
+}
+
+function keepRequisitesBlockTogether(dom: XmlDocument): void {
+  const heading = findParagraph(dom, (text) => text.includes('Реквизиты:'));
+  if (!heading) {
+    return;
+  }
+
+  let current: XmlNode | null = heading;
+  while (current && !(isElement(current) && current.localName === 'tbl')) {
+    current = current.parentNode;
+  }
+  if (!current || !isElement(current)) {
+    return;
+  }
+
+  for (const row of childElements(current, 'tr')) {
+    let trPr = childElements(row, 'trPr')[0];
+    if (!trPr) {
+      trPr = dom.createElement('w:trPr');
+      row.insertBefore(trPr, row.firstChild);
+    }
+    if (!childElements(trPr, 'cantSplit')[0]) {
+      trPr.appendChild(dom.createElement('w:cantSplit'));
+    }
+  }
 }
 
 /**
@@ -297,6 +377,67 @@ function removeTaglineSpacerBreaks(dom: XmlDocument): void {
   }
 }
 
+function fillExtraQuoteSections(
+  dom: XmlDocument,
+  model: QuoteDocumentModel,
+): void {
+  if (model.extraSections.length === 0) {
+    return;
+  }
+
+  const table = findOfferTable(dom);
+  if (!table?.parentNode) {
+    return;
+  }
+
+  const prototype =
+    findParagraph(dom, (text) => text.includes(QUOTE_OFFER_HEADING_PREFIX)) ??
+    findParagraph(dom, (text) => text.trim().startsWith('Дата'));
+  if (!prototype) {
+    return;
+  }
+
+  const fragments: XmlElement[] = [];
+  for (const section of model.extraSections) {
+    fragments.push(cloneParagraphWithText(dom, prototype, section.heading, true));
+    for (const line of section.lines) {
+      fragments.push(cloneParagraphWithText(dom, prototype, line, false));
+    }
+  }
+  if (model.grandTotalLine) {
+    fragments.push(
+      cloneParagraphWithText(dom, prototype, model.grandTotalLine, true),
+    );
+  }
+  for (const line of model.totalsLines) {
+    fragments.push(cloneParagraphWithText(dom, prototype, line, false));
+  }
+
+  let insertBefore = table.nextSibling;
+  for (const fragment of fragments) {
+    table.parentNode.insertBefore(fragment, insertBefore);
+  }
+}
+
+function cloneParagraphWithText(
+  dom: XmlDocument,
+  prototype: XmlElement,
+  text: string,
+  bold: boolean,
+): XmlElement {
+  const clone = prototype.cloneNode(true) as XmlElement;
+  replaceParagraphText(dom, clone, text);
+  if (bold) {
+    for (const run of childElements(clone, 'r')) {
+      const rPr = childElements(run, 'rPr')[0];
+      if (rPr && !childElements(rPr, 'b')[0]) {
+        rPr.appendChild(dom.createElement('w:b'));
+      }
+    }
+  }
+  return clone;
+}
+
 function fillOfferTable(dom: XmlDocument, model: QuoteDocumentModel): void {
   const table = findOfferTable(dom);
   if (!table) {
@@ -314,9 +455,6 @@ function fillOfferTable(dom: XmlDocument, model: QuoteDocumentModel): void {
 
   const prototype =
     body.find((row) => rowText(row).trim().length > 0) ?? body[0];
-  const emptyPrototype =
-    body.find((row) => rowText(row).trim().length === 0) ?? prototype;
-  const minBodyRows = body.length;
   const tableRows =
     model.tableRows.length > 0
       ? model.tableRows
@@ -333,13 +471,6 @@ function fillOfferTable(dom: XmlDocument, model: QuoteDocumentModel): void {
       emphasizeGroupRow(row);
     }
     table.appendChild(row);
-  }
-
-  const padding = Math.max(0, minBodyRows - tableRows.length);
-  for (let index = 0; index < padding; index += 1) {
-    const blank = emptyPrototype.cloneNode(true) as XmlElement;
-    clearTableRow(dom, blank);
-    table.appendChild(blank);
   }
 }
 
@@ -403,12 +534,13 @@ function centerAccentRule(dom: XmlDocument): void {
   ind.setAttribute('w:firstLine', '0');
 }
 
-function preserveCustomerSubtitle(dom: XmlDocument): void {
+function fillCustomerSubtitle(dom: XmlDocument, subtitleText: string): void {
   const subtitle =
     findParagraph(dom, (text) => {
       const normalized = normalizeSpace(text);
       return (
         normalized === CUSTOMER_QUOTE_SUBTITLE ||
+        normalized.startsWith(CUSTOMER_QUOTE_SUBTITLE) ||
         (/^КП v\d+\s*·/i.test(normalized) &&
           normalized.includes(CUSTOMER_QUOTE_SUBTITLE))
       );
@@ -423,12 +555,7 @@ function preserveCustomerSubtitle(dom: XmlDocument): void {
     throw new Error('UZHPL quote template is missing the customer subtitle');
   }
 
-  const current = normalizeSpace(elementText(subtitle));
-  if (current === CUSTOMER_QUOTE_SUBTITLE) {
-    return;
-  }
-
-  replaceParagraphText(dom, subtitle, CUSTOMER_QUOTE_SUBTITLE);
+  replaceParagraphText(dom, subtitle, subtitleText);
 }
 
 function xmlDocumentText(xml: string): string {
@@ -472,12 +599,6 @@ function fillTableRow(
   const cells = childElements(row, 'tc');
   for (let index = 0; index < cells.length; index += 1) {
     setCellText(dom, cells[index], values[index] ?? '');
-  }
-}
-
-function clearTableRow(dom: XmlDocument, row: XmlElement): void {
-  for (const cell of childElements(row, 'tc')) {
-    setCellText(dom, cell, '');
   }
 }
 

@@ -20,6 +20,8 @@ import { PurchasePriceInterceptor } from '../common/interceptors/purchase-price.
 import type { CurrentUser as CurrentUserType } from '../common/interfaces/current-user.interface';
 import { JwtAuthGuard } from '../modules/auth/guards/jwt-auth.guard';
 import { FilterQuotesDto } from './dto/filter-quotes.dto';
+import { QuoteCompositionQueryDto } from './dto/quote-composition-query.dto';
+import { CreateQuoteVersionDto } from './dto/create-quote-version.dto';
 import {
   FinalizeQuoteDto,
   PreviewQuotePricingDto,
@@ -51,6 +53,18 @@ export class QuotesController {
     @CurrentUser() user: CurrentUserType,
   ) {
     return this.quotesService.findAll(filter, user);
+  }
+
+  @Get('composition')
+  @RequirePermissions(QUOTE_PERMISSIONS.READ)
+  @ApiOperation({
+    summary: 'Preview approved HPL / facade / installation quote composition',
+  })
+  composition(
+    @Query() query: QuoteCompositionQueryDto,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.quotesService.getComposition(query.leadId, user);
   }
 
   @Get(':id')
@@ -195,9 +209,10 @@ export class QuotesController {
   @ApiOperation({ summary: 'Create the next immutable Quote version' })
   createNextVersion(
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: CreateQuoteVersionDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.quotesService.createNextVersion(id, user);
+    return this.quotesService.createNextVersion(id, user, dto);
   }
 
   @Post(':id/client-accept')

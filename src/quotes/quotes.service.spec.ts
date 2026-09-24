@@ -93,6 +93,10 @@ describe('QuotesService', () => {
       findMany: jest.fn(),
       count: jest.fn(),
     },
+    panelQuoteComponentSnapshot: {
+      createMany: jest.fn(),
+      updateMany: jest.fn(),
+    },
     activity: { create: jest.fn() },
     auditLog: { create: jest.fn() },
     lead: {
@@ -170,6 +174,16 @@ describe('QuotesService', () => {
       { persistFinalPdf: jest.fn() } as never,
       panelPriceCalculator as never,
       currencyRateService as never,
+      {
+        attachToQuote: jest.fn().mockResolvedValue(undefined),
+        incomingExtraKinds: jest.fn().mockResolvedValue([]),
+        shouldPreserveHplSnapshot: jest.fn().mockReturnValue(false),
+        compositionView: jest.fn().mockReturnValue({
+          components: [],
+          totals: { byCurrency: [], grandTotal: null },
+        }),
+        preview: jest.fn(),
+      } as never,
     );
     prisma.$transaction.mockImplementation(async (callback) =>
       callback(prisma),
@@ -204,8 +218,15 @@ describe('QuotesService', () => {
       id: 'quote-id',
       status: QUOTE_STATUS.DRAFT,
       items: [],
+      componentSnapshots: [],
     });
-    prisma.activity.create.mockResolvedValue({});
+    prisma.panelQuote.findUniqueOrThrow.mockResolvedValue({
+      id: 'quote-id',
+      status: QUOTE_STATUS.DRAFT,
+      items: [],
+      componentSnapshots: [],
+    });
+    prisma.panelQuoteComponentSnapshot.updateMany.mockResolvedValue({ count: 1 });
     prisma.auditLog.create.mockResolvedValue({});
     prisma.panelQuote.updateMany.mockResolvedValue({ count: 1 });
     prisma.$queryRaw.mockResolvedValue([]);

@@ -14,7 +14,8 @@ import {
   TaskPriority,
   TaskType,
   CommercialQualificationStatus,
-  DealStage,
+      DealStage,
+      QuoteComponentKind,
 } from '@prisma/client';
 import {
   CALCULATION_PERMISSIONS,
@@ -56,6 +57,8 @@ import {
   QuoteStockService,
 } from './quote-stock.service';
 import { QuoteDocumentService } from './quote-document.service';
+import { QuoteCompositionService } from './quote-composition.service';
+import { customerFacingSnapshot } from './quote-composition';
 import {
   DEFAULT_QUOTE_VALIDITY_DAYS,
   QUOTE_PERMISSIONS,
@@ -69,6 +72,9 @@ import {
 const quoteInclude = Prisma.validator<Prisma.PanelQuoteInclude>()({
   items: {
     orderBy: [{ calculationGroupSortOrder: 'asc' }, { sortOrder: 'asc' }],
+  },
+  componentSnapshots: {
+    orderBy: { sortOrder: 'asc' },
   },
   pdfFile: {
     select: { id: true, storageKey: true, mimeType: true, originalName: true },
@@ -182,6 +188,7 @@ export class QuotesService {
     private readonly quoteDocumentService: QuoteDocumentService,
     private readonly panelPriceCalculator: PanelPriceCalculator,
     private readonly currencyRateService: CurrencyRateService,
+    private readonly quoteCompositionService: QuoteCompositionService,
   ) {}
 
   async createFromCalculation(
@@ -401,7 +408,14 @@ export class QuotesService {
         });
       }
 
-      return quote;
+      await this.quoteCompositionService.attachToQuote(tx, quote, {
+        acknowledgeStaleComponents: dto.acknowledgeStaleComponents,
+      });
+
+      return tx.panelQuote.findUniqueOrThrow({
+        where: { id: quote.id },
+        include: quoteInclude,
+      });
     });
   }
 
@@ -512,15 +526,11 @@ export class QuotesService {
     }
 
     this.assertQuoteReadAccess(quote.managerId, user);
-    return {
-      ...quote,
-      documentAvailability:
-        quote.pdfFileId && quote.finalizedAt
-          ? 'AVAILABLE'
-          : quote.status === QUOTE_STATUS.CONVERTED
-            ? 'LEGACY_MISSING'
-            : 'NOT_FINALIZED',
-    };
+    return this.presentQuote(quote);
+  }
+
+  async getComposition(leadId: string, user: CurrentUser) {
+    return this.quoteCompositionService.preview(leadId, user);
   }
 
   assertCanDownloadCustomerDocument(
@@ -595,7 +605,12 @@ export class QuotesService {
       this.prisma.panelQuote.count({ where }),
     ]);
 
-    return { items, total, page, limit };
+    return {
+      items: items.map((item) => this.presentQuote(item)),
+      total,
+      page,
+      limit,
+    };
   }
 
   async updateStatus(
@@ -1032,6 +1047,7 @@ export class QuotesService {
   async createNextVersion(
     id: string,
     user: CurrentUser,
+    dto: { acknowledgeStaleComponents?: boolean } = {},
   ): Promise<PanelQuoteWithItems> {
     this.assertQuoteApprovalAllowed(user);
     const source = await this.getQuoteOrThrow(id);
@@ -1043,6 +1059,14 @@ export class QuotesService {
         'A new Quote version can be created only from a finalized Quote',
       );
     }
+
+    const incomingKinds = await this.quoteCompositionService.incomingExtraKinds(
+      source.leadId,
+    );
+    const preserveHpl = this.quoteCompositionService.shouldPreserveHplSnapshot(
+      source.componentSnapshots.map((snapshot) => snapshot.kind),
+      incomingKinds,
+    );
 
     let nextVersionItems: Prisma.PanelQuoteItemCreateWithoutQuoteInput[] =
       source.items.map((item) => ({
@@ -1069,17 +1093,17 @@ export class QuotesService {
         requiredAreaM2: item.requiredAreaM2,
         sheetsCount: item.sheetsCount,
         supplierPricePerM2: item.supplierPricePerM2,
-        pricePerM2: null,
-        currencyCode: null,
-        priceApprovedAt: null,
-        priceApprovedById: null,
-        pricePerSheet: null,
-        totalPrice: null,
+        pricePerM2: preserveHpl ? item.pricePerM2 : null,
+        currencyCode: preserveHpl ? item.currencyCode : null,
+        priceApprovedAt: preserveHpl ? item.priceApprovedAt : null,
+        priceApprovedById: preserveHpl ? item.priceApprovedById : null,
+        pricePerSheet: preserveHpl ? item.pricePerSheet : null,
+        totalPrice: preserveHpl ? item.totalPrice : null,
         wastePercent: item.wastePercent,
         sortOrder: item.sortOrder,
       }));
 
-    if (source.requestId) {
+    if (!preserveHpl && source.requestId) {
       const request = await this.prisma.calculationRequest.findUnique({
         where: { id: source.requestId },
         include: {
@@ -1146,9 +1170,11 @@ export class QuotesService {
             previousVersionId: source.id,
             versionNumber: source.versionNumber + 1,
             status: QUOTE_STATUS.DRAFT,
-            totalAmount: source.deliveryCost ?? new Prisma.Decimal(0),
+            totalAmount: preserveHpl
+              ? source.totalAmount
+              : (source.deliveryCost ?? new Prisma.Decimal(0)),
             displayCurrency: source.displayCurrency,
-            cnyUsdRate: null,
+            cnyUsdRate: preserveHpl ? source.cnyUsdRate : null,
             sellingCoefficient: source.sellingCoefficient,
             deliveryCost: source.deliveryCost,
             clientComment: source.clientComment,
@@ -1183,7 +1209,15 @@ export class QuotesService {
             },
           },
         });
-        return next;
+
+        await this.quoteCompositionService.attachToQuote(tx, next, {
+          acknowledgeStaleComponents: dto.acknowledgeStaleComponents,
+        });
+
+        return tx.panelQuote.findUniqueOrThrow({
+          where: { id: next.id },
+          include: quoteInclude,
+        });
       });
     } catch (error) {
       if (
@@ -2051,12 +2085,24 @@ export class QuotesService {
         (sum, item) => sum.plus(item.totalPrice ?? 0),
         new Prisma.Decimal(0),
       );
+      const displayCurrency = [...currencies][0]!;
+      await tx.panelQuoteComponentSnapshot.updateMany({
+        where: { quoteId: locked.id, kind: QuoteComponentKind.HPL },
+        data: {
+          customerAmount: totalAmount.toDecimalPlaces(2),
+          currency: displayCurrency,
+          customerSnapshot: customerFacingSnapshot(QuoteComponentKind.HPL, {
+            amount: totalAmount.toDecimalPlaces(2).toFixed(2),
+            currency: displayCurrency,
+          }) as unknown as Prisma.InputJsonValue,
+        },
+      });
 
       return tx.panelQuote.update({
         where: { id: locked.id },
         data: {
           totalAmount: totalAmount.toDecimalPlaces(2),
-          displayCurrency: [...currencies][0]!,
+          displayCurrency,
         },
         include: quoteInclude,
       });
@@ -2180,6 +2226,25 @@ export class QuotesService {
         'Коммерческие условия КП нельзя менять после отправки клиенту',
       );
     }
+  }
+
+  private presentQuote(quote: PanelQuoteWithItems) {
+    const documentAvailability:
+      | 'AVAILABLE'
+      | 'LEGACY_MISSING'
+      | 'NOT_FINALIZED' =
+      quote.pdfFileId && quote.finalizedAt
+        ? 'AVAILABLE'
+        : quote.status === QUOTE_STATUS.CONVERTED
+          ? 'LEGACY_MISSING'
+          : 'NOT_FINALIZED';
+    return {
+      ...quote,
+      documentAvailability,
+      composition: this.quoteCompositionService.compositionView(
+        quote.componentSnapshots ?? [],
+      ),
+    };
   }
 
   private async getQuoteOrThrow(id: string): Promise<PanelQuoteWithItems> {

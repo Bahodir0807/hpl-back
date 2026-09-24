@@ -234,6 +234,7 @@ export class QuoteDocumentService implements OnModuleInit {
       where: { id: quoteId },
       include: {
         items: { orderBy: { sortOrder: 'asc' } },
+        componentSnapshots: { orderBy: { sortOrder: 'asc' } },
         lead: {
           select: {
             title: true,

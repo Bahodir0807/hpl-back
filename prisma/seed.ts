@@ -205,6 +205,7 @@ const products = [
 async function clearDatabase(): Promise<void> {
   await prisma.currencyRate.deleteMany();
   await prisma.calculationLineItem.deleteMany();
+  await prisma.panelQuoteComponentSnapshot.deleteMany();
   await prisma.panelQuoteItem.deleteMany();
   await prisma.panelQuote.deleteMany();
   await prisma.calculationSession.deleteMany();

@@ -88,6 +88,10 @@ describe('QuotesService approved pricing and history', () => {
       updateMany: jest.fn(),
       create: jest.fn(),
     },
+    panelQuoteComponentSnapshot: {
+      createMany: jest.fn(),
+      updateMany: jest.fn(),
+    },
     panelQuoteItem: { update: jest.fn() },
     calculationRequest: { updateMany: jest.fn(), findFirst: jest.fn() },
     calculationSession: { findFirst: jest.fn() },
@@ -169,6 +173,16 @@ describe('QuotesService approved pricing and history', () => {
       quoteDocumentService as never,
       panelPriceCalculator as never,
       currencyRateService as never,
+      {
+        attachToQuote: jest.fn().mockResolvedValue(undefined),
+        incomingExtraKinds: jest.fn().mockResolvedValue([]),
+        shouldPreserveHplSnapshot: jest.fn().mockReturnValue(false),
+        compositionView: jest.fn().mockReturnValue({
+          components: [],
+          totals: { byCurrency: [], grandTotal: null },
+        }),
+        preview: jest.fn(),
+      } as never,
     );
   });
 

@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { Prisma, QuoteComponentKind } from '@prisma/client';
 import {
   buildQuoteDocumentModel,
   customerDocumentMetaViolations,
@@ -11,6 +11,12 @@ import {
   quoteOfferHeading,
   QUOTE_PRICE_HEADER,
 } from './quote-document.model';
+import {
+  customerFacingSnapshot,
+  HPL_FACADE_CUSTOMER_SUBTITLE,
+  HPL_FACADE_INSTALLATION_CUSTOMER_SUBTITLE,
+  HPL_INSTALLATION_CUSTOMER_SUBTITLE,
+} from './quote-composition';
 
 describe('quote document snapshot mapping', () => {
   const snapshot = {
@@ -110,6 +116,8 @@ describe('quote document snapshot mapping', () => {
     expect(model.priceHeader).toBe(QUOTE_PRICE_HEADER);
     expect(model.priceHeader).toBe('Цена за м² с НДС 12%');
     expect(model.priceHeader).not.toBe('Цена за м²');
+    expect(model.customerSubtitle).toBe(CUSTOMER_QUOTE_SUBTITLE);
+    expect(model.extraSections).toEqual([]);
   });
 
   it('renders custom panel dimensions from the snapshot, not the catalog size name', () => {
@@ -262,4 +270,95 @@ describe('quote document snapshot mapping', () => {
     expect(usd.itemRows[0]?.[3]).toBe('100,50 USD');
     expect(usd.itemRows[0]?.[3]).not.toContain('сум');
   });
+
+  it('keeps the HPL-only subtitle and maps combined customer-facing subtitles', () => {
+    expect(buildQuoteDocumentModel(snapshot).customerSubtitle).toBe(
+      CUSTOMER_QUOTE_SUBTITLE,
+    );
+
+    const facade = buildQuoteDocumentModel({
+      ...snapshot,
+      componentSnapshots: [
+        hplSnapshot('12000', 'USD'),
+        facadeSnapshot('8000', 'USD'),
+      ],
+    });
+    expect(facade.customerSubtitle).toBe(HPL_FACADE_CUSTOMER_SUBTITLE);
+    expect(facade.customerSubtitle).not.toMatch(/НДС/);
+    expect(JSON.stringify(facade)).not.toMatch(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i,
+    );
+
+    const installation = buildQuoteDocumentModel({
+      ...snapshot,
+      componentSnapshots: [
+        hplSnapshot('12000', 'USD'),
+        installationSnapshot('15000', 'USD'),
+      ],
+    });
+    expect(installation.customerSubtitle).toBe(
+      HPL_INSTALLATION_CUSTOMER_SUBTITLE,
+    );
+
+    const allThree = buildQuoteDocumentModel({
+      ...snapshot,
+      componentSnapshots: [
+        hplSnapshot('12000', 'USD'),
+        facadeSnapshot('8000', 'USD'),
+        installationSnapshot('15000', 'USD'),
+      ],
+    });
+    expect(allThree.customerSubtitle).toBe(
+      HPL_FACADE_INSTALLATION_CUSTOMER_SUBTITLE,
+    );
+    expect(allThree.extraSections.map((section) => section.heading)).toEqual([
+      'Фасадная подсистема',
+      'Монтажные работы',
+    ]);
+    expect(allThree.grandTotalLine).toBe('Итого: 35000.00 USD');
+  });
 });
+
+function hplSnapshot(amount: string, currency: string) {
+  return {
+    kind: QuoteComponentKind.HPL,
+    label: 'Поставка HPL-панелей',
+    description: null,
+    customerAmount: new Prisma.Decimal(amount),
+    currency,
+    customerSnapshot: customerFacingSnapshot(QuoteComponentKind.HPL, {
+      amount,
+      currency,
+    }),
+  };
+}
+
+function facadeSnapshot(amount: string, currency: string) {
+  return {
+    kind: QuoteComponentKind.FACADE,
+    label: 'Фасадная подсистема',
+    description: 'Фасадная подсистема',
+    customerAmount: new Prisma.Decimal(amount),
+    currency,
+    customerSnapshot: customerFacingSnapshot(QuoteComponentKind.FACADE, {
+      amount,
+      currency,
+      description: 'Фасадная подсистема',
+    }),
+  };
+}
+
+function installationSnapshot(amount: string, currency: string) {
+  return {
+    kind: QuoteComponentKind.INSTALLATION,
+    label: 'Монтажные работы',
+    description: 'Монтажные работы',
+    customerAmount: new Prisma.Decimal(amount),
+    currency,
+    customerSnapshot: customerFacingSnapshot(QuoteComponentKind.INSTALLATION, {
+      amount,
+      currency,
+      description: 'Монтажные работы',
+    }),
+  };
+}

@@ -4,6 +4,13 @@ import {
   panelSizeDisplayName,
   type HplStandardApplication,
 } from '../panels/hpl-catalog';
+import {
+  customerQuoteSubtitle,
+  HPL_CUSTOMER_SUBTITLE,
+  quoteDocumentExtraSections,
+  quoteDocumentTotalsLines,
+  type QuoteDocumentExtraSection,
+} from './quote-composition';
 
 /**
  * Customer price column wording. The stored Quote price is already the final
@@ -21,7 +28,7 @@ export const QUOTE_TABLE_HEADERS = [
 ] as const;
 
 export const CUSTOMER_QUOTE_TITLE = 'КОММЕРЧЕСКОЕ ПРЕДЛОЖЕНИЕ';
-export const CUSTOMER_QUOTE_SUBTITLE = 'на поставку HPL-панелей';
+export const CUSTOMER_QUOTE_SUBTITLE = HPL_CUSTOMER_SUBTITLE;
 
 export const QUOTE_OFFER_HEADING_PREFIX = 'Предложение на поставку';
 export const QUOTE_OFFER_HEADING_GENERIC =
@@ -93,6 +100,14 @@ export type QuoteDocumentSnapshot = {
     client?: { name: string | null } | null;
   };
   items: QuoteDocumentItemSnapshot[];
+  componentSnapshots?: Array<{
+    kind: 'HPL' | 'FACADE' | 'INSTALLATION';
+    label: string;
+    description: string | null;
+    customerAmount: { toString(): string } | number | null;
+    currency: string | null;
+    customerSnapshot: unknown;
+  }>;
 };
 
 export type QuoteDocumentTableRow = {
@@ -106,6 +121,10 @@ export type QuoteDocumentModel = {
   priceHeader: string;
   itemRows: string[][];
   tableRows: QuoteDocumentTableRow[];
+  extraSections: QuoteDocumentExtraSection[];
+  totalsLines: string[];
+  grandTotalLine: string | null;
+  customerSubtitle: string;
   commercialNote: string | null;
   validUntilBullet: string;
   documentDateLine: string;
@@ -360,6 +379,13 @@ export function buildQuoteDocumentModel(
   const commercialNote = quote.commercialNote?.trim() || null;
   const application = resolveQuoteOfferApplication(quote.items);
   const tableRows = buildGroupedTableRows(quote.items, itemRows);
+  const extraSections = quoteDocumentExtraSections(
+    quote.componentSnapshots ?? [],
+  );
+  const totals = quoteDocumentTotalsLines(quote.componentSnapshots ?? []);
+  const customerSubtitle = customerQuoteSubtitle(
+    (quote.componentSnapshots ?? []).map((snapshot) => snapshot.kind),
+  );
 
   return {
     offerHeading: quoteOfferHeading(application),
@@ -367,6 +393,10 @@ export function buildQuoteDocumentModel(
     priceHeader: QUOTE_PRICE_HEADER,
     itemRows,
     tableRows,
+    extraSections,
+    totalsLines: totals.lines,
+    grandTotalLine: totals.grandTotal,
+    customerSubtitle,
     commercialNote,
     validUntilBullet: `• Все цены действительны до  ${formatQuoteValidUntilDate(quote.validUntil)}.`,
     documentDateLine: `Дата: ${formatQuoteDocumentDate(quote.createdAt)}`,

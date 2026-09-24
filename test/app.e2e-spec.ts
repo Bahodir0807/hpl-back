@@ -7413,6 +7413,363 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(completeMetric.totalScore).not.toBeNull();
   });
 
+  it('Stage 5 HPL-only quote has no empty facade or installation sections', async () => {
+    const quoteId = await createSentPanelQuote();
+    const quote = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: quoteId },
+      include: { componentSnapshots: true },
+    });
+    expect(quote.componentSnapshots.map((item) => item.kind).sort()).toEqual([
+      'HPL',
+    ]);
+    const docx = await request(server)
+      .get(`/quotes/${quoteId}/docx`)
+      .set(authHeader(context.headToken))
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    const xml = await (
+      await JSZip.loadAsync(docx.body as Buffer)
+    )
+      .file('word/document.xml')!
+      .async('string');
+    const text = [...xml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+      .map((match) => match[1])
+      .join('');
+    expect(text).toContain('на поставку HPL-панелей');
+    expect(text).not.toContain('Фасадная подсистема');
+    expect(text).not.toContain('Монтажные работы');
+    expect(text).not.toContain(quoteId);
+    expect(Object.values(RoleName)).not.toContain('INSTALLER');
+  });
+
+  it('Stage 5 does not silently include unapproved installation in a Quote', async () => {
+    const { leadId } = await prepareInstallationCommercial(context.headToken);
+    await prisma.installationCommercialCalculation.updateMany({
+      where: { leadId },
+      data: { status: 'DRAFT', approvedCustomerAmount: null, approvedAt: null },
+    });
+    await confirmLeadStage2(leadId);
+    const quoteId = await headQuoteFromExistingLead(leadId);
+    const snapshots = await prisma.panelQuoteComponentSnapshot.findMany({
+      where: { quoteId },
+    });
+    expect(snapshots.map((item) => item.kind)).toEqual(['HPL']);
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    expect(lead.dealId).toBeTruthy();
+    expect(await prisma.deal.count({ where: { id: lead.dealId! } })).toBe(1);
+  });
+
+  it('Stage 5 assembles HPL + approved installation without extra Deal or DIRECTOR quote approval', async () => {
+    const { leadId } = await prepareInstallationCommercial(context.headToken);
+    await confirmLeadStage2(leadId);
+    const quoteId = await headQuoteFromExistingLead(leadId);
+    const snapshots = await prisma.panelQuoteComponentSnapshot.findMany({
+      where: { quoteId },
+      orderBy: { sortOrder: 'asc' },
+    });
+    expect(snapshots.map((item) => item.kind)).toEqual(['HPL', 'INSTALLATION']);
+    expect(Number(snapshots[1]?.customerAmount)).toBe(15000);
+    const composition = await request(server)
+      .get('/quotes/composition')
+      .query({ leadId })
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    const body = bodyAs<{
+      components: Array<{ kind: string; amount: string | null }>;
+    }>(composition);
+    expect(
+      body.components.find((item) => item.kind === 'INSTALLATION')?.amount,
+    ).toBe('15000.00');
+    expect(JSON.stringify(body)).not.toMatch(/pricePerUnit|contractorName/);
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.directorToken))
+      .send({ status: 'approved' })
+      .expect(403);
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    expect(await prisma.deal.count({ where: { id: lead.dealId! } })).toBe(1);
+  });
+
+  it('Stage 5 assembles HPL + approved facade without leaking purchase prices', async () => {
+    const { leadId } = await prepareSubsystemCommercial(context.directorToken);
+    await confirmLeadStage2(leadId);
+    const quoteId = await headQuoteFromExistingLead(leadId);
+    const snapshots = await prisma.panelQuoteComponentSnapshot.findMany({
+      where: { quoteId },
+      orderBy: { sortOrder: 'asc' },
+    });
+    expect(snapshots.map((item) => item.kind)).toEqual(['HPL', 'FACADE']);
+    expect(Number(snapshots[1]?.customerAmount)).toBe(8000);
+    expect(JSON.stringify(snapshots[1]?.customerSnapshot)).not.toMatch(
+      /purchasePrice|offerSnapshot|margin/,
+    );
+    await request(server)
+      .post(`/quotes/${quoteId}/finalize`)
+      .set(authHeader(context.directorToken))
+      .send({})
+      .expect(403);
+  });
+
+  it('Stage 5 assembles HPL + facade + installation on one Lead with combined subtitle', async () => {
+    const { leadId, facadeRevision, installationRevision } =
+      await prepareAllThreeCommercial();
+    await confirmLeadStage2(leadId);
+
+    const composition = await request(server)
+      .get('/quotes/composition')
+      .query({ leadId })
+      .set(authHeader(context.managerToken))
+      .expect(200);
+    const preview = bodyAs<{
+      components: Array<{
+        kind: string;
+        amount: string | null;
+        currency: string | null;
+        sourceRevision: number | null;
+        includeInQuote?: boolean;
+        readiness?: string;
+      }>;
+      totals: {
+        grandTotal: { amount: string; currency: string } | null;
+        byCurrency: Array<{ amount: string; currency: string }>;
+      };
+    }>(composition);
+    expect(preview.components.map((item) => item.kind)).toEqual([
+      'HPL',
+      'FACADE',
+      'INSTALLATION',
+    ]);
+    expect(preview.components.find((item) => item.kind === 'FACADE')).toEqual(
+      expect.objectContaining({
+        amount: '8000.00',
+        currency: 'USD',
+        sourceRevision: facadeRevision,
+        includeInQuote: true,
+        readiness: 'READY',
+      }),
+    );
+    expect(
+      preview.components.find((item) => item.kind === 'INSTALLATION'),
+    ).toEqual(
+      expect.objectContaining({
+        amount: '15000.00',
+        currency: 'USD',
+        sourceRevision: installationRevision,
+        includeInQuote: true,
+        readiness: 'READY',
+      }),
+    );
+    expect(JSON.stringify(preview)).not.toMatch(
+      /purchasePrice|offerSnapshot|pricePerUnit|contractorName|margin|cnyUsdRate|"sourceId"/,
+    );
+
+    const quoteId = await headQuoteFromExistingLead(leadId);
+    const quote = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: quoteId },
+      include: { componentSnapshots: { orderBy: { sortOrder: 'asc' } } },
+    });
+    expect(quote.componentSnapshots.map((item) => item.kind)).toEqual([
+      'HPL',
+      'FACADE',
+      'INSTALLATION',
+    ]);
+    expect(Number(quote.componentSnapshots[1]?.customerAmount)).toBe(8000);
+    expect(Number(quote.componentSnapshots[2]?.customerAmount)).toBe(15000);
+    expect(quote.componentSnapshots[1]?.sourceRevision).toBe(facadeRevision);
+    expect(quote.componentSnapshots[2]?.sourceRevision).toBe(
+      installationRevision,
+    );
+    expect(
+      JSON.stringify(quote.componentSnapshots.map((item) => item.customerSnapshot)),
+    ).not.toMatch(/purchasePrice|pricePerUnit|contractorName|margin/);
+
+    await request(server)
+      .patch(`/quotes/${quoteId}/status`)
+      .set(authHeader(context.directorToken))
+      .send({ status: 'approved' })
+      .expect(403);
+    await request(server)
+      .post(`/quotes/${quoteId}/finalize`)
+      .set(authHeader(context.directorToken))
+      .send({})
+      .expect(403);
+
+    const docx = await request(server)
+      .get(`/quotes/${quoteId}/docx`)
+      .set(authHeader(context.headToken))
+      .buffer(true)
+      .parse((response, callback) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
+        response.on('end', () => callback(null, Buffer.concat(chunks)));
+      })
+      .expect(200);
+    const xml = await (
+      await JSZip.loadAsync(docx.body as Buffer)
+    )
+      .file('word/document.xml')!
+      .async('string');
+    const text = [...xml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)]
+      .map((match) => match[1])
+      .join('');
+    expect(text).toContain(
+      'на поставку HPL-панелей, фасадной подсистемы и монтажные работы',
+    );
+    expect(text).toContain('Фасадная подсистема');
+    expect(text).toContain('Монтажные работы');
+    expect(text).toContain('8000.00 USD');
+    expect(text).toContain('15000.00 USD');
+    expect(text).toContain('Цена за м² с НДС 12%');
+    expect(text).not.toContain(quoteId);
+    expect(text).not.toMatch(/purchasePrice|contractorName|INTERNAL/);
+
+    const lead = await prisma.lead.findUniqueOrThrow({ where: { id: leadId } });
+    expect(lead.dealId).toBeTruthy();
+    expect(await prisma.deal.count({ where: { id: lead.dealId! } })).toBe(1);
+    expect(await prisma.lead.count({ where: { id: leadId } })).toBe(1);
+    expect(Object.values(RoleName)).not.toContain('INSTALLER');
+  });
+
+  it('Stage 5 keeps Quote v1 immutable after a new installation approval and stores v2 separately', async () => {
+    const { leadId } = await prepareInstallationCommercial(context.headToken);
+    await confirmLeadStage2(leadId);
+    const v1Id = await headQuoteFromExistingLead(leadId);
+    const v1Before = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: v1Id },
+      include: { componentSnapshots: true, items: true },
+    });
+    expect(
+      Number(
+        v1Before.componentSnapshots.find((item) => item.kind === 'INSTALLATION')
+          ?.customerAmount,
+      ),
+    ).toBe(15000);
+    const v1Pdf = v1Before.pdfFileId;
+
+    await request(server)
+      .patch(`/engineering/leads/${leadId}/installation`)
+      .set(authHeader(context.engineerToken))
+      .send({
+        expectedRevision: 2,
+        items: [
+          {
+            workTypeId: (
+              await prisma.installationCalculationItem.findFirstOrThrow({
+                where: { calculation: { leadId } },
+              })
+            ).workTypeId,
+            quantity: '1200',
+          },
+        ],
+      })
+      .expect(200);
+
+    const reprice = await request(server)
+      .post(`/leads/${leadId}/installation-commercial/revisions`)
+      .set(authHeader(context.headToken))
+      .expect(201);
+    const workspace = await request(server)
+      .get(`/leads/${leadId}/installation-commercial`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    const commercial = bodyAs<{
+      calculation: { revision: number; items: Array<{ id: string }> };
+    }>(workspace);
+    const rate = await prisma.installationContractorRate.findFirstOrThrow({
+      where: {
+        workTypeId: (
+          await prisma.installationCalculationItem.findFirstOrThrow({
+            where: { calculation: { leadId } },
+          })
+        ).workTypeId!,
+      },
+    });
+    const patched = await request(server)
+      .patch(`/leads/${leadId}/installation-commercial`)
+      .set(authHeader(context.headToken))
+      .send({
+        expectedRevision: commercial.calculation.revision,
+        selections: [
+          { itemId: commercial.calculation.items[0].id, rateId: rate.id },
+        ],
+        proposedCustomerAmount: '17000',
+        proposedCurrency: 'USD',
+      })
+      .expect(200);
+    const submitted = await request(server)
+      .post(`/leads/${leadId}/installation-commercial/submit`)
+      .set(authHeader(context.headToken))
+      .send({
+        expectedRevision: bodyAs<{ revision: number }>(patched).revision,
+      })
+      .expect(201);
+    await request(server)
+      .post(`/leads/${leadId}/installation-commercial/approve`)
+      .set(authHeader(context.headToken))
+      .send({
+        expectedRevision: bodyAs<{ revision: number }>(submitted).revision,
+      })
+      .expect(201);
+
+    const v2Id = bodyAs<EntityResponse>(
+      await request(server)
+        .post(`/quotes/${v1Id}/versions`)
+        .set(authHeader(context.headToken))
+        .send({ acknowledgeStaleComponents: true })
+        .expect(201),
+    ).id;
+
+    const v1After = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: v1Id },
+      include: { componentSnapshots: true, items: true },
+    });
+    expect(v1After.pdfFileId).toBe(v1Pdf);
+    expect(
+      Number(
+        v1After.componentSnapshots.find((item) => item.kind === 'INSTALLATION')
+          ?.customerAmount,
+      ),
+    ).toBe(15000);
+    expect(v1After.cnyUsdRate?.toString()).toBe(v1Before.cnyUsdRate?.toString());
+
+    const v2 = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: v2Id },
+      include: { componentSnapshots: true, items: true },
+    });
+    expect(v2.versionNumber).toBe(2);
+    expect(v2.cnyUsdRate?.toString()).toBe(v1Before.cnyUsdRate?.toString());
+    expect(
+      Number(
+        v2.componentSnapshots.find((item) => item.kind === 'INSTALLATION')
+          ?.customerAmount,
+      ),
+    ).toBe(17000);
+
+    await request(server)
+      .post(`/quotes/${v2Id}/finalize`)
+      .set(authHeader(context.headToken))
+      .send({})
+      .expect(200);
+    const v2Ready = await prisma.panelQuote.findUniqueOrThrow({
+      where: { id: v2Id },
+    });
+    expect(v2Ready.pdfFileId).toBeTruthy();
+    expect(v2Ready.pdfFileId).not.toBe(v1Pdf);
+    await request(server)
+      .get(`/quotes/${v1Id}/pdf`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    await request(server)
+      .get(`/quotes/${v2Id}/pdf`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+  });
+
   async function createClientAcceptedHplDeal(
     installationRequired = false,
   ): Promise<{
@@ -7783,6 +8140,217 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     return { leadId, quotesBefore, dealsBefore };
   }
 
+  async function prepareAllThreeCommercial(): Promise<{
+    leadId: string;
+    facadeRevision: number;
+    installationRevision: number;
+  }> {
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Stage5 all-three ${RUN_ID}-${Math.random().toString(16).slice(2)}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(leadResponse).id;
+    await qualifyLeadStage1(leadId, true);
+    await prisma.leadQualification.update({
+      where: { leadId },
+      data: { ventFacadeKitRequired: true },
+    });
+    await request(server)
+      .post(`/engineering/leads/${leadId}/assign`)
+      .set(authHeader(context.managerToken))
+      .send({ engineerId: context.engineerId })
+      .expect(201);
+
+    await request(server)
+      .post(`/engineering/leads/${leadId}/facade/calculate`)
+      .set(authHeader(context.engineerToken))
+      .send({
+        configCode: 'HPL_FACADE_BASE_1220_3050',
+        claddingAreaM2: '1000',
+      })
+      .expect(201);
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: `QA-SUP-${RUN_ID}` },
+    });
+    const materials = await prisma.facadeMaterial.findMany({
+      where: { isActive: true, category: { not: 'HPL' } },
+    });
+    for (const material of materials) {
+      await request(server)
+        .post('/references/facade-offers')
+        .set(authHeader(context.headToken))
+        .send({
+          materialId: material.id,
+          supplierId: supplier.id,
+          purchasePrice: '1.5',
+          currency: 'USD',
+          unit: material.unit,
+          validFrom: new Date().toISOString(),
+        })
+        .expect(201);
+    }
+    await request(server)
+      .post(`/leads/${leadId}/facade-commercial`)
+      .set(authHeader(context.directorToken))
+      .expect(201);
+    const facadeWorkspace = await request(server)
+      .get(`/leads/${leadId}/facade-commercial`)
+      .set(authHeader(context.directorToken))
+      .expect(200);
+    const facadeBody = bodyAs<{
+      calculation: {
+        revision: number;
+        items: Array<{
+          id: string;
+          excludedFromSubsystemCommercialCost: boolean;
+          materialCode: string;
+        }>;
+      };
+      offers: Array<{ id: string; materialCode: string; isActive: boolean }>;
+    }>(facadeWorkspace);
+    const facadeSelections = facadeBody.calculation.items
+      .filter((item) => !item.excludedFromSubsystemCommercialCost)
+      .map((item) => ({
+        itemId: item.id,
+        offerId:
+          facadeBody.offers.find(
+            (offer) => offer.materialCode === item.materialCode && offer.isActive,
+          )?.id ?? null,
+      }));
+    const facadePatched = await request(server)
+      .patch(`/leads/${leadId}/facade-commercial`)
+      .set(authHeader(context.directorToken))
+      .send({
+        expectedRevision: facadeBody.calculation.revision,
+        selections: facadeSelections,
+        proposedCustomerAmount: '8000',
+        proposedCurrency: 'USD',
+      })
+      .expect(200);
+    const facadeSubmitted = await request(server)
+      .post(`/leads/${leadId}/facade-commercial/submit`)
+      .set(authHeader(context.directorToken))
+      .send({
+        expectedRevision: bodyAs<{ revision: number }>(facadePatched).revision,
+      })
+      .expect(201);
+    await request(server)
+      .post(`/leads/${leadId}/facade-commercial/approve`)
+      .set(authHeader(context.directorToken))
+      .send({
+        expectedRevision: bodyAs<{ revision: number }>(facadeSubmitted).revision,
+      })
+      .expect(201);
+
+    const suffix = Math.random().toString(16).slice(2, 8);
+    const workTypeResponse = await request(server)
+      .post('/references/installation-work-types')
+      .set(authHeader(context.headToken))
+      .send({
+        code: `hpl_install_all3_${suffix}`,
+        nameRu: 'Монтаж HPL',
+        nameUz: 'HPL montaj',
+        nameEn: 'HPL install',
+        unit: 'M2',
+        category: 'CLADDING',
+      })
+      .expect(201);
+    const workTypeId = bodyAs<EntityResponse>(workTypeResponse).id;
+    const contractorResponse = await request(server)
+      .post('/references/installation-contractors')
+      .set(authHeader(context.headToken))
+      .send({
+        name: `Crew all3 ${suffix}`,
+        type: 'INTERNAL_CREW',
+      })
+      .expect(201);
+    const contractorId = bodyAs<EntityResponse>(contractorResponse).id;
+    const rateResponse = await request(server)
+      .post('/references/installation-rates')
+      .set(authHeader(context.headToken))
+      .send({
+        contractorId,
+        workTypeId,
+        unit: 'M2',
+        pricePerUnit: '12',
+        currency: 'USD',
+        validFrom: new Date().toISOString(),
+      })
+      .expect(201);
+    const rateId = bodyAs<EntityResponse>(rateResponse).id;
+    const saved = await request(server)
+      .patch(`/engineering/leads/${leadId}/installation`)
+      .set(authHeader(context.engineerToken))
+      .send({
+        items: [{ workTypeId, quantity: '1000', quantitySource: 'MANUAL' }],
+      })
+      .expect(200);
+    await request(server)
+      .post(`/engineering/leads/${leadId}/installation/complete`)
+      .set(authHeader(context.engineerToken))
+      .send({ expectedRevision: bodyAs<{ revision: number }>(saved).revision })
+      .expect(201);
+    await request(server)
+      .post(`/leads/${leadId}/installation-commercial`)
+      .set(authHeader(context.headToken))
+      .expect(201);
+    const installWorkspace = await request(server)
+      .get(`/leads/${leadId}/installation-commercial`)
+      .set(authHeader(context.headToken))
+      .expect(200);
+    const installBody = bodyAs<{
+      calculation: { revision: number; items: Array<{ id: string }> };
+    }>(installWorkspace);
+    const installPatched = await request(server)
+      .patch(`/leads/${leadId}/installation-commercial`)
+      .set(authHeader(context.headToken))
+      .send({
+        expectedRevision: installBody.calculation.revision,
+        selections: [
+          { itemId: installBody.calculation.items[0].id, rateId },
+        ],
+        proposedCustomerAmount: '15000',
+        proposedCurrency: 'USD',
+      })
+      .expect(200);
+    const installSubmitted = await request(server)
+      .post(`/leads/${leadId}/installation-commercial/submit`)
+      .set(authHeader(context.headToken))
+      .send({
+        expectedRevision: bodyAs<{ revision: number }>(installPatched).revision,
+      })
+      .expect(201);
+    await request(server)
+      .post(`/leads/${leadId}/installation-commercial/approve`)
+      .set(authHeader(context.headToken))
+      .send({
+        expectedRevision: bodyAs<{ revision: number }>(installSubmitted)
+          .revision,
+      })
+      .expect(201);
+
+    const facade = await prisma.facadeCommercialCalculation.findFirstOrThrow({
+      where: { leadId, status: 'APPROVED' },
+      orderBy: { revision: 'desc' },
+    });
+    const installation =
+      await prisma.installationCommercialCalculation.findFirstOrThrow({
+        where: { leadId, status: 'APPROVED' },
+        orderBy: { revision: 'desc' },
+      });
+
+    return {
+      leadId,
+      facadeRevision: facade.revision,
+      installationRevision: installation.revision,
+    };
+  }
+
   async function qualifyLeadStage1(
     leadId: string,
     installationRequired = false,
@@ -7952,6 +8520,81 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .expect(200);
 
     return quoteId;
+  }
+
+  async function headQuoteFromExistingLead(leadId: string): Promise<string> {
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'exterior_with_uv' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1220, heightMm: 2440 },
+    });
+    const supplier = await prisma.supplier.findFirstOrThrow({
+      where: { code: 'wuya' },
+    });
+    const qualityClass = await prisma.qualityClass.findFirstOrThrow({
+      where: { code: 'economy' },
+    });
+    const calculationRequest = await request(server)
+      .post('/calculations/requests')
+      .set(authHeader(context.managerToken))
+      .send({
+        leadId,
+        notes: 'Stage 5 combined quote request',
+        calculations: [
+          {
+            title: 'Main facade',
+            items: [
+              {
+                panelTypeId: panelType.id,
+                panelSizeId: panelSize.id,
+                thicknessMm: 10,
+                qualityClassId: qualityClass.id,
+                requiredAreaM2: '15.50',
+                supplierId: supplier.id,
+              },
+            ],
+          },
+        ],
+      })
+      .expect(201);
+    const requestId = bodyAs<EntityResponse>(calculationRequest).id;
+    await request(server)
+      .post(`/calculations/requests/${requestId}/submit`)
+      .set(authHeader(context.managerToken))
+      .expect(201);
+    const quoteResponse = await request(server)
+      .post(`/calculations/requests/${requestId}/convert-to-quote`)
+      .set(authHeader(context.headToken))
+      .send({ clientComment: 'Stage 5 quote' })
+      .expect(201);
+    const quote = bodyAs<EntityResponse & { items: EntityResponse[] }>(
+      quoteResponse,
+    );
+    await request(server)
+      .patch(`/quotes/${quote.id}/approved-pricing`)
+      .set(authHeader(context.headToken))
+      .send({
+        items: quote.items.map((item, index) => ({
+          id: item.id,
+          purchasePricePerM2Cny: String(80 + index * 10),
+        })),
+      })
+      .expect(200);
+    await request(server)
+      .patch(`/quotes/${quote.id}/commercial-terms`)
+      .set(authHeader(context.headToken))
+      .send({
+        productionTerms: '15–20 рабочих дней',
+        deliveryTerms: 'Ориентировочно 4 недели после утверждения декора',
+      })
+      .expect(200);
+    await request(server)
+      .post(`/quotes/${quote.id}/finalize`)
+      .set(authHeader(context.headToken))
+      .send({})
+      .expect(200);
+    return quote.id;
   }
 
   function skuItemPayload(

@@ -121,6 +121,16 @@ describe('QuotesService stock-only fulfillment', () => {
       { persistFinalPdf: jest.fn() } as never,
       { calculate: jest.fn() } as never,
       { getActiveCnyUsdRate: jest.fn() } as never,
+      {
+        attachToQuote: jest.fn().mockResolvedValue(undefined),
+        incomingExtraKinds: jest.fn().mockResolvedValue([]),
+        shouldPreserveHplSnapshot: jest.fn().mockReturnValue(false),
+        compositionView: jest.fn().mockReturnValue({
+          components: [],
+          totals: { byCurrency: [], grandTotal: null },
+        }),
+        preview: jest.fn(),
+      } as never,
     );
     return { prisma, dealFactory, stock, inventory, service };
   }
