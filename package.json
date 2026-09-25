@@ -19,6 +19,7 @@
     "migrate:status": "prisma migrate status",
     "db:seed": "prisma db seed",
     "db:seed:reference": "ts-node prisma/seed-reference.ts",
+    "db:seed:facade-reference": "ts-node prisma/seed-facade-reference.ts",
     "db:seed:prod": "NODE_ENV=production npx prisma db seed --config prisma.postgres.config.ts",
     "prisma:prod:generate": "prisma generate --config prisma.postgres.config.ts",
     "prisma:prod:deploy": "prisma migrate deploy --config prisma.postgres.config.ts",
