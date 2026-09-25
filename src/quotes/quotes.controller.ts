@@ -29,6 +29,7 @@ import {
 } from './dto/update-quote-approved-pricing.dto';
 import { UpdateQuoteCommercialTermsDto } from './dto/update-quote-commercial-terms.dto';
 import { UpdateQuoteStatusDto } from './dto/update-quote-status.dto';
+import { MarkCustomerAcceptedDto } from './dto/mark-customer-accepted.dto';
 import { QUOTE_PERMISSIONS } from './quote.constants';
 import { QuotesService } from './quotes.service';
 import { QuoteDocumentService } from './quote-document.service';
@@ -217,15 +218,17 @@ export class QuotesController {
 
   @Post(':id/client-accept')
   @HttpCode(200)
-  @RequirePermissions(QUOTE_PERMISSIONS.CLIENT_ACCEPT)
+  @RequirePermissions(QUOTE_PERMISSIONS.MARK_CUSTOMER_ACCEPTED)
   @ApiOperation({
-    summary: 'Record that the customer accepted this internally approved Quote',
+    summary:
+      'Record that the customer accepted this exact finalized Quote version',
   })
   recordClientAcceptance(
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: MarkCustomerAcceptedDto,
     @CurrentUser() user: CurrentUserType,
   ) {
-    return this.quotesService.recordClientAcceptance(id, user);
+    return this.quotesService.recordClientAcceptance(id, user, dto?.note);
   }
 
   @Post(':id/convert-to-deal')

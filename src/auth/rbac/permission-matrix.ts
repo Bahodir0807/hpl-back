@@ -75,6 +75,10 @@ export const PERMISSION_DEFINITIONS = [
   ['quotes:update', 'Update panel quote status'],
   ['quotes:approve', 'Approve panel quotes (privileged commercial approval)'],
   ['quotes:client_accept', 'Record customer acceptance of an approved quote'],
+  [
+    'quotes:mark_customer_accepted',
+    'Mark a finalized quote version as accepted by the customer and open execution handoff',
+  ],
   ['supplier_orders:manage', 'Create and operate client Deal supplier orders'],
   [
     'supplier_orders:confirm_client_delivery',
@@ -279,6 +283,7 @@ const HEAD_PERMISSIONS: PermissionSlug[] = [
   'quotes:create',
   'quotes:update',
   'quotes:approve',
+  'quotes:mark_customer_accepted',
   'currency_rates:read',
   'supplier_orders:manage',
   'supplier_orders:confirm_client_delivery',
@@ -335,6 +340,7 @@ const MANAGER_PERMISSIONS: PermissionSlug[] = [
   'quotes:create',
   'quotes:update',
   'quotes:client_accept',
+  'quotes:mark_customer_accepted',
   'currency_rates:read',
   'supplier_orders:confirm_client_delivery',
 ];
@@ -397,6 +403,7 @@ export const BUSINESS_MUTATION_PERMISSIONS = [
   'reports:manage_plans',
   'quotes:approve',
   'quotes:client_accept',
+  'quotes:mark_customer_accepted',
   'leads:commercial_qualify',
   'currency_rates:manage',
   'panel_pricing:manage',

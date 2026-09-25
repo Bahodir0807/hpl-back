@@ -204,6 +204,31 @@ describe('permission matrix', () => {
     expect(roleHasPermission(RoleName.DIRECTOR, 'admin:queues')).toBe(false);
   });
 
+  it('lets MANAGER and HEAD mark customer acceptance without quotes:approve for DIRECTOR', () => {
+    expect(
+      roleHasPermission(RoleName.MANAGER, 'quotes:mark_customer_accepted'),
+    ).toBe(true);
+    expect(
+      roleHasPermission(RoleName.HEAD, 'quotes:mark_customer_accepted'),
+    ).toBe(true);
+    expect(roleHasPermission(RoleName.DIRECTOR, 'quotes:approve')).toBe(false);
+    expect(
+      roleHasPermission(RoleName.DIRECTOR, 'quotes:mark_customer_accepted'),
+    ).toBe(false);
+    expect(
+      roleHasPermission(RoleName.ENGINEER, 'quotes:mark_customer_accepted'),
+    ).toBe(false);
+    expect(
+      roleHasPermission(RoleName.ACCOUNTANT, 'quotes:mark_customer_accepted'),
+    ).toBe(false);
+    expect(
+      roleHasPermission(RoleName.STOREKEEPER, 'quotes:mark_customer_accepted'),
+    ).toBe(false);
+    expect(
+      (RoleName as Record<string, string | undefined>).INSTALLER,
+    ).toBeUndefined();
+  });
+
   it('gives Quote client acceptance only to MANAGER', () => {
     expect(roleHasPermission(RoleName.MANAGER, 'quotes:client_accept')).toBe(
       true,

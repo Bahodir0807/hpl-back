@@ -110,9 +110,20 @@ describe('QuotesService', () => {
     product: { findUnique: jest.fn() },
     supplier: { findUnique: jest.fn() },
     task: { create: jest.fn() },
-    notification: { create: jest.fn() },
+    notification: {
+      create: jest.fn(),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
     deal: { findFirst: jest.fn(), update: jest.fn() },
     dealStageHistory: { create: jest.fn() },
+    dealExecutionHandoff: {
+      findUnique: jest.fn().mockResolvedValue(null),
+      findFirst: jest.fn().mockResolvedValue(null),
+      aggregate: jest.fn().mockResolvedValue({ _max: { revision: null } }),
+      create: jest.fn().mockResolvedValue({ id: 'handoff-1' }),
+      update: jest.fn(),
+    },
+    dealExecutionComponent: { createMany: jest.fn() },
     $queryRaw: jest.fn(),
     $transaction: jest.fn(),
   };
@@ -1915,9 +1926,20 @@ describe('QuotesService', () => {
       leadId: 'lead-id',
       managerId: 'manager-id',
       status: QUOTE_STATUS.APPROVED,
+      finalizedAt: new Date('2026-08-17T09:00:00.000Z'),
+      versionNumber: 1,
+      totalAmount: new Prisma.Decimal('1000'),
+      displayCurrency: 'USD',
+      cnyUsdRate: new Prisma.Decimal('0.14'),
       clientAcceptedAt: null,
       clientAcceptedById: null,
       items: [],
+      componentSnapshots: [],
+    });
+    prisma.lead.findUnique.mockResolvedValue({ dealId: 'deal-id' });
+    prisma.deal.findFirst.mockResolvedValue({
+      id: 'deal-id',
+      stage: 'NEGOTIATION',
     });
     prisma.panelQuote.updateMany.mockResolvedValue({ count: 1 });
     prisma.panelQuote.findUniqueOrThrow.mockResolvedValue({
@@ -2013,11 +2035,252 @@ describe('QuotesService', () => {
       items: [],
     };
     prisma.panelQuote.findUnique.mockResolvedValue(accepted);
+    prisma.dealExecutionHandoff.findUnique.mockResolvedValue({
+      id: 'handoff-1',
+      revision: 1,
+    });
 
     const result = await service.recordClientAcceptance('quote-id', manager);
 
     expect(result.clientAcceptedAt).toEqual(accepted.clientAcceptedAt);
     expect(prisma.panelQuote.updateMany).not.toHaveBeenCalled();
     expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    expect(prisma.dealExecutionHandoff.create).not.toHaveBeenCalled();
+    expect(prisma.notification.create).not.toHaveBeenCalled();
+  });
+
+  it('repairs a missing execution handoff when client acceptance already exists', async () => {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      dealId: 'deal-id',
+      status: QUOTE_STATUS.APPROVED,
+      versionNumber: 1,
+      totalAmount: new Prisma.Decimal('1000'),
+      displayCurrency: 'USD',
+      clientAcceptedAt: new Date('2026-08-17T10:00:00.000Z'),
+      clientAcceptedById: 'manager-id',
+      items: [],
+      componentSnapshots: [],
+    });
+    prisma.dealExecutionHandoff.findUnique.mockResolvedValue(null);
+    prisma.lead.findUnique.mockResolvedValue({
+      dealId: 'deal-id',
+      ownerId: 'manager-id',
+    });
+
+    await service.recordClientAcceptance('quote-id', manager);
+
+    expect(prisma.panelQuote.updateMany).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    expect(prisma.dealExecutionHandoff.create).toHaveBeenCalledTimes(1);
+  });
+
+  const headAcceptor: CurrentUser = {
+    ...head,
+    permissions: [...head.permissions, 'quotes:mark_customer_accepted'],
+  };
+
+  function primeFinalizedQuote(
+    overrides: Record<string, unknown> = {},
+  ): void {
+    prisma.panelQuote.findUnique.mockResolvedValue({
+      id: 'quote-id',
+      leadId: 'lead-id',
+      managerId: 'manager-id',
+      status: QUOTE_STATUS.APPROVED,
+      finalizedAt: new Date('2026-08-17T09:00:00.000Z'),
+      versionNumber: 1,
+      totalAmount: new Prisma.Decimal('1000'),
+      displayCurrency: 'USD',
+      cnyUsdRate: new Prisma.Decimal('0.14'),
+      sellingCoefficient: new Prisma.Decimal('2'),
+      clientAcceptedAt: null,
+      items: [],
+      componentSnapshots: [
+        {
+          kind: 'HPL',
+          label: 'HPL',
+          sourceRevision: null,
+          technicalRevision: null,
+          customerAmount: new Prisma.Decimal('1000'),
+          currency: 'USD',
+          customerSnapshot: { amount: '1000', currency: 'USD' },
+        },
+      ],
+      ...overrides,
+    });
+    prisma.lead.findUnique.mockResolvedValue({ dealId: 'deal-id' });
+    prisma.deal.findFirst.mockResolvedValue({
+      id: 'deal-id',
+      stage: 'NEGOTIATION',
+    });
+    prisma.panelQuote.updateMany.mockResolvedValue({ count: 1 });
+    prisma.panelQuote.findUniqueOrThrow.mockResolvedValue({
+      id: 'quote-id',
+      managerId: 'manager-id',
+      leadId: 'lead-id',
+      versionNumber: 1,
+      status: QUOTE_STATUS.APPROVED,
+      clientAcceptedAt: new Date('2026-08-17T10:00:00.000Z'),
+      clientAcceptedById: 'manager-id',
+      items: [],
+    });
+  }
+
+  it('rejects a draft quote', async () => {
+    primeFinalizedQuote({ status: QUOTE_STATUS.DRAFT, finalizedAt: null });
+    await expect(
+      service.recordClientAcceptance('quote-id', manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ errorCode: 'QUOTE_NOT_APPROVED' }),
+    });
+  });
+
+  it('rejects a non-finalized approved quote', async () => {
+    primeFinalizedQuote({ finalizedAt: null });
+    await expect(
+      service.recordClientAcceptance('quote-id', manager),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({ errorCode: 'QUOTE_NOT_FINALIZED' }),
+    });
+  });
+
+  it('lets HEAD mark a finalized quote accepted', async () => {
+    primeFinalizedQuote();
+    const result = await service.recordClientAcceptance(
+      'quote-id',
+      headAcceptor,
+      'Клиент подтвердил по телефону',
+    );
+    expect(result.clientAcceptedById).toBe('manager-id');
+    expect(prisma.dealExecutionHandoff.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          quoteId: 'quote-id',
+          quoteVersion: 1,
+          acceptanceNote: 'Клиент подтвердил по телефону',
+          dealId: 'deal-id',
+          leadId: 'lead-id',
+        }),
+      }),
+    );
+  });
+
+  it('forbids an engineer from marking acceptance', async () => {
+    primeFinalizedQuote();
+    const engineer: CurrentUser = {
+      ...manager,
+      id: 'engineer-id',
+      roles: ['ENGINEER'],
+      permissions: ['leads:read', 'engineering:read'],
+    };
+    await expect(
+      service.recordClientAcceptance('quote-id', engineer),
+    ).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errorCode: 'QUOTE_CLIENT_ACCEPT_FORBIDDEN',
+      }),
+    });
+  });
+
+  it('creates one HPL-only handoff and does not create a lead or deal', async () => {
+    primeFinalizedQuote();
+    await service.recordClientAcceptance('quote-id', manager);
+    expect(prisma.dealExecutionHandoff.create).toHaveBeenCalledTimes(1);
+    const rows = prisma.dealExecutionComponent.createMany.mock.calls[0][0]
+      .data as Array<{ kind: string }>;
+    expect(rows.map((row) => row.kind)).toEqual(['HPL']);
+    expect(prisma.lead.update).not.toHaveBeenCalled();
+    expect(prisma.deal.update).toHaveBeenCalled();
+  });
+
+  it('stores facade and installation only when the accepted quote includes them', async () => {
+    primeFinalizedQuote({
+      componentSnapshots: [
+        {
+          kind: 'HPL',
+          label: 'HPL',
+          customerAmount: new Prisma.Decimal('1000'),
+          currency: 'USD',
+          customerSnapshot: {},
+        },
+        {
+          kind: 'FACADE',
+          label: 'Подсистема',
+          sourceRevision: 2,
+          technicalRevision: 4,
+          customerAmount: new Prisma.Decimal('500'),
+          currency: 'USD',
+          customerSnapshot: { amount: '500' },
+        },
+        {
+          kind: 'INSTALLATION',
+          label: 'Монтаж',
+          sourceRevision: 1,
+          technicalRevision: 3,
+          customerAmount: new Prisma.Decimal('300'),
+          currency: 'USD',
+          customerSnapshot: { amount: '300' },
+        },
+      ],
+    });
+    await service.recordClientAcceptance('quote-id', manager);
+    const rows = prisma.dealExecutionComponent.createMany.mock.calls[0][0]
+      .data as Array<{ kind: string; technicalRevision: number | null }>;
+    expect(rows.map((row) => row.kind)).toEqual([
+      'HPL',
+      'FACADE',
+      'INSTALLATION',
+    ]);
+    expect(rows.find((row) => row.kind === 'INSTALLATION')?.technicalRevision).toBe(
+      3,
+    );
+  });
+
+  it('does not replace an accepted version when a newer quote exists until that version is accepted', async () => {
+    primeFinalizedQuote();
+    prisma.dealExecutionHandoff.findUnique.mockResolvedValue({
+      id: 'handoff-v1',
+      revision: 1,
+    });
+    await service.recordClientAcceptance('quote-id', manager);
+    expect(prisma.dealExecutionHandoff.create).not.toHaveBeenCalled();
+    expect(prisma.dealExecutionHandoff.update).not.toHaveBeenCalled();
+  });
+
+  it('supersedes v1 when v2 is explicitly accepted and keeps the v1 row', async () => {
+    primeFinalizedQuote({ id: 'quote-v2', versionNumber: 2 });
+    prisma.dealExecutionHandoff.findUnique.mockResolvedValue(null);
+    prisma.panelQuote.findUniqueOrThrow.mockResolvedValue({
+      id: 'quote-v2',
+      managerId: 'manager-id',
+      leadId: 'lead-id',
+      versionNumber: 2,
+      clientAcceptedAt: new Date(),
+      clientAcceptedById: 'manager-id',
+      items: [],
+    });
+    prisma.dealExecutionHandoff.findFirst.mockResolvedValue({
+      id: 'handoff-v1',
+      quoteId: 'quote-v1',
+      quoteVersion: 1,
+    });
+    prisma.dealExecutionHandoff.aggregate.mockResolvedValue({
+      _max: { revision: 1 },
+    });
+    await service.recordClientAcceptance('quote-v2', manager);
+    expect(prisma.dealExecutionHandoff.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'handoff-v1' },
+        data: { status: 'SUPERSEDED' },
+      }),
+    );
+    expect(prisma.dealExecutionHandoff.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ quoteVersion: 2, revision: 2 }),
+      }),
+    );
   });
 });

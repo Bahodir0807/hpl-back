@@ -7,6 +7,11 @@ import { PrismaService } from '../prisma/prisma.service';
 import { toCommercialPrefill } from './lead-commercial-qualification.mapper';
 import { toCalculationRequirementPrefill } from './lead-qualification.mapper';
 import { LeadVirtualStatusService } from './lead-virtual-status.service';
+import { canAccessLeadRecord } from './engineering/engineering-access';
+import {
+  notifyStaleExecutionBasis,
+  readExecutionHandoff,
+} from '../../quotes/execution-handoff';
 
 const leadWorkspaceInclude = Prisma.validator<Prisma.LeadInclude>()({
   owner: {
@@ -234,5 +239,39 @@ export class LeadWorkspaceService {
         recentColors,
       },
     };
+  }
+
+  async getExecution(leadId: string, user: CurrentUser) {
+    const lead = await this.prisma.lead.findFirst({
+      where: { id: leadId, deletedAt: null },
+      select: { id: true, ownerId: true },
+    });
+    if (!lead) {
+      throw new BusinessException(
+        HttpStatus.NOT_FOUND,
+        'LEAD_NOT_FOUND',
+        'Лид не найден',
+      );
+    }
+    const allowed = await canAccessLeadRecord(
+      this.prisma,
+      lead,
+      user.id,
+      user.permissions,
+    );
+    if (!allowed) {
+      throw new BusinessException(
+        HttpStatus.FORBIDDEN,
+        'FORBIDDEN',
+        'У вас нет доступа к этому лиду',
+      );
+    }
+    const view = await readExecutionHandoff(this.prisma, leadId);
+    try {
+      await notifyStaleExecutionBasis(this.prisma, view, lead.ownerId);
+    } catch {
+      // Notification failure must not hide the execution basis.
+    }
+    return view;
   }
 }

@@ -15,6 +15,7 @@ export const QUOTE_PERMISSIONS = {
   UPDATE: 'quotes:update',
   APPROVE: 'quotes:approve',
   CLIENT_ACCEPT: 'quotes:client_accept',
+  MARK_CUSTOMER_ACCEPTED: 'quotes:mark_customer_accepted',
 } as const;
 
 /**

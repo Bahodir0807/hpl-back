@@ -393,6 +393,7 @@ model User {
   installationCalculationRevisions  InstallationCalculationRevision[] @relation("InstallationCalculationRevisionActor")
   installationCommercialApprovals   InstallationCommercialCalculation[] @relation("InstallationCommercialApprover")
   installationCommercialRevisions   InstallationCommercialCalculationRevision[] @relation("InstallationCommercialRevisionActor")
+  executionHandoffsAccepted         DealExecutionHandoff[]            @relation("ExecutionHandoffAcceptedBy")
 
   @@index([teamId])
   @@index([managerId])
@@ -773,6 +774,7 @@ model Lead {
   calculationRequests           CalculationRequest[]
   calculationSessions           CalculationSession[]
   panelQuotes                   PanelQuote[]
+  executionHandoffs             DealExecutionHandoff[]
   telegramLeadMetadata          TelegramLeadMetadata?
   qualification                 LeadQualification?
   commercialQualification       LeadCommercialQualification?
@@ -1210,6 +1212,7 @@ model Deal {
   panelQuotes         PanelQuote[]
   supplierOrders      SupplierOrder[]
   installation        DealInstallation?
+  executionHandoffs   DealExecutionHandoff[]
   lostBy              User?                @relation("DealLostBy", fields: [lostById], references: [id], onDelete: SetNull, onUpdate: Cascade)
 
   @@index([clientId])
@@ -2036,6 +2039,7 @@ model PanelQuote {
   componentSnapshots  PanelQuoteComponentSnapshot[]
   previousVersion     PanelQuote?         @relation("QuoteVersions", fields: [previousVersionId], references: [id], onDelete: Restrict, onUpdate: Cascade)
   nextVersion         PanelQuote?         @relation("QuoteVersions")
+  executionHandoff    DealExecutionHandoff?
 
   @@unique([requestId, versionNumber])
   @@index([leadId, status])
@@ -2447,4 +2451,68 @@ model InstallationCommercialCalculationRevision {
   actor                 User                              @relation("InstallationCommercialRevisionActor", fields: [actorId], references: [id], onDelete: Restrict, onUpdate: Cascade)
 
   @@index([commercialCalculationId, createdAt])
+  @@index([actorId])
+}
+
+enum ExecutionHandoffStatus {
+  ACTIVE
+  SUPERSEDED
+}
+
+enum ExecutionComponentStatus {
+  PENDING
+  IN_PROGRESS
+  BLOCKED
+  COMPLETED
+}
+
+model DealExecutionHandoff {
+  id             String                 @id @default(uuid())
+  dealId         String
+  leadId         String
+  quoteId        String                 @unique
+  quoteVersion   Int
+  acceptedAt     DateTime
+  acceptedById   String
+  acceptanceNote String?
+  status         ExecutionHandoffStatus @default(ACTIVE)
+  revision       Int
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  deal       Deal                     @relation(fields: [dealId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  lead       Lead                     @relation(fields: [leadId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  quote      PanelQuote               @relation(fields: [quoteId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  acceptedBy User                     @relation("ExecutionHandoffAcceptedBy", fields: [acceptedById], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  components DealExecutionComponent[]
+
+  @@unique([dealId, revision])
+  // Partial unique index DealExecutionHandoff_one_active_per_deal_idx
+  // enforces a single ACTIVE row per Deal. See migration SQL.
+  @@index([dealId, status])
+  @@index([leadId, status])
+  @@index([acceptedById])
+  @@index([status, createdAt])
+}
+
+model DealExecutionComponent {
+  id                String                   @id @default(uuid())
+  handoffId         String
+  kind              QuoteComponentKind
+  required          Boolean                  @default(true)
+  status            ExecutionComponentStatus @default(PENDING)
+  sourceRevision    Int?
+  technicalRevision Int?
+  customerAmount    Decimal?                 @db.Decimal(18, 8)
+  currency          String?
+  label             String
+  basis             Json
+  createdAt         DateTime                 @default(now())
+  updatedAt         DateTime                 @updatedAt
+
+  handoff DealExecutionHandoff @relation(fields: [handoffId], references: [id], onDelete: Cascade, onUpdate: Cascade)
+
+  @@unique([handoffId, kind])
+  @@index([handoffId])
+  @@index([kind])
 }

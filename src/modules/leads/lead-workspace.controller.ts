@@ -23,6 +23,18 @@ import { LeadWorkspaceService } from './lead-workspace.service';
 export class LeadWorkspaceController {
   constructor(private readonly leadWorkspaceService: LeadWorkspaceService) {}
 
+  @Get(':id/execution')
+  @RequirePermissions('leads:read')
+  @ApiOperation({
+    summary: 'Accepted quote execution handoff for this lead',
+  })
+  getExecution(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: CurrentUserType,
+  ) {
+    return this.leadWorkspaceService.getExecution(id, user);
+  }
+
   @Get(':id/workspace')
   @RequirePermissions('leads:read')
   @ApiOperation({ summary: 'Lead workspace for manager calculator UI' })

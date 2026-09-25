@@ -60,6 +60,10 @@ import { QuoteDocumentService } from './quote-document.service';
 import { QuoteCompositionService } from './quote-composition.service';
 import { customerFacingSnapshot } from './quote-composition';
 import {
+  createExecutionHandoff,
+  notifyExecutionEvents,
+} from './execution-handoff';
+import {
   DEFAULT_QUOTE_VALIDITY_DAYS,
   QUOTE_PERMISSIONS,
   QUOTE_PRICE_NOT_APPROVED,
@@ -1237,9 +1241,15 @@ export class QuotesService {
   async recordClientAcceptance(
     id: string,
     user: CurrentUser,
+    acceptanceNote?: string | null,
   ): Promise<PanelQuoteWithItems> {
     const quote = await this.getQuoteOrThrow(id);
     this.assertQuoteClientAcceptAccess(quote.managerId, user);
+
+    if (quote.clientAcceptedAt) {
+      await this.ensureAcceptedQuoteHandoff(quote, user.id);
+      return quote;
+    }
 
     const internallyApproved =
       quote.status === QUOTE_STATUS.APPROVED ||
@@ -1253,8 +1263,12 @@ export class QuotesService {
       );
     }
 
-    if (quote.clientAcceptedAt) {
-      return quote;
+    if (!quote.finalizedAt) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'QUOTE_NOT_FINALIZED',
+        'Клиентское согласие можно зафиксировать только по финализированной версии КП',
+      );
     }
 
     const acceptedAt = new Date();
@@ -1336,6 +1350,16 @@ export class QuotesService {
         data: { status: LeadStatus.CONVERTED },
       });
 
+      const note = acceptanceNote?.trim() || null;
+      const handoff = await createExecutionHandoff(tx, {
+        dealId,
+        leadId: quote.leadId,
+        quote,
+        acceptedAt,
+        acceptedById: user.id,
+        acceptanceNote: note,
+      });
+
       await tx.activity.create({
         data: {
           type: ActivityType.NOTE,
@@ -1345,7 +1369,10 @@ export class QuotesService {
           metadata: {
             action: 'quote_client_accepted',
             quoteId: quote.id,
+            quoteVersion: quote.versionNumber,
             dealId,
+            handoffId: handoff.handoffId,
+            note,
           },
         },
       });
@@ -1360,30 +1387,30 @@ export class QuotesService {
           newValue: {
             clientAcceptedAt: acceptedAt.toISOString(),
             clientAcceptedById: user.id,
+            quoteVersion: quote.versionNumber,
           },
         },
       });
 
-      return tx.panelQuote.findUniqueOrThrow({
-        where: { id: quote.id },
-        include: quoteInclude,
-      });
+      return {
+        quote: await tx.panelQuote.findUniqueOrThrow({
+          where: { id: quote.id },
+          include: quoteInclude,
+        }),
+        handoff,
+      };
     });
 
     if (claimed) {
       await this.safePostCommit('quote client acceptance notification', () =>
-        this.prisma.notification.create({
-          data: {
-            userId: claimed.managerId,
-            title: 'Quote accepted by client',
-            message: `Quote #${claimed.id.slice(0, 8)} was accepted`,
-            type: 'quote_client_accepted',
-            relatedType: 'Lead',
-            relatedId: claimed.leadId,
-          },
+        notifyExecutionEvents(this.prisma, {
+          managerId: claimed.quote.managerId,
+          leadId: claimed.quote.leadId,
+          quoteVersion: claimed.quote.versionNumber,
+          handoff: claimed.handoff,
         }),
       );
-      return claimed;
+      return claimed.quote;
     }
 
     const latest = await this.getQuoteOrThrow(id);
@@ -1395,6 +1422,43 @@ export class QuotesService {
       HttpStatus.CONFLICT,
       'QUOTE_NOT_APPROVED',
       'Клиентское согласие можно зафиксировать только по внутренне согласованному КП',
+    );
+  }
+
+  private async ensureAcceptedQuoteHandoff(
+    quote: PanelQuoteWithItems,
+    actorId: string,
+  ): Promise<void> {
+    const existing = await this.prisma.dealExecutionHandoff.findUnique({
+      where: { quoteId: quote.id },
+      select: { id: true },
+    });
+    if (existing) return;
+
+    const lead = await this.prisma.lead.findUnique({
+      where: { id: quote.leadId },
+      select: { dealId: true, ownerId: true },
+    });
+    const dealId = quote.dealId ?? lead?.dealId;
+    if (!dealId || !quote.clientAcceptedAt) return;
+
+    const handoff = await this.prisma.$transaction((tx) =>
+      createExecutionHandoff(tx, {
+        dealId,
+        leadId: quote.leadId,
+        quote,
+        acceptedAt: quote.clientAcceptedAt!,
+        acceptedById: quote.clientAcceptedById ?? actorId,
+        acceptanceNote: null,
+      }),
+    );
+    await this.safePostCommit('accepted quote handoff repair', () =>
+      notifyExecutionEvents(this.prisma, {
+        managerId: lead?.ownerId ?? quote.managerId,
+        leadId: quote.leadId,
+        quoteVersion: quote.versionNumber,
+        handoff,
+      }),
     );
   }
 
@@ -2448,21 +2512,28 @@ export class QuotesService {
   }
 
   // Ownership / quotes:read_all is not a customer-contact permission.
+  // HEAD records acceptance only with quotes:mark_customer_accepted.
   private assertQuoteClientAcceptAccess(
     managerId: string,
     user: CurrentUser,
   ): void {
-    if (
+    const canMark = user.permissions.includes(
+      QUOTE_PERMISSIONS.MARK_CUSTOMER_ACCEPTED,
+    );
+    const ownerAccept =
       managerId === user.id &&
-      user.permissions.includes(QUOTE_PERMISSIONS.CLIENT_ACCEPT)
-    ) {
+      (canMark ||
+        user.permissions.includes(QUOTE_PERMISSIONS.CLIENT_ACCEPT));
+    const supervisory =
+      canMark && user.permissions.includes(QUOTE_PERMISSIONS.READ_ALL);
+    if (ownerAccept || supervisory) {
       return;
     }
 
     throw new BusinessException(
       HttpStatus.FORBIDDEN,
       'QUOTE_CLIENT_ACCEPT_FORBIDDEN',
-      'Клиентское согласие фиксирует менеджер, ведущий это КП',
+      'Клиентское согласие фиксирует менеджер, ведущий это КП, или руководитель',
     );
   }
 

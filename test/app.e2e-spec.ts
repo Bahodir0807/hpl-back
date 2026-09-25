@@ -6232,10 +6232,19 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .set(authHeader(foreign.accessToken))
       .expect(403);
 
-    await request(server)
+    const headAccepted = await request(server)
       .post(`/quotes/${quoteId}/client-accept`)
       .set(authHeader(context.headToken))
-      .expect(403);
+      .send({ note: 'HEAD recorded customer acceptance' })
+      .expect(200);
+
+    expect(bodyAs<{ clientAcceptedById: string }>(headAccepted).clientAcceptedById).toBe(
+      context.headId,
+    );
+    const handoffs = await prisma.dealExecutionHandoff.count({
+      where: { quoteId },
+    });
+    expect(handoffs).toBe(1);
   });
 
   it('BP5 client acceptance is idempotent and ignores actor/timestamp injection', async () => {
