@@ -11,7 +11,7 @@ export const FACADE_MATERIAL_CATEGORIES = [
 export type FacadeMaterialCategoryCode =
   (typeof FACADE_MATERIAL_CATEGORIES)[number];
 
-export const FACADE_MATERIAL_UNITS = ['M2', 'PCS', 'LM'] as const;
+export const FACADE_MATERIAL_UNITS = ['M2', 'PCS', 'LM', 'LITER'] as const;
 
 export type FacadeMaterialUnitCode = (typeof FACADE_MATERIAL_UNITS)[number];
 

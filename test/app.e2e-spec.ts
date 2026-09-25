@@ -5550,7 +5550,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .post(`/engineering/leads/${leadId}/facade/calculate`)
       .set(authHeader(context.engineerToken))
       .send({
-        configCode: 'HPL_FACADE_BASE_1220_3050',
+        configCode: 'HPL_DRY_6MM_50MM',
         claddingAreaM2: '1200',
         expectedRevision: 1,
       })
@@ -7937,7 +7937,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .post(`/engineering/leads/${leadId}/facade/calculate`)
       .set(authHeader(context.engineerToken))
       .send({
-        configCode: 'HPL_FACADE_BASE_1220_3050',
+        configCode: 'HPL_DRY_6MM_50MM',
         claddingAreaM2: '1000',
       })
       .expect(201);
@@ -8179,7 +8179,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .post(`/engineering/leads/${leadId}/facade/calculate`)
       .set(authHeader(context.engineerToken))
       .send({
-        configCode: 'HPL_FACADE_BASE_1220_3050',
+        configCode: 'HPL_DRY_6MM_50MM',
         claddingAreaM2: '1000',
       })
       .expect(201);

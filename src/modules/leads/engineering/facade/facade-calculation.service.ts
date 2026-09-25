@@ -17,6 +17,7 @@ import {
   BASE_FACADE_CONFIG_CODE,
   BASE_FACADE_NORM_SET_CODE,
 } from './facade-norms';
+import { FACADE_SYSTEM_META } from './facade-system-tables';
 import { decimalToString, multiplyAreaByNorm, toDecimal } from './facade-decimal';
 import type {
   FacadeAddItemDto,
@@ -49,6 +50,17 @@ export class FacadeCalculationService {
     const [configs, catalog, calculation] = await Promise.all([
       this.prisma.facadeSystemConfig.findMany({
         orderBy: { code: 'asc' },
+        include: {
+          normSets: {
+            where: { isCurrent: true },
+            include: {
+              norms: {
+                include: { material: true },
+                orderBy: { sortOrder: 'asc' },
+              },
+            },
+          },
+        },
       }),
       this.prisma.facadeMaterial.findMany({
         where: { isActive: true },
@@ -70,17 +82,38 @@ export class FacadeCalculationService {
       canEdit,
       assignmentId: assignment?.id ?? null,
       suggestedArea: this.suggestArea(qualification),
-      configs: configs.map((config) => ({
-        id: config.id,
-        code: config.code,
-        nameRu: config.nameRu,
-        nameEn: config.nameEn,
-        nameUz: config.nameUz,
-        isCalculable: config.isCalculable,
-        panelWidthMm: config.panelWidthMm,
-        panelHeightMm: config.panelHeightMm,
-        panelAreaM2: decimalToString(config.panelAreaM2),
-      })),
+      configs: configs.map((config) => {
+        const meta = FACADE_SYSTEM_META[config.code];
+        const current = config.normSets?.[0];
+        return {
+          id: config.id,
+          code: config.code,
+          nameRu: config.nameRu,
+          nameEn: config.nameEn,
+          nameUz: config.nameUz,
+          isCalculable: config.isCalculable,
+          panelWidthMm: config.panelWidthMm,
+          panelHeightMm: config.panelHeightMm,
+          panelAreaM2: decimalToString(config.panelAreaM2),
+          hplThicknessMm: meta?.hplThicknessMm ?? null,
+          insulationThicknessMm: meta?.insulationThicknessMm ?? null,
+          fastening: meta?.fastening ?? null,
+          legacy: config.code === BASE_FACADE_CONFIG_CODE,
+          selectable:
+            config.code !== BASE_FACADE_CONFIG_CODE ||
+            calculation?.config.code === BASE_FACADE_CONFIG_CODE,
+          norms: (current?.norms ?? []).map((norm) => ({
+            code: norm.material.code,
+            nameRu: norm.material.nameRu,
+            nameEn: norm.material.nameEn,
+            nameUz: norm.material.nameUz,
+            unit: norm.unit,
+            qtyPerM2: decimalToString(norm.qtyPerM2),
+            sortOrder: norm.sortOrder,
+            category: norm.material.category,
+          })),
+        };
+      }),
       catalog: catalog.map((material) => this.toMaterialView(material)),
       calculation: calculation ? this.toCalculationView(calculation) : null,
       quoteCreated: false,
@@ -120,6 +153,17 @@ export class FacadeCalculationService {
     });
     this.assertRevision(existing, dto.expectedRevision);
 
+    if (
+      config.code === BASE_FACADE_CONFIG_CODE &&
+      existing?.configId !== config.id
+    ) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'FACADE_CONFIG_LEGACY',
+        'Историческая базовая конфигурация доступна только для уже сохранённого расчёта',
+      );
+    }
+
     if (!config.isCalculable) {
       return this.saveUnsupported({
         leadId,
@@ -157,18 +201,28 @@ export class FacadeCalculationService {
       });
     }
 
+    const sameNormSet = existing?.normSetId === normSet.id;
     const manualByCode = new Map(
-      (existing?.items ?? [])
-        .filter((item) => item.isManual)
-        .map((item) => [item.materialCode, item]),
+      sameNormSet
+        ? (existing?.items ?? [])
+            .filter((item) => item.isManual && !item.isExtra)
+            .map((item) => [item.materialCode, item])
+        : [],
     );
-    if (manualByCode.size > 0 && dto.confirmRecalculate !== true) {
+    const configChanged = Boolean(existing && existing.configId !== config.id);
+    if (
+      (manualByCode.size > 0 || configChanged) &&
+      dto.confirmRecalculate !== true
+    ) {
       throw new BusinessException(
         HttpStatus.CONFLICT,
         'FACADE_RECALC_CONFIRMATION_REQUIRED',
-        'В расчёте есть ручные корректировки. Подтвердите пересчёт.',
+        configChanged
+          ? 'Смена системы пересчитает ведомость по её нормам. Ручные количества другой системы не переносятся.'
+          : 'В расчёте есть ручные корректировки. Подтвердите пересчёт.',
         {
           manualItemCodes: [...manualByCode.keys()],
+          configChanged,
         },
       );
     }
@@ -204,7 +258,9 @@ export class FacadeCalculationService {
           });
 
       await tx.facadeSubsystemCalculationItem.deleteMany({
-        where: { calculationId: calculation.id, isExtra: false },
+        where: sameNormSet
+          ? { calculationId: calculation.id, isExtra: false }
+          : { calculationId: calculation.id },
       });
 
       for (const norm of normSet.norms) {

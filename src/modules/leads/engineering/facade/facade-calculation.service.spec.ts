@@ -322,14 +322,17 @@ describe('FacadeCalculationService', () => {
       installationRequired: true,
     });
     mockAssignedEngineer();
-    prisma.facadeSystemConfig.findUnique.mockResolvedValue(config);
+    prisma.facadeSystemConfig.findUnique.mockResolvedValue({
+      ...config,
+      code: 'HPL_DRY_6MM_50MM',
+    });
     prisma.facadeNormSet.findFirst.mockResolvedValue(normSet);
     prisma.facadeSubsystemCalculation.findUnique.mockResolvedValue(null);
 
     const result = await service.calculate(
       'lead-1',
       {
-        configCode: BASE_FACADE_CONFIG_CODE,
+        configCode: 'HPL_DRY_6MM_50MM',
         claddingAreaM2: '1000',
         areaSource: FacadeAreaSource.ENGINEER_ENTERED,
       },
@@ -346,14 +349,17 @@ describe('FacadeCalculationService', () => {
   it('calculates 1000 m² from cladding area using the 18 approved norms', async () => {
     mockLead();
     mockAssignedEngineer();
-    prisma.facadeSystemConfig.findUnique.mockResolvedValue(config);
+    prisma.facadeSystemConfig.findUnique.mockResolvedValue({
+      ...config,
+      code: 'HPL_DRY_6MM_50MM',
+    });
     prisma.facadeNormSet.findFirst.mockResolvedValue(normSet);
     prisma.facadeSubsystemCalculation.findUnique.mockResolvedValue(null);
 
     const result = await service.calculate(
       'lead-1',
       {
-        configCode: BASE_FACADE_CONFIG_CODE,
+        configCode: 'HPL_DRY_6MM_50MM',
         claddingAreaM2: '1000',
       },
       engineer,
@@ -453,6 +459,8 @@ describe('FacadeCalculationService', () => {
     prisma.facadeNormSet.findFirst.mockResolvedValue(normSet);
     prisma.facadeSubsystemCalculation.findUnique.mockResolvedValue({
       id: 'calc-1',
+      configId: config.id,
+      normSetId: normSet.id,
       revision: 2,
       items: [
         {
@@ -576,6 +584,61 @@ describe('FacadeCalculationService', () => {
       'quotes:approve',
     );
     expect(ROLE_PERMISSION_SLUGS[RoleName.HEAD]).toContain('quotes:approve');
+  });
+
+  it('rejects starting a new calculation on the historical base configuration', async () => {
+    mockLead();
+    mockAssignedEngineer();
+    prisma.facadeSystemConfig.findUnique.mockResolvedValue(config);
+    prisma.facadeSubsystemCalculation.findUnique.mockResolvedValue(null);
+
+    await expectBusinessCode(
+      service.calculate(
+        'lead-1',
+        { configCode: BASE_FACADE_CONFIG_CODE, claddingAreaM2: '10' },
+        engineer,
+      ),
+      'FACADE_CONFIG_LEGACY',
+    );
+  });
+
+  it('does not carry manual quantities into another system without confirmation', async () => {
+    mockLead();
+    mockAssignedEngineer();
+    prisma.facadeSystemConfig.findUnique.mockResolvedValue({
+      ...config,
+      id: 'config-8',
+      code: 'HPL_DRY_8MM_80MM',
+    });
+    prisma.facadeNormSet.findFirst.mockResolvedValue({
+      ...normSet,
+      id: 'norm-8',
+      code: 'HPL_DRY_8MM_80MM_V1',
+    });
+    prisma.facadeSubsystemCalculation.findUnique.mockResolvedValue({
+      id: 'calc-1',
+      leadId: 'lead-1',
+      configId: config.id,
+      normSetId: normSet.id,
+      revision: 2,
+      items: [
+        {
+          materialCode: 'hpl_panel_1220_3050',
+          isManual: true,
+          isExtra: false,
+          finalQty: new Prisma.Decimal('99'),
+        },
+      ],
+    });
+
+    await expectBusinessCode(
+      service.calculate(
+        'lead-1',
+        { configCode: 'HPL_DRY_8MM_80MM', claddingAreaM2: '10' },
+        engineer,
+      ),
+      'FACADE_RECALC_CONFIRMATION_REQUIRED',
+    );
   });
 
   it('rejects stale revisions instead of silently overwriting', async () => {

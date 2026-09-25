@@ -37,6 +37,7 @@ enum FacadeMaterialUnit {
   M2
   PCS
   LM
+  LITER
 }
 
 enum FacadeCalculationStatus {
