@@ -6,7 +6,8 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "nest build && npm run build:facade-seed",
+    "build:facade-seed": "node scripts/build-facade-seed.cjs",
     "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\"",
     "start": "nest start",
     "start:dev": "nest start --watch",
@@ -19,7 +20,7 @@
     "migrate:status": "prisma migrate status",
     "db:seed": "prisma db seed",
     "db:seed:reference": "ts-node prisma/seed-reference.ts",
-    "db:seed:facade-reference": "tsx prisma/seed-facade-reference.ts",
+    "db:seed:facade-reference": "node dist/prisma/seed-facade-reference.js",
     "db:seed:prod": "NODE_ENV=production npx prisma db seed --config prisma.postgres.config.ts",
     "prisma:prod:generate": "prisma generate --config prisma.postgres.config.ts",
     "prisma:prod:deploy": "prisma migrate deploy --config prisma.postgres.config.ts",
@@ -73,7 +74,6 @@
     "pg": "^8.22.0",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
-    "tsx": "^4.23.15",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -91,6 +91,7 @@
     "@types/passport-jwt": "^4.0.1",
     "@types/pdfmake": "^0.3.3",
     "@types/supertest": "^7.0.0",
+    "esbuild": "^0.28.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",

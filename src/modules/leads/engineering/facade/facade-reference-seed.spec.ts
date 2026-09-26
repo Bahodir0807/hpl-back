@@ -26,16 +26,23 @@ function readRepoFile(relativePath: string): string {
   return readFileSync(join(REPO_ROOT, relativePath), 'utf8');
 }
 
+beforeAll(() => {
+  execSync('npm run build:facade-seed', {
+    cwd: REPO_ROOT,
+    stdio: 'inherit',
+  });
+});
+
 describe('facade reference seed entry point', () => {
-  it('uses tsx npm script without ts-node loader flags', () => {
+  it('uses bundled dist entry for production-safe node execution', () => {
     const pkg = JSON.parse(readRepoFile('package.json')) as {
       scripts: Record<string, string>;
     };
     expect(pkg.scripts['db:seed:facade-reference']).toBe(
-      'tsx prisma/seed-facade-reference.ts',
+      'node dist/prisma/seed-facade-reference.js',
     );
     expect(pkg.scripts['db:seed:facade-reference']).not.toContain('ts-node');
-    expect(pkg.scripts['db:seed:facade-reference']).not.toContain('--loader');
+    expect(pkg.scripts['db:seed:facade-reference']).not.toContain('tsx');
   });
 
   it('uses a minimal facade-only bootstrap without forbidden seed paths', () => {
