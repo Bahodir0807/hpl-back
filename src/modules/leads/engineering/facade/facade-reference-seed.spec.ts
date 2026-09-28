@@ -27,7 +27,7 @@ function readRepoFile(relativePath: string): string {
 }
 
 beforeAll(() => {
-  execSync('npm run build:facade-seed', {
+  execSync('npm run build:production-seeds', {
     cwd: REPO_ROOT,
     stdio: 'inherit',
   });
