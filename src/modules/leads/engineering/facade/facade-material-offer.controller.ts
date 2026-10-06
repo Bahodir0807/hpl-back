@@ -27,7 +27,9 @@ import { FacadeMaterialOfferService } from './facade-material-offer.service';
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('references/facade-offers')
 export class FacadeMaterialOfferController {
-  constructor(private readonly facadeMaterialOfferService: FacadeMaterialOfferService) {}
+  constructor(
+    private readonly facadeMaterialOfferService: FacadeMaterialOfferService,
+  ) {}
 
   @Get()
   @RequirePermissions(FACADE_PRICING_PERMISSIONS.READ_PURCHASE)
@@ -51,7 +53,9 @@ export class FacadeMaterialOfferController {
 
   @Patch(':id')
   @RequirePermissions(FACADE_PRICING_PERMISSIONS.MANAGE_OFFERS)
-  @ApiOperation({ summary: 'Update or deactivate a facade material supplier offer' })
+  @ApiOperation({
+    summary: 'Update or deactivate a facade material supplier offer',
+  })
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateFacadeMaterialOfferDto,

@@ -140,10 +140,12 @@ export class FacadeMaterialOfferService {
                 ? new Date(dto.validTo)
                 : null,
           isActive: dto.isActive,
-          availability: dto.availability === undefined ? undefined : dto.availability,
+          availability:
+            dto.availability === undefined ? undefined : dto.availability,
           leadTimeDays:
             dto.leadTimeDays === undefined ? undefined : dto.leadTimeDays,
-          supplierSku: dto.supplierSku === undefined ? undefined : dto.supplierSku,
+          supplierSku:
+            dto.supplierSku === undefined ? undefined : dto.supplierSku,
           note: dto.note === undefined ? undefined : dto.note,
         },
         include: { material: true, supplier: true },

@@ -5,9 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { FACADE_SYSTEM_TABLES } from './facade-system-tables';
 import { BASE_FACADE_CONFIG_CODE } from './facade-norms';
-import {
-  seedFacadeReferenceConfiguration,
-} from '../../../../../prisma/seed/facade-reference';
+import { seedFacadeReferenceConfiguration } from '../../../../../prisma/seed/facade-reference';
 import * as facadeSubsystemSeed from '../../../../../prisma/seed/facade-subsystem';
 
 const REPO_ROOT = join(__dirname, '../../../../../');
@@ -96,12 +94,21 @@ describe('facade reference seed entry point', () => {
       });
       throw new Error('expected seed command to fail without DATABASE_URL');
     } catch (error) {
-      const execError = error as Error & { stderr?: string; stdout?: string; status?: number };
-      if (execError.message === 'expected seed command to fail without DATABASE_URL') {
+      const execError = error as Error & {
+        stderr?: string;
+        stdout?: string;
+        status?: number;
+      };
+      if (
+        execError.message ===
+        'expected seed command to fail without DATABASE_URL'
+      ) {
         throw execError;
       }
       const combined = `${execError.stdout ?? ''}\n${execError.stderr ?? ''}\n${execError.message}`;
-      expect(combined).toContain('DATABASE_URL is required for facade reference seed');
+      expect(combined).toContain(
+        'DATABASE_URL is required for facade reference seed',
+      );
       expect(combined).not.toContain('ERR_UNKNOWN_FILE_EXTENSION');
       expect(combined).not.toContain('ERR_REQUIRE_CYCLE_MODULE');
     }
@@ -176,7 +183,9 @@ describePg('facade reference seed PostgreSQL idempotency', () => {
       expect(prisma.facadeSystemConfig.count()).resolves.toBe(
         configCountAfterFirst,
       ),
-      expect(prisma.facadeNormSet.count()).resolves.toBe(normSetCountAfterFirst),
+      expect(prisma.facadeNormSet.count()).resolves.toBe(
+        normSetCountAfterFirst,
+      ),
       expect(prisma.facadeMaterial.count()).resolves.toBe(
         materialCountAfterFirst,
       ),

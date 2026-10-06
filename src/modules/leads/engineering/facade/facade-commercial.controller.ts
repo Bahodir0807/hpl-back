@@ -69,7 +69,9 @@ export class FacadeCommercialController {
 
   @Post('submit')
   @RequirePermissions(FACADE_PRICING_PERMISSIONS.PREPARE)
-  @ApiOperation({ summary: 'Submit facade commercial calculation for approval' })
+  @ApiOperation({
+    summary: 'Submit facade commercial calculation for approval',
+  })
   submit(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: SubmitFacadeCommercialDto,
@@ -94,7 +96,8 @@ export class FacadeCommercialController {
   @Post('revisions')
   @RequirePermissions(FACADE_PRICING_PERMISSIONS.PREPARE)
   @ApiOperation({
-    summary: 'Create a new commercial revision from the latest technical takeoff',
+    summary:
+      'Create a new commercial revision from the latest technical takeoff',
   })
   reprice(
     @Param('id', ParseUUIDPipe) id: string,

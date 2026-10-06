@@ -200,10 +200,7 @@ describe('FacadeCalculationService', () => {
           ...current,
           ...data,
           revision: nextRevision,
-          notes:
-            data.notes === undefined
-              ? (current.notes as string | null)
-              : data.notes,
+          notes: data.notes === undefined ? current.notes : data.notes,
         };
         return {
           ...store.calculation,
@@ -242,8 +239,12 @@ describe('FacadeCalculationService', () => {
   function mockLead(input?: {
     ventFacadeKitRequired?: boolean;
     installationRequired?: boolean;
-    items?: Array<{ requiredAreaM2: Prisma.Decimal | null }>;
+    items?: Array<{
+      requiredAreaM2: Prisma.Decimal | null;
+      thicknessMm?: Prisma.Decimal | null;
+    }>;
     requiredAreaM2?: Prisma.Decimal | null;
+    thicknessMm?: Prisma.Decimal | null;
   }) {
     prisma.lead.findFirst.mockResolvedValue({
       id: 'lead-1',
@@ -253,6 +254,7 @@ describe('FacadeCalculationService', () => {
         ventFacadeKitRequired: input?.ventFacadeKitRequired ?? true,
         installationRequired: input?.installationRequired ?? false,
         requiredAreaM2: input?.requiredAreaM2 ?? null,
+        thicknessMm: input?.thicknessMm ?? null,
         items: input?.items ?? [],
       },
     });
@@ -367,7 +369,9 @@ describe('FacadeCalculationService', () => {
 
     expect(result.items).toHaveLength(18);
     for (const item of result.items) {
-      expect(item.calculatedQty).toBe(EXPECTED_QTY_FOR_1000_M2[item.materialCode]);
+      expect(item.calculatedQty).toBe(
+        EXPECTED_QTY_FOR_1000_M2[item.materialCode],
+      );
       expect(item.finalQty).toBe(EXPECTED_QTY_FOR_1000_M2[item.materialCode]);
       expect(item.qtyPerM2).toBe(
         BASE_FACADE_NORMS_V1.find((def) => def.code === item.materialCode)
@@ -375,6 +379,97 @@ describe('FacadeCalculationService', () => {
       );
     }
     expect(result.items[0].calculatedQty).toBe('1060');
+  });
+
+  it('exposes mixed HPL thickness in workspace', async () => {
+    mockLead({
+      items: [
+        {
+          requiredAreaM2: new Prisma.Decimal('50'),
+          thicknessMm: new Prisma.Decimal('6'),
+        },
+        {
+          requiredAreaM2: new Prisma.Decimal('30'),
+          thicknessMm: new Prisma.Decimal('8'),
+        },
+      ],
+    });
+    mockAssignedEngineer();
+    prisma.facadeSystemConfig.findMany.mockResolvedValue([config]);
+    prisma.facadeMaterial.findMany.mockResolvedValue(materials);
+    prisma.facadeSubsystemCalculation.findUnique.mockResolvedValue(null);
+
+    const workspace = await service.getWorkspace('lead-1', engineer);
+    expect(workspace.hplThicknessesMm).toEqual([6, 8]);
+    expect(workspace.thicknessConflict).toBe(true);
+  });
+
+  it('requires explicit confirmation for mixed thickness on calculate', async () => {
+    mockLead({
+      items: [
+        {
+          requiredAreaM2: new Prisma.Decimal('50'),
+          thicknessMm: new Prisma.Decimal('6'),
+        },
+        {
+          requiredAreaM2: new Prisma.Decimal('30'),
+          thicknessMm: new Prisma.Decimal('8'),
+        },
+      ],
+    });
+    mockAssignedEngineer();
+    prisma.facadeSystemConfig.findUnique.mockResolvedValue({
+      ...config,
+      code: 'HPL_DRY_6MM_50MM',
+    });
+    prisma.facadeSubsystemCalculation.findUnique.mockResolvedValue(null);
+
+    await expectBusinessCode(
+      service.calculate(
+        'lead-1',
+        {
+          configCode: 'HPL_DRY_6MM_50MM',
+          claddingAreaM2: '80',
+        },
+        engineer,
+      ),
+      'FACADE_THICKNESS_CONFIRM_REQUIRED',
+    );
+  });
+
+  it('calculates mixed thickness after explicit confirmation', async () => {
+    mockLead({
+      items: [
+        {
+          requiredAreaM2: new Prisma.Decimal('50'),
+          thicknessMm: new Prisma.Decimal('6'),
+        },
+        {
+          requiredAreaM2: new Prisma.Decimal('30'),
+          thicknessMm: new Prisma.Decimal('8'),
+        },
+      ],
+    });
+    mockAssignedEngineer();
+    prisma.facadeSystemConfig.findUnique.mockResolvedValue({
+      ...config,
+      code: 'HPL_DRY_6MM_50MM',
+    });
+    prisma.facadeNormSet.findFirst.mockResolvedValue(normSet);
+    prisma.facadeSubsystemCalculation.findUnique.mockResolvedValue(null);
+
+    const result = await service.calculate(
+      'lead-1',
+      {
+        configCode: 'HPL_DRY_6MM_50MM',
+        claddingAreaM2: '80',
+        confirmThicknessMismatch: true,
+      },
+      engineer,
+    );
+
+    expect(result.status).toBe(FacadeCalculationStatus.CALCULATED);
+    expect(result.items.length).toBeGreaterThan(0);
   });
 
   it('uses qualification cladding area, not purchased sheet area', async () => {

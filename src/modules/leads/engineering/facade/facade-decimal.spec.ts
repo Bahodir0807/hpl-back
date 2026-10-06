@@ -1,8 +1,5 @@
 import { Prisma } from '@prisma/client';
-import {
-  BASE_FACADE_NORMS_V1,
-  EXPECTED_QTY_FOR_1000_M2,
-} from './facade-norms';
+import { BASE_FACADE_NORMS_V1, EXPECTED_QTY_FOR_1000_M2 } from './facade-norms';
 import { multiplyAreaByNorm, multiplyQtyByPrice } from './facade-decimal';
 
 describe('facade consumption math', () => {

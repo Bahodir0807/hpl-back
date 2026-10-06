@@ -1,9 +1,7 @@
 import { Prisma } from '@prisma/client';
 
 export function toDecimal(value: Prisma.Decimal.Value): Prisma.Decimal {
-  return value instanceof Prisma.Decimal
-    ? value
-    : new Prisma.Decimal(value);
+  return value instanceof Prisma.Decimal ? value : new Prisma.Decimal(value);
 }
 
 export function multiplyAreaByNorm(
@@ -20,7 +18,9 @@ export function multiplyQtyByPrice(
   return toDecimal(qty).mul(toDecimal(price));
 }
 
-export function decimalToString(value: Prisma.Decimal.Value | null | undefined): string | null {
+export function decimalToString(
+  value: Prisma.Decimal.Value | null | undefined,
+): string | null {
   if (value === null || value === undefined) {
     return null;
   }

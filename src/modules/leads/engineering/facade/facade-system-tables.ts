@@ -44,7 +44,12 @@ const shared = {
     category: 'SUBSYSTEM' as const,
     unit: 'LM' as const,
     qtyPerM2: '1.67',
-    spec: { sectionMm: '80×50', thicknessMm: 1.2, coating: 'galvanized', shape: 'T' },
+    spec: {
+      sectionMm: '80×50',
+      thicknessMm: 1.2,
+      coating: 'galvanized',
+      shape: 'T',
+    },
   },
   profileL5080: {
     code: 'profile_l_50x80_t15_facade_galvanized',
@@ -54,7 +59,13 @@ const shared = {
     category: 'SUBSYSTEM' as const,
     unit: 'LM' as const,
     qtyPerM2: '0.67',
-    spec: { sectionMm: '50×80', thicknessMm: 1.5, coating: 'galvanized', shape: 'L', use: 'facade' },
+    spec: {
+      sectionMm: '50×80',
+      thicknessMm: 1.5,
+      coating: 'galvanized',
+      shape: 'L',
+      use: 'facade',
+    },
   },
   profileL5040: {
     code: 'profile_l_50x40_t15_slopes_galvanized',
@@ -64,7 +75,13 @@ const shared = {
     category: 'SUBSYSTEM' as const,
     unit: 'LM' as const,
     qtyPerM2: '0.07',
-    spec: { sectionMm: '50×40', thicknessMm: 1.5, coating: 'galvanized', shape: 'L', use: 'slopes' },
+    spec: {
+      sectionMm: '50×40',
+      thicknessMm: 1.5,
+      coating: 'galvanized',
+      shape: 'L',
+      use: 'slopes',
+    },
   },
   anchor880: {
     code: 'anchor_bracket_8x80',
@@ -114,7 +131,12 @@ const shared = {
     category: 'FASTENER' as const,
     unit: 'PCS' as const,
     qtyPerM2: '12.09',
-    spec: { sizeMm: '5×10', headMm: '8–10', cutoff: 'yes', coating: 'galvanized' },
+    spec: {
+      sizeMm: '5×10',
+      headMm: '8–10',
+      cutoff: 'yes',
+      coating: 'galvanized',
+    },
   },
   rivetHpl: {
     code: 'rivet_hpl_5x15_head_15_slope',
@@ -186,7 +208,11 @@ export const HPL_DRY_6MM_50MM: FacadeSystemTable = {
       category: 'SUBSYSTEM',
       unit: 'PCS',
       qtyPerM2: '4.03',
-      spec: { sectionMm: '50×100×80', thicknessMm: 2.0, material: 'painted stainless' },
+      spec: {
+        sectionMm: '50×100×80',
+        thicknessMm: 2.0,
+        material: 'painted stainless',
+      },
     }),
     line(5, {
       code: 'bracket_50x100x100_t2_painted_ss',
@@ -196,7 +222,11 @@ export const HPL_DRY_6MM_50MM: FacadeSystemTable = {
       category: 'SUBSYSTEM',
       unit: 'PCS',
       qtyPerM2: '0.81',
-      spec: { sectionMm: '50×100×100', thicknessMm: 2.0, material: 'painted stainless' },
+      spec: {
+        sectionMm: '50×100×100',
+        thicknessMm: 2.0,
+        material: 'painted stainless',
+      },
     }),
     line(6, shared.paronite50x80),
     line(7, shared.paronite50x100),
@@ -283,7 +313,11 @@ export const HPL_DRY_8MM_80MM: FacadeSystemTable = {
       category: 'SUBSYSTEM',
       unit: 'PCS',
       qtyPerM2: '4.03',
-      spec: { sectionMm: '50×130×80', thicknessMm: 2.0, material: 'painted stainless' },
+      spec: {
+        sectionMm: '50×130×80',
+        thicknessMm: 2.0,
+        material: 'painted stainless',
+      },
     }),
     line(5, {
       code: 'bracket_50x130x100_t2_painted_ss',
@@ -293,7 +327,11 @@ export const HPL_DRY_8MM_80MM: FacadeSystemTable = {
       category: 'SUBSYSTEM',
       unit: 'PCS',
       qtyPerM2: '0.81',
-      spec: { sectionMm: '50×130×100', thicknessMm: 2.0, material: 'painted stainless' },
+      spec: {
+        sectionMm: '50×130×100',
+        thicknessMm: 2.0,
+        material: 'painted stainless',
+      },
     }),
     line(6, shared.paronite50x80),
     line(7, shared.paronite50x100),
@@ -308,7 +346,12 @@ export const HPL_DRY_8MM_80MM: FacadeSystemTable = {
       category: 'SUBSYSTEM',
       unit: 'LM',
       qtyPerM2: '0.09',
-      spec: { sectionMm: '100×50', thicknessMm: 1.2, shape: 'L', coating: 'galvanized' },
+      spec: {
+        sectionMm: '100×50',
+        thicknessMm: 1.2,
+        shape: 'L',
+        coating: 'galvanized',
+      },
     }),
     line(12, shared.anchor880),
     line(13, shared.anchor10100),
@@ -430,7 +473,11 @@ export const HPL_ADHESIVE_4MM: FacadeSystemTable = {
       category: 'FASTENER',
       unit: 'PCS',
       qtyPerM2: '6.25',
-      spec: { product: 'RMG AD DACROMET', sizeMm: '10×100', material: 'polyamide' },
+      spec: {
+        product: 'RMG AD DACROMET',
+        sizeMm: '10×100',
+        material: 'polyamide',
+      },
     }),
     line(10, {
       code: 'paronite_pad_bracket_80x100',

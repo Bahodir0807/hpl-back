@@ -160,7 +160,10 @@ describe('FacadeCommercialService', () => {
     prisma.activity.create.mockResolvedValue({});
     prisma.auditLog.create.mockResolvedValue({});
     prisma.notification.create.mockResolvedValue({});
-    prisma.user.findMany.mockResolvedValue([{ id: head.id }, { id: director.id }]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: head.id },
+      { id: director.id },
+    ]);
     prisma.facadeMaterialSupplierOffer.findMany.mockResolvedValue([
       offerUsd,
       offerCny,
@@ -256,7 +259,9 @@ describe('FacadeCommercialService', () => {
           excludedFromSubsystemCommercialCost: boolean;
           priceStatus: string;
         }>;
-        const hpl = items.find((item) => item.materialCode === 'hpl_panel_1220_3050');
+        const hpl = items.find(
+          (item) => item.materialCode === 'hpl_panel_1220_3050',
+        );
         expect(hpl?.excludedFromSubsystemCommercialCost).toBe(true);
         expect(hpl?.priceStatus).toBe(FACADE_PRICE_STATUS.EXCLUDED);
         return {
@@ -311,7 +316,8 @@ describe('FacadeCommercialService', () => {
           items: created.map((item, index) => ({
             id: index === 0 ? 'c-hpl' : 'c-mem',
             ...item,
-            excludedFromSubsystemCommercialCost: item.materialCode === 'hpl_panel_1220_3050',
+            excludedFromSubsystemCommercialCost:
+              item.materialCode === 'hpl_panel_1220_3050',
             finalQty: new Prisma.Decimal(
               item.materialCode === 'hpl_panel_1220_3050' ? '1060' : '1160',
             ),
@@ -520,7 +526,9 @@ describe('FacadeCommercialService', () => {
     const mem = view.calculation?.items.find(
       (item) => item.materialCode === 'membrane',
     );
-    expect(mem?.purchasePrice).toBe(new Prisma.Decimal(snapshotPrice).toFixed());
+    expect(mem?.purchasePrice).toBe(
+      new Prisma.Decimal(snapshotPrice).toFixed(),
+    );
     await expectBusinessCode(
       service.patch(
         'lead-1',
@@ -575,7 +583,11 @@ describe('FacadeCommercialService', () => {
         items: data.items.create,
       }),
     );
-    const created = await service.reprice('lead-1', { expectedRevision: 3 }, head);
+    const created = await service.reprice(
+      'lead-1',
+      { expectedRevision: 3 },
+      head,
+    );
     expect(created.id).toBe('comm-2');
     expect(created.status).toBe(FacadeCommercialStatus.DRAFT);
     expect(prisma.facadeCommercialCalculation.update).toHaveBeenCalledWith(
@@ -611,7 +623,10 @@ describe('FacadeCommercialService', () => {
   });
 
   it('forbids ENGINEER from reading commercial pricing', async () => {
-    await expectBusinessCode(service.getCurrent('lead-1', engineer), 'FORBIDDEN');
+    await expectBusinessCode(
+      service.getCurrent('lead-1', engineer),
+      'FORBIDDEN',
+    );
   });
 
   it('snapshots FX and does not use a live rate after approval', async () => {
@@ -621,7 +636,12 @@ describe('FacadeCommercialService', () => {
       approvedCustomerAmount: new Prisma.Decimal('8000'),
       approvedCurrency: 'USD',
       fxSnapshots: [
-        { fromCurrency: 'CNY', toCurrency: 'USD', rate: '0.14', rateId: 'fx-1' },
+        {
+          fromCurrency: 'CNY',
+          toCurrency: 'USD',
+          rate: '0.14',
+          rateId: 'fx-1',
+        },
       ],
       items: [
         draftFromCreate().items[0],

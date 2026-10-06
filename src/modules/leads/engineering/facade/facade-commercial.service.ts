@@ -9,9 +9,7 @@ import {
 import { BusinessException } from '../../../../common/exceptions/business.exception';
 import type { CurrentUser } from '../../../../common/interfaces/current-user.interface';
 import { PrismaService } from '../../../prisma/prisma.service';
-import {
-  hasOwnerOrReadAllLeadAccess,
-} from '../engineering-access';
+import { hasOwnerOrReadAllLeadAccess } from '../engineering-access';
 import { decimalToString, toDecimal } from './facade-decimal';
 import {
   FACADE_PRICE_STATUS,
@@ -128,7 +126,11 @@ export class FacadeCommercialService {
       include: { items: true },
     });
     if (current && current.status !== FacadeCommercialStatus.APPROVED) {
-      return this.toCalculationView(current, technical, this.resolveAccess(user, lead.ownerId));
+      return this.toCalculationView(
+        current,
+        technical,
+        this.resolveAccess(user, lead.ownerId),
+      );
     }
 
     const created = await this.prisma.$transaction(async (tx) => {
@@ -175,20 +177,23 @@ export class FacadeCommercialService {
 
     const nextItems = commercial.items.map((item) => {
       const nextOfferId = selectionByItem.has(item.id)
-        ? selectionByItem.get(item.id) ?? null
+        ? (selectionByItem.get(item.id) ?? null)
         : item.selectedOfferId;
-      return this.computeItem(item, nextOfferId, offerById, dto.proposedCurrency ?? commercial.proposedCurrency);
+      return this.computeItem(
+        item,
+        nextOfferId,
+        offerById,
+        dto.proposedCurrency ?? commercial.proposedCurrency,
+      );
     });
 
     const proposedAmount =
       dto.proposedCustomerAmount === undefined
         ? commercial.proposedCustomerAmount
-        : dto.proposedCustomerAmount === null || dto.proposedCustomerAmount === ''
+        : dto.proposedCustomerAmount === null ||
+            dto.proposedCustomerAmount === ''
           ? null
-          : this.parsePositiveAmount(
-              dto.proposedCustomerAmount,
-              false,
-            );
+          : this.parsePositiveAmount(dto.proposedCustomerAmount, false);
     const proposedCurrency =
       dto.proposedCurrency === undefined
         ? commercial.proposedCurrency
@@ -208,7 +213,7 @@ export class FacadeCommercialService {
         data: {
           status: FacadeCommercialStatus.DRAFT,
           procurementIncomplete: procurement.incomplete,
-          procurementByCurrency: procurement.byCurrency as Prisma.InputJsonValue,
+          procurementByCurrency: procurement.byCurrency,
           fxSnapshots: procurement.fxSnapshots as Prisma.InputJsonValue,
           proposedCustomerAmount: proposedAmount,
           proposedCurrency,
@@ -409,9 +414,10 @@ export class FacadeCommercialService {
     actorId?: string,
   ): Promise<void> {
     try {
-      const commercial = await this.prisma.facadeCommercialCalculation.findFirst({
-        where: { leadId, isCurrent: true },
-      });
+      const commercial =
+        await this.prisma.facadeCommercialCalculation.findFirst({
+          where: { leadId, isCurrent: true },
+        });
       const lead = await this.prisma.lead.findFirst({
         where: { id: leadId, deletedAt: null },
         select: { id: true, ownerId: true, title: true },
@@ -441,8 +447,7 @@ export class FacadeCommercialService {
           leadId,
           actorId: actorId ?? lead.ownerId,
           action: 'FACADE_TECHNICAL_NEWER_THAN_COMMERCIAL',
-          content:
-            'Технический расчёт изменён после коммерческого расчёта',
+          content: 'Технический расчёт изменён после коммерческого расчёта',
           metadata: {
             commercialId: commercial.id,
             commercialRevision: commercial.revision,
@@ -490,7 +495,8 @@ export class FacadeCommercialService {
     const draftItems = input.technical.items.map((item) => {
       const previous = previousByCode.get(item.materialCode);
       const selectedOfferId =
-        previous?.selectedOfferId && offerById.get(previous.selectedOfferId)?.isActive
+        previous?.selectedOfferId &&
+        offerById.get(previous.selectedOfferId)?.isActive
           ? previous.selectedOfferId
           : null;
       return this.computeItem(
@@ -534,7 +540,7 @@ export class FacadeCommercialService {
         status: FacadeCommercialStatus.DRAFT,
         technicalSnapshot: this.technicalSnapshot(input.technical),
         procurementIncomplete: procurement.incomplete,
-        procurementByCurrency: procurement.byCurrency as Prisma.InputJsonValue,
+        procurementByCurrency: procurement.byCurrency,
         fxSnapshots: procurement.fxSnapshots as Prisma.InputJsonValue,
         proposedCustomerAmount: null,
         proposedCurrency: input.previous?.proposedCurrency ?? null,
@@ -594,7 +600,7 @@ export class FacadeCommercialService {
         purchasePrice: null,
         purchaseCurrency: null,
         linePurchaseTotal: null,
-        priceStatus: FACADE_PRICE_STATUS.EXCLUDED as FacadePriceStatus,
+        priceStatus: FACADE_PRICE_STATUS.EXCLUDED,
         fxFromCurrency: null,
         fxToCurrency: null,
         fxRate: null,
@@ -614,7 +620,7 @@ export class FacadeCommercialService {
         purchasePrice: null,
         purchaseCurrency: null,
         linePurchaseTotal: null,
-        priceStatus: FACADE_PRICE_STATUS.NOT_CONFIGURED as FacadePriceStatus,
+        priceStatus: FACADE_PRICE_STATUS.NOT_CONFIGURED,
         fxFromCurrency: null,
         fxToCurrency: null,
         fxRate: null,
@@ -715,7 +721,10 @@ export class FacadeCommercialService {
     return result;
   }
 
-  private async lookupRate(fromCurrency: string, toCurrency: string): Promise<FxLookup> {
+  private async lookupRate(
+    fromCurrency: string,
+    toCurrency: string,
+  ): Promise<FxLookup> {
     if (fromCurrency === toCurrency) {
       return {
         fromCurrency,
@@ -778,9 +787,15 @@ export class FacadeCommercialService {
       const currency = item.purchaseCurrency ?? 'UNKNOWN';
       byCurrencyMap.set(
         currency,
-        (byCurrencyMap.get(currency) ?? toDecimal(0)).plus(item.linePurchaseTotal),
+        (byCurrencyMap.get(currency) ?? toDecimal(0)).plus(
+          item.linePurchaseTotal,
+        ),
       );
-      if (item.fxFromCurrency && item.fxToCurrency && item.fxFromCurrency !== item.fxToCurrency) {
+      if (
+        item.fxFromCurrency &&
+        item.fxToCurrency &&
+        item.fxFromCurrency !== item.fxToCurrency
+      ) {
         if (!item.fxRate) {
           missingFx += 1;
         } else {
@@ -819,9 +834,11 @@ export class FacadeCommercialService {
       category: item.category,
       unit: item.unit,
       finalQty: item.finalQty,
-      excludedFromSubsystemCommercialCost: item.excludedFromSubsystemCommercialCost,
+      excludedFromSubsystemCommercialCost:
+        item.excludedFromSubsystemCommercialCost,
       selectedOfferId: item.selectedOfferId,
-      offerSnapshot: (item.offerSnapshot ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+      offerSnapshot: (item.offerSnapshot ??
+        Prisma.JsonNull) as Prisma.InputJsonValue,
       purchasePrice: item.purchasePrice,
       purchaseCurrency: item.purchaseCurrency,
       linePurchaseTotal: item.linePurchaseTotal,
@@ -908,9 +925,13 @@ export class FacadeCommercialService {
     }
   }
 
-  private isHplReference(item: { category: string; materialCode: string }): boolean {
+  private isHplReference(item: {
+    category: string;
+    materialCode: string;
+  }): boolean {
     return (
-      item.category === 'HPL' || item.materialCode === HPL_REFERENCE_MATERIAL_CODE
+      item.category === 'HPL' ||
+      item.materialCode === HPL_REFERENCE_MATERIAL_CODE
     );
   }
 
@@ -1120,8 +1141,8 @@ export class FacadeCommercialService {
   }) {
     const staleTechnicalBasis = Boolean(
       input.commercial &&
-        input.technical &&
-        input.commercial.facadeCalculationRevision !== input.technical.revision,
+      input.technical &&
+      input.commercial.facadeCalculationRevision !== input.technical.revision,
     );
     return {
       applicable: input.lead ? true : false,
@@ -1168,8 +1189,7 @@ export class FacadeCommercialService {
     access: ReturnType<FacadeCommercialService['resolveAccess']>,
   ) {
     const staleTechnicalBasis = Boolean(
-      technical &&
-        commercial.facadeCalculationRevision !== technical.revision,
+      technical && commercial.facadeCalculationRevision !== technical.revision,
     );
     const showPurchase = access.canReadPurchase;
     const showCustomer =
@@ -1190,7 +1210,8 @@ export class FacadeCommercialService {
       status: commercial.status,
       staleTechnicalBasis,
       currentTechnicalRevision: technical?.revision ?? null,
-      claddingAreaM2: snapshot.claddingAreaM2 ?? decimalToString(technical?.claddingAreaM2),
+      claddingAreaM2:
+        snapshot.claddingAreaM2 ?? decimalToString(technical?.claddingAreaM2),
       configCode: snapshot.configCode ?? technical?.config.code ?? null,
       normSetCode: snapshot.normSetCode ?? technical?.normSet?.code ?? null,
       procurementIncomplete: showPurchase

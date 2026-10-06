@@ -10,7 +10,9 @@ import {
 
 describe('facade system tables', () => {
   it('keeps the historical Stage 2 quantities and does not rewrite those material codes', () => {
-    const historicalCodes = new Set(BASE_FACADE_NORMS_V1.map((row) => row.code));
+    const historicalCodes = new Set(
+      BASE_FACADE_NORMS_V1.map((row) => row.code),
+    );
     const nextCodes = FACADE_SYSTEM_TABLES.flatMap((table) =>
       table.norms.map((row) => row.code),
     );
@@ -42,10 +44,10 @@ describe('facade system tables', () => {
     expect(eight[13].qtyPerM2).toBe('7.26');
     expect(eight[1].nameRu).toContain('80 мм');
     expect(eight[2].nameRu).toBe('Мембрана НГ');
-    const adhesiveCodes = new Set(HPL_ADHESIVE_4MM.norms.map((row) => row.code));
-    expect(
-      six.some((row) => adhesiveCodes.has(row.code)),
-    ).toBe(false);
+    const adhesiveCodes = new Set(
+      HPL_ADHESIVE_4MM.norms.map((row) => row.code),
+    );
+    expect(six.some((row) => adhesiveCodes.has(row.code))).toBe(false);
   });
 
   it('multiplies each published norm by cladding area without extra waste', () => {

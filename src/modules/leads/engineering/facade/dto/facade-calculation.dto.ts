@@ -30,6 +30,10 @@ export class FacadeCalculateDto {
   confirmRecalculate?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  confirmThicknessMismatch?: boolean;
+
+  @IsOptional()
   @IsInt()
   @Min(1)
   expectedRevision?: number;

@@ -18,13 +18,22 @@ import {
   BASE_FACADE_NORM_SET_CODE,
 } from './facade-norms';
 import { FACADE_SYSTEM_META } from './facade-system-tables';
-import { decimalToString, multiplyAreaByNorm, toDecimal } from './facade-decimal';
+import {
+  decimalToString,
+  multiplyAreaByNorm,
+  toDecimal,
+} from './facade-decimal';
 import type {
   FacadeAddItemDto,
   FacadeCalculateDto,
   FacadeSaveDraftDto,
 } from './dto/facade-calculation.dto';
 import { FacadeCommercialService } from './facade-commercial.service';
+import {
+  collectQualificationHplThicknessesMm,
+  qualificationThicknessConflict,
+  requiresFacadeThicknessConfirmation,
+} from './facade-qualification-thickness';
 
 const calculationInclude = {
   items: { orderBy: { sortOrder: 'asc' as const } },
@@ -43,6 +52,10 @@ export class FacadeCalculationService {
   async getWorkspace(leadId: string, user: CurrentUser) {
     const { lead, assignment, canEdit } = await this.loadAccess(leadId, user);
     const qualification = lead.qualification;
+    const hplThicknessesMm =
+      collectQualificationHplThicknessesMm(qualification);
+    const thicknessConflict =
+      qualificationThicknessConflict(hplThicknessesMm);
     const subsystemRequired = qualification?.ventFacadeKitRequired === true;
     const installationOnly =
       qualification?.installationRequired === true && !subsystemRequired;
@@ -116,6 +129,8 @@ export class FacadeCalculationService {
       }),
       catalog: catalog.map((material) => this.toMaterialView(material)),
       calculation: calculation ? this.toCalculationView(calculation) : null,
+      hplThicknessesMm,
+      thicknessConflict,
       quoteCreated: false,
       dealCreated: false,
     };
@@ -161,6 +176,29 @@ export class FacadeCalculationService {
         HttpStatus.CONFLICT,
         'FACADE_CONFIG_LEGACY',
         'Историческая базовая конфигурация доступна только для уже сохранённого расчёта',
+      );
+    }
+
+    const hplThicknessesMm = collectQualificationHplThicknessesMm(
+      lead.qualification,
+    );
+    const configMeta = FACADE_SYSTEM_META[config.code];
+    if (
+      requiresFacadeThicknessConfirmation({
+        hplThicknessesMm,
+        configHplThicknessMm: configMeta?.hplThicknessMm ?? null,
+        confirmThicknessMismatch: dto.confirmThicknessMismatch,
+      })
+    ) {
+      throw new BusinessException(
+        HttpStatus.CONFLICT,
+        'FACADE_THICKNESS_CONFIRM_REQUIRED',
+        'В заказе указано несколько толщин HPL. Явно выберите систему и подтвердите расчёт: нормы 4 мм не применяются к 6/8 мм и наоборот.',
+        {
+          hplThicknessesMm,
+          configCode: config.code,
+          configHplThicknessMm: configMeta?.hplThicknessMm ?? null,
+        },
       );
     }
 
@@ -274,7 +312,8 @@ export class FacadeCalculationService {
             materialName: norm.material.nameRu,
             category: norm.material.category,
             unit: norm.unit,
-            specSnapshot: (norm.material.spec ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+            specSnapshot: (norm.material.spec ??
+              Prisma.JsonNull) as Prisma.InputJsonValue,
             qtyPerM2: norm.qtyPerM2,
             calculatedQty,
             finalQty: previous ? previous.finalQty : calculatedQty,
@@ -370,9 +409,7 @@ export class FacadeCalculationService {
             ? toDecimal(item.calculatedQty)
             : null;
           const isManual =
-            item.isExtra ||
-            !calculated ||
-            !calculated.eq(finalQty);
+            item.isExtra || !calculated || !calculated.eq(finalQty);
           await tx.facadeSubsystemCalculationItem.update({
             where: { id: item.id },
             data: {
@@ -451,7 +488,8 @@ export class FacadeCalculationService {
           materialName: material.nameRu,
           category: material.category,
           unit: material.unit,
-          specSnapshot: (material.spec ?? Prisma.JsonNull) as Prisma.InputJsonValue,
+          specSnapshot: (material.spec ??
+            Prisma.JsonNull) as Prisma.InputJsonValue,
           qtyPerM2: null,
           calculatedQty: null,
           finalQty,
@@ -606,8 +644,15 @@ export class FacadeCalculationService {
       where: { id: leadId, deletedAt: null },
       include: {
         qualification: {
-          include: {
-            items: { orderBy: { sortOrder: 'asc' }, select: { requiredAreaM2: true } },
+          select: {
+            ventFacadeKitRequired: true,
+            installationRequired: true,
+            requiredAreaM2: true,
+            thicknessMm: true,
+            items: {
+              orderBy: { sortOrder: 'asc' },
+              select: { requiredAreaM2: true, thicknessMm: true },
+            },
           },
         },
       },
@@ -688,10 +733,12 @@ export class FacadeCalculationService {
   }
 
   private async requireCalculation(leadId: string) {
-    const calculation = await this.prisma.facadeSubsystemCalculation.findUnique({
-      where: { leadId },
-      include: calculationInclude,
-    });
+    const calculation = await this.prisma.facadeSubsystemCalculation.findUnique(
+      {
+        where: { leadId },
+        include: calculationInclude,
+      },
+    );
     if (!calculation) {
       throw new BusinessException(
         HttpStatus.NOT_FOUND,
