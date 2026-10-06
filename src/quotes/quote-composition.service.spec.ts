@@ -79,11 +79,12 @@ describe('QuoteCompositionService', () => {
     });
 
     const preview = await service.preview('lead-id', head);
-    expect(preview.components.find((item) => item.kind === 'FACADE')?.includeInQuote).toBe(
-      false,
-    );
     expect(
-      preview.components.find((item) => item.kind === 'INSTALLATION')?.includeInQuote,
+      preview.components.find((item) => item.kind === 'FACADE')?.includeInQuote,
+    ).toBe(false);
+    expect(
+      preview.components.find((item) => item.kind === 'INSTALLATION')
+        ?.includeInQuote,
     ).toBe(false);
     expect(
       preview.components.find((item) => item.kind === 'FACADE')?.readiness,
@@ -153,7 +154,9 @@ describe('QuoteCompositionService', () => {
         statusCode: HttpStatus.CONFLICT,
       }),
     });
-    expect(prisma.panelQuoteComponentSnapshot.createMany).not.toHaveBeenCalled();
+    expect(
+      prisma.panelQuoteComponentSnapshot.createMany,
+    ).not.toHaveBeenCalled();
   });
 
   it('snapshots approved customer amounts after stale acknowledgement', async () => {
@@ -182,8 +185,12 @@ describe('QuoteCompositionService', () => {
         },
       ],
     });
-    prisma.panelQuoteComponentSnapshot.createMany.mockResolvedValue({ count: 3 });
-    prisma.facadeCommercialCalculation.updateMany.mockResolvedValue({ count: 1 });
+    prisma.panelQuoteComponentSnapshot.createMany.mockResolvedValue({
+      count: 3,
+    });
+    prisma.facadeCommercialCalculation.updateMany.mockResolvedValue({
+      count: 1,
+    });
     prisma.installationCommercialCalculation.updateMany.mockResolvedValue({
       count: 1,
     });
@@ -216,13 +223,14 @@ describe('QuoteCompositionService', () => {
 
   it('preserves HPL when a combined component is present', () => {
     expect(
-      service.shouldPreserveHplSnapshot([QuoteComponentKind.HPL], [
-        QuoteComponentKind.INSTALLATION,
-      ]),
+      service.shouldPreserveHplSnapshot(
+        [QuoteComponentKind.HPL],
+        [QuoteComponentKind.INSTALLATION],
+      ),
     ).toBe(true);
-    expect(service.shouldPreserveHplSnapshot([QuoteComponentKind.HPL], [])).toBe(
-      false,
-    );
+    expect(
+      service.shouldPreserveHplSnapshot([QuoteComponentKind.HPL], []),
+    ).toBe(false);
   });
 
   it('does not treat DIRECTOR quote approval as part of composition', () => {

@@ -14,9 +14,7 @@ import {
   hasOwnerOrReadAllLeadAccess,
 } from '../engineering-access';
 import { decimalToString, toDecimal } from '../facade/facade-decimal';
-import {
-  INSTALLATION_PERMISSIONS,
-} from './installation-pricing.constants';
+import { INSTALLATION_PERMISSIONS } from './installation-pricing.constants';
 import type {
   InstallationCompleteDto,
   InstallationSaveDraftDto,
@@ -135,7 +133,7 @@ export class InstallationCalculationService {
             workTypeId: item.workTypeId,
             workTypeCode: item.workTypeCode,
             workTypeName: item.workTypeName,
-            workTypeSnapshot: item.workTypeSnapshot as Prisma.InputJsonValue,
+            workTypeSnapshot: item.workTypeSnapshot,
             unit: item.unit,
             quantity: item.quantity,
             quantitySource: item.quantitySource,
@@ -148,11 +146,13 @@ export class InstallationCalculationService {
         data: {
           calculationId: calculation.id,
           actorId: user.id,
-          action: existing ? 'INSTALLATION_DRAFT_SAVED' : 'INSTALLATION_CREATED',
+          action: existing
+            ? 'INSTALLATION_DRAFT_SAVED'
+            : 'INSTALLATION_CREATED',
           payload: {
             itemCount: nextItems.length,
             previousRevision: existing?.revision ?? null,
-          } as Prisma.InputJsonValue,
+          },
         },
       });
       return tx.installationCalculation.findUniqueOrThrow({
@@ -209,7 +209,9 @@ export class InstallationCalculationService {
           calculationId: existing.id,
           actorId: user.id,
           action: 'INSTALLATION_TECHNICAL_READY',
-          payload: { itemCount: existing.items.length } as Prisma.InputJsonValue,
+          payload: {
+            itemCount: existing.items.length,
+          },
         },
       });
       return tx.installationCalculation.findUniqueOrThrow({

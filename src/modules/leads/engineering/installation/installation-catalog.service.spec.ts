@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { InstallationWorkUnit, RoleName } from '@prisma/client';
 import { BusinessException } from '../../../../common/exceptions/business.exception';
 import type { CurrentUser } from '../../../../common/interfaces/current-user.interface';

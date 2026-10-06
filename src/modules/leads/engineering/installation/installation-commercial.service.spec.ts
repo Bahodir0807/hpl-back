@@ -257,7 +257,10 @@ describe('InstallationCommercialService', () => {
       eurRate,
     ]);
     prisma.currencyRate.findFirst.mockResolvedValue(null);
-    prisma.user.findMany.mockResolvedValue([{ id: head.id }, { id: director.id }]);
+    prisma.user.findMany.mockResolvedValue([
+      { id: head.id },
+      { id: director.id },
+    ]);
     prisma.activity.create.mockResolvedValue({});
     prisma.auditLog.create.mockResolvedValue({});
     prisma.notification.create.mockResolvedValue({});
@@ -271,11 +274,13 @@ describe('InstallationCommercialService', () => {
           createdAt: new Date(),
           updatedAt: new Date(),
           items: Array.isArray(createdItems)
-            ? createdItems.map((item: Record<string, unknown>, index: number) => ({
-                ...commercialDraft().items[index],
-                ...item,
-                id: commercialDraft().items[index]?.id ?? `c-${index}`,
-              }))
+            ? createdItems.map(
+                (item: Record<string, unknown>, index: number) => ({
+                  ...commercialDraft().items[index],
+                  ...item,
+                  id: commercialDraft().items[index]?.id ?? `c-${index}`,
+                }),
+              )
             : commercialDraft().items,
         };
       },
@@ -295,7 +300,9 @@ describe('InstallationCommercialService', () => {
 
   it('lets HEAD approve installation without creating Quote or Deal', async () => {
     prisma.installationCommercialCalculation.findFirst.mockResolvedValue(
-      commercialDraft({ status: InstallationCommercialStatus.READY_FOR_APPROVAL }),
+      commercialDraft({
+        status: InstallationCommercialStatus.READY_FOR_APPROVAL,
+      }),
     );
     const result = await service.approve(
       'lead-1',
@@ -312,7 +319,9 @@ describe('InstallationCommercialService', () => {
   it('lets DIRECTOR approve installation without quotes:approve', async () => {
     expect(director.permissions).not.toContain('quotes:approve');
     prisma.installationCommercialCalculation.findFirst.mockResolvedValue(
-      commercialDraft({ status: InstallationCommercialStatus.READY_FOR_APPROVAL }),
+      commercialDraft({
+        status: InstallationCommercialStatus.READY_FOR_APPROVAL,
+      }),
     );
     const result = await service.approve(
       'lead-1',
@@ -324,7 +333,9 @@ describe('InstallationCommercialService', () => {
 
   it('rejects ENGINEER and MANAGER approval', async () => {
     prisma.installationCommercialCalculation.findFirst.mockResolvedValue(
-      commercialDraft({ status: InstallationCommercialStatus.READY_FOR_APPROVAL }),
+      commercialDraft({
+        status: InstallationCommercialStatus.READY_FOR_APPROVAL,
+      }),
     );
     await expectBusinessCode(
       service.approve('lead-1', { expectedRevision: 1 }, engineer),
@@ -430,13 +441,19 @@ describe('InstallationCommercialService', () => {
       ),
       'INSTALLATION_COMMERCIAL_IMMUTABLE',
     );
-    prisma.installationCommercialCalculation.findFirst.mockResolvedValue(approved);
+    prisma.installationCommercialCalculation.findFirst.mockResolvedValue(
+      approved,
+    );
     const repriced = await service.reprice('lead-1', {}, head);
-    expect(prisma.installationCommercialCalculation.update).toHaveBeenCalledWith(
+    expect(
+      prisma.installationCommercialCalculation.update,
+    ).toHaveBeenCalledWith(
       expect.objectContaining({ data: { isCurrent: false } }),
     );
     expect(repriced.id).toBe('com-new');
-    expect(approved.approvedCustomerAmount).toEqual(new Prisma.Decimal('15000'));
+    expect(approved.approvedCustomerAmount).toEqual(
+      new Prisma.Decimal('15000'),
+    );
   });
 
   it('hides internal cost from the manager and shows approved customer amount', async () => {
@@ -478,7 +495,9 @@ describe('InstallationCommercialService', () => {
       },
       head,
     );
-    const hpl = patched.items.find((item) => item.workTypeCode === 'hpl_install_m2');
+    const hpl = patched.items.find(
+      (item) => item.workTypeCode === 'hpl_install_m2',
+    );
     expect(hpl?.priceStatus).toBe(INSTALLATION_PRICE_STATUS.INCOMPATIBLE_UNIT);
     expect(hpl?.lineCostTotal).toBeNull();
   });
@@ -495,7 +514,9 @@ describe('InstallationCommercialService', () => {
         },
       ],
     });
-    prisma.installationCommercialCalculation.findFirst.mockResolvedValue(approved);
+    prisma.installationCommercialCalculation.findFirst.mockResolvedValue(
+      approved,
+    );
     const view = await service.getCurrent('lead-1', head);
     expect(view.calculation?.items[0].pricePerUnit).toBe('12');
     expect(view.calculation?.approvedCustomerAmount).toBe('15000');

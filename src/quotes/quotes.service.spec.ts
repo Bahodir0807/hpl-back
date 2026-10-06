@@ -237,7 +237,9 @@ describe('QuotesService', () => {
       items: [],
       componentSnapshots: [],
     });
-    prisma.panelQuoteComponentSnapshot.updateMany.mockResolvedValue({ count: 1 });
+    prisma.panelQuoteComponentSnapshot.updateMany.mockResolvedValue({
+      count: 1,
+    });
     prisma.auditLog.create.mockResolvedValue({});
     prisma.panelQuote.updateMany.mockResolvedValue({ count: 1 });
     prisma.$queryRaw.mockResolvedValue([]);
@@ -2082,9 +2084,7 @@ describe('QuotesService', () => {
     permissions: [...head.permissions, 'quotes:mark_customer_accepted'],
   };
 
-  function primeFinalizedQuote(
-    overrides: Record<string, unknown> = {},
-  ): void {
+  function primeFinalizedQuote(overrides: Record<string, unknown> = {}): void {
     prisma.panelQuote.findUnique.mockResolvedValue({
       id: 'quote-id',
       leadId: 'lead-id',
@@ -2234,9 +2234,9 @@ describe('QuotesService', () => {
       'FACADE',
       'INSTALLATION',
     ]);
-    expect(rows.find((row) => row.kind === 'INSTALLATION')?.technicalRevision).toBe(
-      3,
-    );
+    expect(
+      rows.find((row) => row.kind === 'INSTALLATION')?.technicalRevision,
+    ).toBe(3);
   });
 
   it('does not replace an accepted version when a newer quote exists until that version is accepted', async () => {

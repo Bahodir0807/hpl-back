@@ -40,11 +40,7 @@ export function customerQuoteSubtitle(
 }
 
 export type QuoteComponentReadiness =
-  | 'NOT_REQUIRED'
-  | 'READY'
-  | 'AWAITING_APPROVAL'
-  | 'STALE_APPROVED'
-  | 'MISSING';
+  'NOT_REQUIRED' | 'READY' | 'AWAITING_APPROVAL' | 'STALE_APPROVED' | 'MISSING';
 
 export type QuoteComponentPreview = {
   kind: QuoteComponentKind;
@@ -82,7 +78,13 @@ export type QuoteDocumentExtraSection = {
 };
 
 export function decimalToAmountString(
-  value: Prisma.Decimal | { toString(): string } | number | string | null | undefined,
+  value:
+    | Prisma.Decimal
+    | { toString(): string }
+    | number
+    | string
+    | null
+    | undefined,
 ): string | null {
   if (value === null || value === undefined) {
     return null;
@@ -120,7 +122,10 @@ export function sumAmountsByCurrency(
     if (!currency || amount.lte(0)) {
       continue;
     }
-    buckets.set(currency, (buckets.get(currency) ?? new Prisma.Decimal(0)).plus(amount));
+    buckets.set(
+      currency,
+      (buckets.get(currency) ?? new Prisma.Decimal(0)).plus(amount),
+    );
   }
 
   const byCurrency = [...buckets.entries()].map(([currency, amount]) => ({
@@ -130,7 +135,7 @@ export function sumAmountsByCurrency(
 
   return {
     byCurrency,
-    grandTotal: byCurrency.length === 1 ? byCurrency[0]! : null,
+    grandTotal: byCurrency.length === 1 ? byCurrency[0] : null,
   };
 }
 
@@ -149,7 +154,9 @@ export function customerFacingSnapshot(
     description: input.description?.trim() || null,
     amount: input.amount,
     currency: input.currency,
-    ...(input.workSummaries?.length ? { workSummaries: input.workSummaries } : {}),
+    ...(input.workSummaries?.length
+      ? { workSummaries: input.workSummaries }
+      : {}),
   };
 }
 
@@ -193,7 +200,9 @@ export function quoteDocumentTotalsLines(
     currency: string | null;
   }>,
 ): { lines: string[]; grandTotal: string | null } {
-  const extras = snapshots.filter((snapshot) => snapshot.kind !== QuoteComponentKind.HPL);
+  const extras = snapshots.filter(
+    (snapshot) => snapshot.kind !== QuoteComponentKind.HPL,
+  );
   if (extras.length === 0) {
     return { lines: [], grandTotal: null };
   }

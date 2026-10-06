@@ -175,7 +175,7 @@ export class InstallationCommercialService {
 
     const nextItems = commercial.items.map((item) => {
       const nextRateId = selectionByItem.has(item.id)
-        ? selectionByItem.get(item.id) ?? null
+        ? (selectionByItem.get(item.id) ?? null)
         : item.selectedRateId;
       return this.computeItem(item, nextRateId, rateById);
     });
@@ -183,7 +183,8 @@ export class InstallationCommercialService {
     const proposedAmount =
       dto.proposedCustomerAmount === undefined
         ? commercial.proposedCustomerAmount
-        : dto.proposedCustomerAmount === null || dto.proposedCustomerAmount === ''
+        : dto.proposedCustomerAmount === null ||
+            dto.proposedCustomerAmount === ''
           ? null
           : this.parsePositiveAmount(dto.proposedCustomerAmount);
     const proposedCurrency =
@@ -205,7 +206,7 @@ export class InstallationCommercialService {
         data: {
           status: InstallationCommercialStatus.DRAFT,
           costIncomplete: cost.incomplete,
-          costByCurrency: cost.byCurrency as Prisma.InputJsonValue,
+          costByCurrency: cost.byCurrency,
           fxSnapshots: cost.fxSnapshots as Prisma.InputJsonValue,
           proposedCustomerAmount: proposedAmount,
           proposedCurrency,
@@ -527,11 +528,9 @@ export class InstallationCommercialService {
         revision: (last?.revision ?? 0) + 1,
         isCurrent: true,
         status: InstallationCommercialStatus.DRAFT,
-        technicalSnapshot: this.technicalSnapshot(
-          input.technical,
-        ) as Prisma.InputJsonValue,
+        technicalSnapshot: this.technicalSnapshot(input.technical),
         costIncomplete: cost.incomplete,
-        costByCurrency: cost.byCurrency as Prisma.InputJsonValue,
+        costByCurrency: cost.byCurrency,
         fxSnapshots: cost.fxSnapshots as Prisma.InputJsonValue,
         proposedCustomerAmount: null,
         proposedCurrency: input.previous?.proposedCurrency ?? null,
@@ -1028,7 +1027,10 @@ export class InstallationCommercialService {
   private assertTechnicalReady(
     technical: TechnicalCalculation | null,
   ): asserts technical is TechnicalCalculation {
-    if (!technical || technical.status !== InstallationCalculationStatus.READY) {
+    if (
+      !technical ||
+      technical.status !== InstallationCalculationStatus.READY
+    ) {
       throw new BusinessException(
         HttpStatus.CONFLICT,
         'INSTALLATION_TECHNICAL_NOT_READY',
@@ -1119,7 +1121,11 @@ export class InstallationCommercialService {
   }
 
   private toWorkspaceView(input: {
-    lead: { id: string; ownerId: string; qualification: { installationRequired: boolean | null } | null };
+    lead: {
+      id: string;
+      ownerId: string;
+      qualification: { installationRequired: boolean | null } | null;
+    };
     technical: TechnicalCalculation | null;
     commercial: CommercialWithItems | null;
     rates: RateRow[];
@@ -1127,9 +1133,9 @@ export class InstallationCommercialService {
   }) {
     const staleTechnicalBasis = Boolean(
       input.commercial &&
-        input.technical &&
-        input.commercial.installationCalculationRevision !==
-          input.technical.revision,
+      input.technical &&
+      input.commercial.installationCalculationRevision !==
+        input.technical.revision,
     );
     return {
       applicable: input.lead.qualification?.installationRequired === true,
@@ -1176,7 +1182,7 @@ export class InstallationCommercialService {
   ) {
     const staleTechnicalBasis = Boolean(
       technical &&
-        commercial.installationCalculationRevision !== technical.revision,
+      commercial.installationCalculationRevision !== technical.revision,
     );
     const showCost = access.canReadCost;
     const showCustomer =

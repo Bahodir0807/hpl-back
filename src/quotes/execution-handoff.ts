@@ -232,10 +232,7 @@ export async function createExecutionHandoff(
 
 type ReadClient = Prisma.TransactionClient | PrismaClient;
 
-export async function readExecutionHandoff(
-  prisma: ReadClient,
-  leadId: string,
-) {
+export async function readExecutionHandoff(prisma: ReadClient, leadId: string) {
   const handoffs = await prisma.dealExecutionHandoff.findMany({
     where: { leadId },
     orderBy: { revision: 'desc' },
@@ -273,11 +270,10 @@ export async function readExecutionHandoff(
     }),
   ]);
 
-  const currentTechnical: Partial<Record<QuoteComponentKind, number | null>> =
-    {
-      [QuoteComponentKind.FACADE]: facade?.revision ?? null,
-      [QuoteComponentKind.INSTALLATION]: installation?.revision ?? null,
-    };
+  const currentTechnical: Partial<Record<QuoteComponentKind, number | null>> = {
+    [QuoteComponentKind.FACADE]: facade?.revision ?? null,
+    [QuoteComponentKind.INSTALLATION]: installation?.revision ?? null,
+  };
 
   const present = (handoff: (typeof handoffs)[number]) => ({
     id: handoff.id,

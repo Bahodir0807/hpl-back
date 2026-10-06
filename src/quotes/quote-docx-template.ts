@@ -399,7 +399,9 @@ function fillExtraQuoteSections(
 
   const fragments: XmlElement[] = [];
   for (const section of model.extraSections) {
-    fragments.push(cloneParagraphWithText(dom, prototype, section.heading, true));
+    fragments.push(
+      cloneParagraphWithText(dom, prototype, section.heading, true),
+    );
     for (const line of section.lines) {
       fragments.push(cloneParagraphWithText(dom, prototype, line, false));
     }
@@ -413,7 +415,7 @@ function fillExtraQuoteSections(
     fragments.push(cloneParagraphWithText(dom, prototype, line, false));
   }
 
-  let insertBefore = table.nextSibling;
+  const insertBefore = table.nextSibling;
   for (const fragment of fragments) {
     table.parentNode.insertBefore(fragment, insertBefore);
   }

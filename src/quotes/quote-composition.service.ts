@@ -58,7 +58,9 @@ export class QuoteCompositionService {
     const includeable = components.filter((item) => item.includeInQuote);
     return {
       leadId,
-      components: components.map(({ sourceId: _sourceId, ...component }) => component),
+      components: components.map(
+        ({ sourceId: _sourceId, ...component }) => component,
+      ),
       totals: sumAmountsByCurrency(includeable),
       canCreateQuote: resolved.hpl.preview.readiness === 'READY',
       staleAcknowledgementRequired: includeable.some(
@@ -134,7 +136,10 @@ export class QuoteCompositionService {
     return sourceKinds.some(extra) || incomingKinds.some(extra);
   }
 
-  async incomingExtraKinds(leadId: string, tx: Tx = this.prisma): Promise<QuoteComponentKind[]> {
+  async incomingExtraKinds(
+    leadId: string,
+    tx: Tx = this.prisma,
+  ): Promise<QuoteComponentKind[]> {
     const resolved = await this.resolveLead(leadId, tx);
     return [resolved.facade, resolved.installation]
       .filter((component) => component.includeable)
@@ -187,8 +192,7 @@ export class QuoteCompositionService {
     hpl: ResolvedComponent,
   ): Prisma.PanelQuoteComponentSnapshotCreateManyInput {
     const amount =
-      decimalToAmountString(quote.totalAmount) ??
-      hpl.preview.amount;
+      decimalToAmountString(quote.totalAmount) ?? hpl.preview.amount;
     const currency = quote.displayCurrency || hpl.preview.currency;
     return {
       quoteId: quote.id,
@@ -203,7 +207,7 @@ export class QuoteCompositionService {
       customerSnapshot: customerFacingSnapshot(QuoteComponentKind.HPL, {
         amount,
         currency,
-      }) as unknown as Prisma.InputJsonValue,
+      }),
       sortOrder: 0,
     };
   }
@@ -230,7 +234,7 @@ export class QuoteCompositionService {
       currency: component.preview.currency,
       label: component.preview.label,
       description: component.preview.description,
-      customerSnapshot: payload as unknown as Prisma.InputJsonValue,
+      customerSnapshot: payload,
       sortOrder: component.kind === QuoteComponentKind.FACADE ? 1 : 2,
     };
   }
@@ -255,7 +259,12 @@ export class QuoteCompositionService {
           where: { deletedAt: null },
           orderBy: { createdAt: 'desc' },
           take: 1,
-          select: { id: true, status: true, totalAmount: true, displayCurrency: true },
+          select: {
+            id: true,
+            status: true,
+            totalAmount: true,
+            displayCurrency: true,
+          },
         },
       },
     });
@@ -316,7 +325,7 @@ export class QuoteCompositionService {
         staleTechnicalBasis: false,
         amount: hplAmount,
         currency: hplAmount
-          ? lead.calculationSessions[0]?.displayCurrency ?? 'USD'
+          ? (lead.calculationSessions[0]?.displayCurrency ?? 'USD')
           : null,
         sourceId: lead.calculationSessions[0]?.id ?? null,
         sourceRevision: null,
@@ -334,7 +343,10 @@ export class QuoteCompositionService {
     return {
       hpl,
       facade: this.facadeComponent(facadeRequired, facade),
-      installation: this.installationComponent(installationRequired, installation),
+      installation: this.installationComponent(
+        installationRequired,
+        installation,
+      ),
     };
   }
 
@@ -356,9 +368,9 @@ export class QuoteCompositionService {
       Boolean(commercial.approvedCurrency);
     const stale = Boolean(
       approved &&
-        commercial &&
-        commercial.facadeCalculationRevision !==
-          commercial.facadeCalculation.revision,
+      commercial &&
+      commercial.facadeCalculationRevision !==
+        commercial.facadeCalculation.revision,
     );
     return {
       kind: QuoteComponentKind.FACADE,
@@ -406,9 +418,9 @@ export class QuoteCompositionService {
       Boolean(commercial.approvedCurrency);
     const stale = Boolean(
       approved &&
-        commercial &&
-        commercial.installationCalculationRevision !==
-          commercial.installationCalculation.revision,
+      commercial &&
+      commercial.installationCalculationRevision !==
+        commercial.installationCalculation.revision,
     );
     return {
       kind: QuoteComponentKind.INSTALLATION,
@@ -478,7 +490,7 @@ export class QuoteCompositionService {
       readiness,
       includeInQuote: input.required && input.approved,
       staleTechnicalBasis: input.stale,
-        amount: input.approved ? positiveCustomerAmount(input.amount) : null,
+      amount: input.approved ? positiveCustomerAmount(input.amount) : null,
       currency: input.approved ? input.currency : null,
       sourceId: input.sourceId,
       sourceRevision: input.sourceRevision,

@@ -62,7 +62,10 @@ describe('InstallationCalculationService', () => {
       create: jest.fn(),
       update: jest.fn(),
     },
-    installationCalculationItem: { deleteMany: jest.fn(), createMany: jest.fn() },
+    installationCalculationItem: {
+      deleteMany: jest.fn(),
+      createMany: jest.fn(),
+    },
     installationCalculationRevision: { create: jest.fn() },
     panelQuote: { create: jest.fn() },
     deal: { create: jest.fn() },
@@ -135,24 +138,28 @@ describe('InstallationCalculationService', () => {
       workTypeHour,
     ]);
     prisma.installationCalculation.findUnique.mockResolvedValue(null);
-    prisma.installationCalculation.create.mockImplementation(async ({ data }) => ({
-      id: 'calc-1',
-      leadId: 'lead-1',
-      assignmentId: data.assignmentId,
-      engineerId: data.engineerId,
-      status: InstallationCalculationStatus.DRAFT,
-      revision: 1,
-      note: data.note ?? null,
-    }));
-    prisma.installationCalculation.update.mockImplementation(async ({ data }) => ({
-      id: 'calc-1',
-      leadId: 'lead-1',
-      assignmentId: assignment.id,
-      engineerId: engineer.id,
-      status: data.status ?? InstallationCalculationStatus.DRAFT,
-      revision: 2,
-      note: data.note ?? null,
-    }));
+    prisma.installationCalculation.create.mockImplementation(
+      async ({ data }) => ({
+        id: 'calc-1',
+        leadId: 'lead-1',
+        assignmentId: data.assignmentId,
+        engineerId: data.engineerId,
+        status: InstallationCalculationStatus.DRAFT,
+        revision: 1,
+        note: data.note ?? null,
+      }),
+    );
+    prisma.installationCalculation.update.mockImplementation(
+      async ({ data }) => ({
+        id: 'calc-1',
+        leadId: 'lead-1',
+        assignmentId: assignment.id,
+        engineerId: engineer.id,
+        status: data.status ?? InstallationCalculationStatus.DRAFT,
+        revision: 2,
+        note: data.note ?? null,
+      }),
+    );
     prisma.installationCalculation.findUniqueOrThrow.mockResolvedValue({
       id: 'calc-1',
       leadId: 'lead-1',
@@ -175,9 +182,15 @@ describe('InstallationCalculationService', () => {
         },
       ],
     });
-    prisma.installationCalculationItem.deleteMany.mockResolvedValue({ count: 0 });
-    prisma.installationCalculationItem.createMany.mockResolvedValue({ count: 1 });
-    prisma.installationCalculationRevision.create.mockResolvedValue({ id: 'rev-1' });
+    prisma.installationCalculationItem.deleteMany.mockResolvedValue({
+      count: 0,
+    });
+    prisma.installationCalculationItem.createMany.mockResolvedValue({
+      count: 1,
+    });
+    prisma.installationCalculationRevision.create.mockResolvedValue({
+      id: 'rev-1',
+    });
   });
 
   it('allows an installation-only lead without a facade calculation', async () => {
@@ -225,9 +238,7 @@ describe('InstallationCalculationService', () => {
       service.saveDraft(
         'lead-1',
         {
-          items: [
-            { workTypeId: workTypeM2.id, quantity: '10' },
-          ],
+          items: [{ workTypeId: workTypeM2.id, quantity: '10' }],
         },
         engineer,
       ),
@@ -274,7 +285,10 @@ describe('InstallationCalculationService', () => {
     await expectBusinessCode(
       service.saveDraft(
         'lead-1',
-        { expectedRevision: 3, items: [{ workTypeId: workTypeM2.id, quantity: '1' }] },
+        {
+          expectedRevision: 3,
+          items: [{ workTypeId: workTypeM2.id, quantity: '1' }],
+        },
         engineer,
       ),
       'INSTALLATION_REVISION_CONFLICT',

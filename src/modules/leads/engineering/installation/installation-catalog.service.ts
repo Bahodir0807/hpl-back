@@ -188,10 +188,10 @@ export class InstallationCatalogService {
             dto.contactName === undefined
               ? undefined
               : dto.contactName?.trim() || null,
-          phone: dto.phone === undefined ? undefined : dto.phone?.trim() || null,
+          phone:
+            dto.phone === undefined ? undefined : dto.phone?.trim() || null,
           note: dto.note === undefined ? undefined : dto.note?.trim() || null,
-          supplierId:
-            dto.supplierId === undefined ? undefined : dto.supplierId,
+          supplierId: dto.supplierId === undefined ? undefined : dto.supplierId,
           isActive: dto.isActive,
         },
         include: { supplier: { select: { id: true, name: true, code: true } } },
@@ -350,8 +350,12 @@ export class InstallationCatalogService {
 
   private assertCatalogRead(user: CurrentUser): void {
     if (
-      user.permissions.includes(INSTALLATION_PRICING_PERMISSIONS.MANAGE_CONTRACTORS) ||
-      user.permissions.includes(INSTALLATION_PRICING_PERMISSIONS.MANAGE_RATES) ||
+      user.permissions.includes(
+        INSTALLATION_PRICING_PERMISSIONS.MANAGE_CONTRACTORS,
+      ) ||
+      user.permissions.includes(
+        INSTALLATION_PRICING_PERMISSIONS.MANAGE_RATES,
+      ) ||
       user.permissions.includes(INSTALLATION_PRICING_PERMISSIONS.READ_COST) ||
       user.permissions.includes(INSTALLATION_PRICING_PERMISSIONS.PREPARE)
     ) {

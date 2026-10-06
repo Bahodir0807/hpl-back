@@ -14,8 +14,8 @@ import {
   TaskPriority,
   TaskType,
   CommercialQualificationStatus,
-      DealStage,
-      QuoteComponentKind,
+  DealStage,
+  QuoteComponentKind,
 } from '@prisma/client';
 import {
   CALCULATION_PERMISSIONS,
@@ -2158,7 +2158,7 @@ export class QuotesService {
           customerSnapshot: customerFacingSnapshot(QuoteComponentKind.HPL, {
             amount: totalAmount.toDecimalPlaces(2).toFixed(2),
             currency: displayCurrency,
-          }) as unknown as Prisma.InputJsonValue,
+          }),
         },
       });
 
@@ -2294,9 +2294,7 @@ export class QuotesService {
 
   private presentQuote(quote: PanelQuoteWithItems) {
     const documentAvailability:
-      | 'AVAILABLE'
-      | 'LEGACY_MISSING'
-      | 'NOT_FINALIZED' =
+      'AVAILABLE' | 'LEGACY_MISSING' | 'NOT_FINALIZED' =
       quote.pdfFileId && quote.finalizedAt
         ? 'AVAILABLE'
         : quote.status === QUOTE_STATUS.CONVERTED
@@ -2522,8 +2520,7 @@ export class QuotesService {
     );
     const ownerAccept =
       managerId === user.id &&
-      (canMark ||
-        user.permissions.includes(QUOTE_PERMISSIONS.CLIENT_ACCEPT));
+      (canMark || user.permissions.includes(QUOTE_PERMISSIONS.CLIENT_ACCEPT));
     const supervisory =
       canMark && user.permissions.includes(QUOTE_PERMISSIONS.READ_ALL);
     if (ownerAccept || supervisory) {

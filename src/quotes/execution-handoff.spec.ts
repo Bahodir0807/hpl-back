@@ -56,8 +56,8 @@ describe('execution handoff basis', () => {
       },
     });
 
-    const basis = tx.dealExecutionComponent.createMany.mock.calls[0][0]
-      .data[0].basis as {
+    const basis = tx.dealExecutionComponent.createMany.mock.calls[0][0].data[0]
+      .basis as {
       cnyUsdRate: string;
       customerAmount: string;
       items: Array<{ pricePerM2: string }>;

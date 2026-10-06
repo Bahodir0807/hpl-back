@@ -96,7 +96,8 @@ export class InstallationCommercialController {
   @Post('revisions')
   @RequirePermissions(INSTALLATION_PRICING_PERMISSIONS.PREPARE)
   @ApiOperation({
-    summary: 'Create a new commercial revision from the latest technical takeoff',
+    summary:
+      'Create a new commercial revision from the latest technical takeoff',
   })
   reprice(
     @Param('id', ParseUUIDPipe) id: string,

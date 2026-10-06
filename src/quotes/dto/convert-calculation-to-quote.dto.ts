@@ -1,5 +1,13 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsNumber, IsOptional, IsString, IsUUID, MaxLength, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { QuoteClientFacingTermsDto } from './quote-client-facing-terms.dto';
 
 export class ConvertCalculationToQuoteDto extends QuoteClientFacingTermsDto {
