@@ -13,7 +13,7 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
-    "start:prod": "node dist/src/main.js",
+    "start:prod": "node dist/main.js",
     "docker:dev": "docker compose -f docker-compose.dev.yml up -d",
     "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
     "migrate:dev": "prisma migrate dev",
@@ -27,12 +27,15 @@
     "prisma:prod:generate": "prisma generate --config prisma.postgres.config.ts",
     "prisma:prod:deploy": "prisma migrate deploy --config prisma.postgres.config.ts",
     "lint": "eslint \"{src,apps,libs,test}/**/*.{ts,tsx}\" --fix",
+    "lint:ci": "eslint \"{src,apps,libs,test}/**/*.{ts,tsx}\" --max-warnings 0",
+    "typecheck": "tsc --noEmit -p tsconfig.build.json",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
     "service-account:rotate": "ts-node --files scripts/rotate-service-account.ts",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "test:e2e:isolated": "node scripts/run-e2e-isolated.cjs"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

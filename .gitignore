@@ -12,6 +12,7 @@ dev.db
 
 # Local runtime and audit artifacts
 *.log
+e2e-results.json
 /tmp/
 /tmp-visual/
 scripts/dto-debug.ts
