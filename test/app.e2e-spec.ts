@@ -1233,9 +1233,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(quote.items).toHaveLength(2);
     expect(quote.items[0]?.supplierCode).toBe('polybet');
     expect(quote.items[1]?.supplierCode).toBe('tianran');
-    expect(
-      quote.items.map((item) => item.supplierCode),
-    ).not.toContain('wuya');
+    expect(quote.items.map((item) => item.supplierCode)).not.toContain('wuya');
     expect(quote.productionDaysFrom ?? null).toBeNull();
     expect(quote.productionDaysTo ?? null).toBeNull();
     expect(quote.deliveryDaysFrom ?? null).toBeNull();
@@ -4755,12 +4753,8 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     });
     expect(minted).toHaveLength(3);
     expect(
-      minted
-        .flatMap((user) => user.roles.map((item) => item.role.name))
-        .sort(),
-    ).toEqual(
-      [RoleName.ACCOUNTANT, RoleName.DIRECTOR, RoleName.HEAD].sort(),
-    );
+      minted.flatMap((user) => user.roles.map((item) => item.role.name)).sort(),
+    ).toEqual([RoleName.ACCOUNTANT, RoleName.DIRECTOR, RoleName.HEAD].sort());
   });
 
   it('BP4-PE still lets ADMIN create a normal technical/operational user', async () => {
@@ -5492,9 +5486,10 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const dealsAfter = await prisma.deal.count();
     expect(dealsAfter).toBe(dealsBefore);
 
-    const commercial = await prisma.facadeCommercialCalculation.findFirstOrThrow({
-      where: { leadId, isCurrent: true },
-    });
+    const commercial =
+      await prisma.facadeCommercialCalculation.findFirstOrThrow({
+        where: { leadId, isCurrent: true },
+      });
     expect(commercial.status).toBe('APPROVED');
     expect(commercial.approvedById).toBe(context.headId);
     expect(commercial.approverRoleSnapshot).toBe(RoleName.HEAD);
@@ -5515,9 +5510,11 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     expect(managerBody.canApprove).toBe(false);
     expect(managerBody.canReadPurchase).toBe(false);
     expect(Number(managerBody.calculation.approvedCustomerAmount)).toBe(8000);
-    expect(managerBody.calculation.items.every((item) => item.purchasePrice === null)).toBe(
-      true,
-    );
+    expect(
+      managerBody.calculation.items.every(
+        (item) => item.purchasePrice === null,
+      ),
+    ).toBe(true);
 
     await request(server)
       .post(`/leads/${leadId}/facade-commercial/approve`)
@@ -5533,9 +5530,10 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
 
   it('Stage 3 lets DIRECTOR approve subsystem cost and still forbids quotes:approve', async () => {
     const { leadId } = await prepareSubsystemCommercial(context.directorToken);
-    const commercial = await prisma.facadeCommercialCalculation.findFirstOrThrow({
-      where: { leadId, isCurrent: true },
-    });
+    const commercial =
+      await prisma.facadeCommercialCalculation.findFirstOrThrow({
+        where: { leadId, isCurrent: true },
+      });
     expect(commercial.approverRoleSnapshot).toBe(RoleName.DIRECTOR);
     expect(Number(commercial.approvedCustomerAmount)).toBe(8000);
 
@@ -5560,9 +5558,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .get(`/leads/${leadId}/facade-commercial`)
       .set(authHeader(context.headToken))
       .expect(200);
-    expect(bodyAs<{ staleTechnicalBasis: boolean }>(workspace).staleTechnicalBasis).toBe(
-      true,
-    );
+    expect(
+      bodyAs<{ staleTechnicalBasis: boolean }>(workspace).staleTechnicalBasis,
+    ).toBe(true);
     const frozen = await prisma.facadeCommercialCalculation.findFirstOrThrow({
       where: { leadId, isCurrent: true, status: 'APPROVED' },
     });
@@ -5631,9 +5629,12 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
   });
 
   it('Stage 4 lets DIRECTOR approve installation and still forbids quotes:approve', async () => {
-    const { leadId } = await prepareInstallationCommercial(context.directorToken, {
-      ventFacadeKitRequired: true,
-    });
+    const { leadId } = await prepareInstallationCommercial(
+      context.directorToken,
+      {
+        ventFacadeKitRequired: true,
+      },
+    );
     const commercial =
       await prisma.installationCommercialCalculation.findFirstOrThrow({
         where: { leadId, isCurrent: true },
@@ -5674,9 +5675,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .get(`/leads/${leadId}/installation-commercial`)
       .set(authHeader(context.headToken))
       .expect(200);
-    expect(bodyAs<{ staleTechnicalBasis: boolean }>(workspace).staleTechnicalBasis).toBe(
-      true,
-    );
+    expect(
+      bodyAs<{ staleTechnicalBasis: boolean }>(workspace).staleTechnicalBasis,
+    ).toBe(true);
     const frozen =
       await prisma.installationCommercialCalculation.findFirstOrThrow({
         where: { leadId, isCurrent: true, status: 'APPROVED' },
@@ -6238,9 +6239,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .send({ note: 'HEAD recorded customer acceptance' })
       .expect(200);
 
-    expect(bodyAs<{ clientAcceptedById: string }>(headAccepted).clientAcceptedById).toBe(
-      context.headId,
-    );
+    expect(
+      bodyAs<{ clientAcceptedById: string }>(headAccepted).clientAcceptedById,
+    ).toBe(context.headId);
     const handoffs = await prisma.dealExecutionHandoff.count({
       where: { quoteId },
     });
@@ -7594,7 +7595,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       installationRevision,
     );
     expect(
-      JSON.stringify(quote.componentSnapshots.map((item) => item.customerSnapshot)),
+      JSON.stringify(
+        quote.componentSnapshots.map((item) => item.customerSnapshot),
+      ),
     ).not.toMatch(/purchasePrice|pricePerUnit|contractorName|margin/);
 
     await request(server)
@@ -7744,7 +7747,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
           ?.customerAmount,
       ),
     ).toBe(15000);
-    expect(v1After.cnyUsdRate?.toString()).toBe(v1Before.cnyUsdRate?.toString());
+    expect(v1After.cnyUsdRate?.toString()).toBe(
+      v1Before.cnyUsdRate?.toString(),
+    );
 
     const v2 = await prisma.panelQuote.findUniqueOrThrow({
       where: { id: v2Id },
@@ -7941,9 +7946,10 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         claddingAreaM2: '1000',
       })
       .expect(201);
-    expect(bodyAs<{ quoteCreated: boolean; dealCreated: boolean }>(calculated).quoteCreated).toBe(
-      false,
-    );
+    expect(
+      bodyAs<{ quoteCreated: boolean; dealCreated: boolean }>(calculated)
+        .quoteCreated,
+    ).toBe(false);
     const quotesBefore = await prisma.panelQuote.count();
     const dealsBefore = await prisma.deal.count();
 
@@ -7994,7 +8000,8 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         itemId: item.id,
         offerId:
           body.offers.find(
-            (offer) => offer.materialCode === item.materialCode && offer.isActive,
+            (offer) =>
+              offer.materialCode === item.materialCode && offer.isActive,
           )?.id ?? null,
       }));
 
@@ -8018,7 +8025,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     await request(server)
       .post(`/leads/${leadId}/facade-commercial/approve`)
       .set(authHeader(approverToken))
-      .send({ expectedRevision: bodyAs<{ revision: number }>(submitted).revision })
+      .send({
+        expectedRevision: bodyAs<{ revision: number }>(submitted).revision,
+      })
       .expect(201);
     return { leadId, quotesBefore, dealsBefore };
   }
@@ -8098,9 +8107,10 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         items: [{ workTypeId, quantity: '1000', quantitySource: 'MANUAL' }],
       })
       .expect(200);
-    expect(bodyAs<{ quoteCreated: boolean; dealCreated: boolean }>(saved).quoteCreated).toBe(
-      false,
-    );
+    expect(
+      bodyAs<{ quoteCreated: boolean; dealCreated: boolean }>(saved)
+        .quoteCreated,
+    ).toBe(false);
     await request(server)
       .post(`/engineering/leads/${leadId}/installation/complete`)
       .set(authHeader(context.engineerToken))
@@ -8137,7 +8147,9 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
     const submitted = await request(server)
       .post(`/leads/${leadId}/installation-commercial/submit`)
       .set(authHeader(approverToken))
-      .send({ expectedRevision: bodyAs<{ revision: number }>(patched).revision })
+      .send({
+        expectedRevision: bodyAs<{ revision: number }>(patched).revision,
+      })
       .expect(201);
     await request(server)
       .post(`/leads/${leadId}/installation-commercial/approve`)
@@ -8228,7 +8240,8 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
         itemId: item.id,
         offerId:
           facadeBody.offers.find(
-            (offer) => offer.materialCode === item.materialCode && offer.isActive,
+            (offer) =>
+              offer.materialCode === item.materialCode && offer.isActive,
           )?.id ?? null,
       }));
     const facadePatched = await request(server)
@@ -8252,7 +8265,8 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .post(`/leads/${leadId}/facade-commercial/approve`)
       .set(authHeader(context.directorToken))
       .send({
-        expectedRevision: bodyAs<{ revision: number }>(facadeSubmitted).revision,
+        expectedRevision: bodyAs<{ revision: number }>(facadeSubmitted)
+          .revision,
       })
       .expect(201);
 
@@ -8320,9 +8334,7 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       .set(authHeader(context.headToken))
       .send({
         expectedRevision: installBody.calculation.revision,
-        selections: [
-          { itemId: installBody.calculation.items[0].id, rateId },
-        ],
+        selections: [{ itemId: installBody.calculation.items[0].id, rateId }],
         proposedCustomerAmount: '15000',
         proposedCurrency: 'USD',
       })
@@ -8672,6 +8684,193 @@ describe('CRM HPL acceptance criteria (e2e)', () => {
       items: [{ orderItemId, quantity }],
     };
   }
+
+  async function prepareFacadeThicknessLead(
+    items: Array<{ thicknessMm: number; requiredAreaM2: number }>,
+  ): Promise<string> {
+    const panelType = await prisma.panelType.findFirstOrThrow({
+      where: { code: 'exterior_with_uv' },
+    });
+    const panelSize = await prisma.panelSize.findFirstOrThrow({
+      where: { widthMm: 1220, heightMm: 2440 },
+    });
+
+    const leadResponse = await request(server)
+      .post('/leads')
+      .set(authHeader(context.managerToken))
+      .send({
+        title: `Facade thickness ${RUN_ID}-${Math.random().toString(16).slice(2)}`,
+        source: 'e2e',
+        clientId: context.clientId,
+      })
+      .expect(201);
+    const leadId = bodyAs<LeadResponse>(leadResponse).id;
+
+    await request(server)
+      .post(`/leads/${leadId}/qualify`)
+      .set(authHeader(context.managerToken))
+      .send({
+        clientId: context.clientId,
+        contactId: context.contactId,
+        projectObjectId: context.projectObjectId,
+        needDescription: 'Facade thickness contract',
+        decisionMakerContact: 'Chief architect',
+        qualification: {
+          installationRequired: false,
+          customerRequirements: 'Facade thickness contract',
+          items: items.map((item, index) => ({
+            application: 'EXTERIOR_WITH_UV',
+            panelTypeId: panelType.id,
+            panelSizeId: panelSize.id,
+            thicknessMm: item.thicknessMm,
+            colorCode: 'W100',
+            colorName: `Tone ${index + 1}`,
+            requiredAreaM2: item.requiredAreaM2,
+          })),
+        },
+      })
+      .expect(201);
+
+    await prisma.leadQualification.update({
+      where: { leadId },
+      data: { ventFacadeKitRequired: true },
+    });
+
+    await request(server)
+      .post(`/engineering/leads/${leadId}/assign`)
+      .set(authHeader(context.managerToken))
+      .send({ engineerId: context.engineerId })
+      .expect(201);
+
+    return leadId;
+  }
+
+  describe('Facade mixed thickness API contract (isolated)', () => {
+    it('exposes a single facade-relevant thickness without conflict', async () => {
+      const leadId = await prepareFacadeThicknessLead([
+        { thicknessMm: 6, requiredAreaM2: 40 },
+      ]);
+
+      const workspace = await request(server)
+        .get(`/engineering/leads/${leadId}/facade`)
+        .set(authHeader(context.engineerToken))
+        .expect(200);
+
+      const body = bodyAs<{
+        hplThicknessesMm: number[];
+        thicknessConflict: boolean;
+      }>(workspace);
+      expect(body.hplThicknessesMm).toEqual([6]);
+      expect(body.thicknessConflict).toBe(false);
+    });
+
+    it('exposes mixed thickness conflict in workspace', async () => {
+      const leadId = await prepareFacadeThicknessLead([
+        { thicknessMm: 6, requiredAreaM2: 40 },
+        { thicknessMm: 8, requiredAreaM2: 25 },
+      ]);
+
+      const workspace = await request(server)
+        .get(`/engineering/leads/${leadId}/facade`)
+        .set(authHeader(context.engineerToken))
+        .expect(200);
+
+      const body = bodyAs<{
+        hplThicknessesMm: number[];
+        thicknessConflict: boolean;
+      }>(workspace);
+      expect(body.hplThicknessesMm).toEqual([6, 8]);
+      expect(body.thicknessConflict).toBe(true);
+    });
+
+    it('rejects calculate without confirmation for mixed thickness', async () => {
+      const leadId = await prepareFacadeThicknessLead([
+        { thicknessMm: 6, requiredAreaM2: 40 },
+        { thicknessMm: 8, requiredAreaM2: 25 },
+      ]);
+
+      const response = await request(server)
+        .post(`/engineering/leads/${leadId}/facade/calculate`)
+        .set(authHeader(context.engineerToken))
+        .send({
+          configCode: 'HPL_DRY_6MM_50MM',
+          claddingAreaM2: '65',
+        })
+        .expect(409);
+
+      expect(bodyAs<{ errorCode: string }>(response).errorCode).toBe(
+        'FACADE_THICKNESS_CONFIRM_REQUIRED',
+      );
+    });
+
+    it('calculates mixed thickness after explicit confirmation', async () => {
+      const leadId = await prepareFacadeThicknessLead([
+        { thicknessMm: 6, requiredAreaM2: 40 },
+        { thicknessMm: 8, requiredAreaM2: 25 },
+      ]);
+
+      const calculated = await request(server)
+        .post(`/engineering/leads/${leadId}/facade/calculate`)
+        .set(authHeader(context.engineerToken))
+        .send({
+          configCode: 'HPL_DRY_6MM_50MM',
+          claddingAreaM2: '65',
+          confirmThicknessMismatch: true,
+        })
+        .expect(201);
+
+      expect(bodyAs<{ status: string }>(calculated).status).toBe('CALCULATED');
+    });
+
+    it('rejects facade-relevant single thickness mismatch without confirmation', async () => {
+      const leadId = await prepareFacadeThicknessLead([
+        { thicknessMm: 6, requiredAreaM2: 40 },
+      ]);
+
+      const response = await request(server)
+        .post(`/engineering/leads/${leadId}/facade/calculate`)
+        .set(authHeader(context.engineerToken))
+        .send({
+          configCode: 'HPL_DRY_8MM_80MM',
+          claddingAreaM2: '40',
+        })
+        .expect(409);
+
+      expect(bodyAs<{ errorCode: string }>(response).errorCode).toBe(
+        'FACADE_THICKNESS_CONFIRM_REQUIRED',
+      );
+    });
+
+    it('allows matching single facade thickness without extra confirmation', async () => {
+      const leadId = await prepareFacadeThicknessLead([
+        { thicknessMm: 6, requiredAreaM2: 40 },
+      ]);
+
+      await request(server)
+        .post(`/engineering/leads/${leadId}/facade/calculate`)
+        .set(authHeader(context.engineerToken))
+        .send({
+          configCode: 'HPL_DRY_6MM_50MM',
+          claddingAreaM2: '40',
+        })
+        .expect(201);
+    });
+
+    it('does not require confirmation for non-facade thickness such as 10 mm', async () => {
+      const leadId = await prepareFacadeThicknessLead([
+        { thicknessMm: 10, requiredAreaM2: 40 },
+      ]);
+
+      await request(server)
+        .post(`/engineering/leads/${leadId}/facade/calculate`)
+        .set(authHeader(context.engineerToken))
+        .send({
+          configCode: 'HPL_DRY_6MM_50MM',
+          claddingAreaM2: '40',
+        })
+        .expect(201);
+    });
+  });
 });
 
 async function seedAcceptanceData(
